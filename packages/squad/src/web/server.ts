@@ -14,9 +14,10 @@ import { getAccount, getHealth, healthOf, listAccounts, setConsent, setOwnerFloo
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
-import { SQUAD_FLOOR_DEFAULT_ENV, envNum } from "../settings.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_FLOOR_DEFAULT_ENV, envNum, envOptional } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, usageBy, type UsageBy } from "../usage/report.ts";
+import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { loadWebConfig } from "./settings.ts";
 import { startTicker, type Timers } from "./ticker.ts";
@@ -49,6 +50,8 @@ export interface WebOpts {
   readonly probe?: (account: AccountRow, model: string) => Promise<void>;
   /** Replaces the loop's timers. For tests only. */
   readonly ticker?: { readonly timers?: Timers };
+  /** Replaces the docker calls of a web login, and its timers. For tests only. */
+  readonly login?: Partial<LoginRunner> & { readonly timers?: LoginTimers };
   /** Replaces handlers. For tests only. */
   readonly handlers?: Partial<Handlers>;
 }
@@ -121,7 +124,7 @@ const INPUTS: Inputs = {
 
 // ---- the handlers ----
 
-function makeHandlers(o: WebOpts): Handlers {
+function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
   const db = o.store.db;
   const now = o.now ?? (() => new Date());
   const busyOf = o.busy ?? ((a: AccountRow): boolean => {
@@ -153,8 +156,22 @@ function makeHandlers(o: WebOpts): Handlers {
       busy: busyOf(a),
     };
   };
-  const notReady = (what: string): never => {
-    throw new HttpError(501, "disabled", `${what} is not ready in the web app yet`);
+  /** The login module's refusals carry their own status; the API error is built here. */
+  const refuse = <T,>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof LoginRefused) throw new HttpError(e.status, e.code, e.message);
+      throw e;
+    }
+  };
+  const refuseAsync = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof LoginRefused) throw new HttpError(e.status, e.code, e.message);
+      throw e;
+    }
   };
 
   const real: Handlers = {
@@ -179,10 +196,10 @@ function makeHandlers(o: WebOpts): Handlers {
       return view(getAccount(db, a.id)!);
     },
     startLogin: ({ session, params }) => {
-      owned(session, params.runner, params.name);
-      return notReady("login");
+      const a = owned(session, params.runner, params.name);
+      return refuseAsync(() => logins.start(session.email, a));
     },
-    loginStatus: () => notReady("login"),
+    loginStatus: ({ session, params }) => refuse(() => logins.status(session.email, params.loginId)),
     usage: ({ session, query }) => {
       if (!(USAGE_BYS as readonly string[]).includes(query.by)) throw bad(`by must be one of ${USAGE_BYS.join(", ")}`);
       const spec = query.since ?? "7d";
@@ -268,7 +285,15 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const cfg = loadWebConfig(opts.env, opts.home);
   const log = opts.log ?? makeLog();
   const oidc = createOidc(cfg, opts.fetch === undefined ? {} : { fetch: opts.fetch });
-  const handlers = makeHandlers(opts);
+  const docker = envOptional(SQUAD_DOCKER_ENV, opts.env)!;
+  const real = dockerLoginRunner(opts.env, docker);
+  const logins = new DeviceLogins({
+    env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
+    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    start: opts.login?.start ?? real.start, stop: opts.login?.stop ?? real.stop,
+    ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
+  });
+  const handlers = makeHandlers(opts, logins);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
@@ -449,10 +474,15 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   });
   return {
     port, bind: cfg.bind, url: cfg.url,
-    close: () => new Promise((resolve) => {
+    close: async () => {
       ticker?.stop();
-      server.close(() => resolve());
-      server.closeAllConnections();
-    }),
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        }),
+        logins.close(),
+      ]);
+    },
   };
 }

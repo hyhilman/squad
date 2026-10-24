@@ -1,8 +1,5 @@
 import { ApiFailure } from "@squad/contract";
 
-/** The 501 the login route gives while web login is not built. */
-export const isNotReady = (e: unknown): boolean => e instanceof ApiFailure && e.status === 501;
-
 export function failureText(e: unknown): string {
   if (!(e instanceof ApiFailure)) return "Something went wrong. Try again.";
   switch (e.body.error) {

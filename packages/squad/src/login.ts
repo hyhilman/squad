@@ -26,6 +26,8 @@ export interface TerminalOpts {
   readonly home: string;
   readonly image?: string;
   readonly identity?: { readonly name: string; readonly email: string };
+  /** A person at a terminal. Default true. The web login has none: it reads the CLI's output. */
+  readonly tty?: boolean;
 }
 
 function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: string | null, args: readonly string[], o: TerminalOpts, action: string, entrypoint?: string): PassPlan {
@@ -49,7 +51,7 @@ function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: st
     home: o.home,
     env: {},
     args,
-    tty: true,
+    tty: o.tty ?? true,
     ...(entrypoint === undefined ? {} : { entrypoint }),
   };
 }
@@ -71,6 +73,75 @@ export function loginArgv(runner: Runner, o: TerminalOpts & { readonly staging: 
 /** The argv of a bash session on one account, behind the same lock, key copy or token file a pass uses. */
 export function shellArgv(account: { readonly runner: Runner; readonly name: string; readonly kind: AccountKind }, o: TerminalOpts & { readonly dir: string; readonly lockFile: string | null }): string[] {
   return dockerRunArgv(terminalPlan(account.runner, { name: account.name, kind: account.kind, dir: o.dir }, o.lockFile, ["bash"], o, "shell", "squad-entry"));
+}
+
+export interface FinishParams {
+  readonly store: Store;
+  readonly home: HomeLayout;
+  readonly runner: Runner;
+  readonly name: string;
+  readonly staging: string;
+  /** The email the login must belong to. Without it, whoever logged in owns the account. */
+  readonly owner?: string;
+  readonly now: Date;
+}
+
+export type FinishResult =
+  | { readonly ok: true; readonly ownerEmail: string | null }
+  | { readonly ok: false; readonly reason: "empty" | "owner-mismatch" | "busy"; readonly found?: string };
+
+/**
+ * The part of a login after the container: check what it left in `staging`, move it into `accounts/`
+ * under the account lock, and register or revive the account. On any refusal `staging` is removed and
+ * nothing else changes. `squad login` and the web login both end here.
+ */
+export async function finishLogin(p: FinishParams): Promise<FinishResult> {
+  const { store, home, runner, name, staging } = p;
+  const id = `${runner}/${name}`;
+  const drop = (): void => rmSync(staging, { recursive: true, force: true });
+  if (readdirSync(staging).length === 0) {
+    drop();
+    return { ok: false, reason: "empty" };
+  }
+
+  const found = identityOf(runner, "login", staging);
+  if (p.owner !== undefined && found !== null && found.email.toLowerCase() !== p.owner.toLowerCase()) {
+    drop();
+    return { ok: false, reason: "owner-mismatch", found: found.email };
+  }
+  const ownerEmail = found?.email ?? p.owner ?? null;
+
+  const dest = join(home.accounts, runner, name);
+  const stamp = p.now.toISOString().replace(/\D/g, "");
+  const aside: { old: string | null } = { old: null };
+  const locked = await withHostLock(join(home.locks, runner, `${name}.lock`), () => {
+    mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
+    const oldPath = join(dirname(dest), `.${name}.old-${stamp}`);
+    const had = existsSync(dest);
+    if (had) renameSync(dest, oldPath);
+    try {
+      renameSync(staging, dest);
+    } catch (e) {
+      if (had) renameSync(oldPath, dest);
+      throw e;
+    }
+    aside.old = had ? oldPath : null;
+  });
+  if (locked === "busy") {
+    drop();
+    return { ok: false, reason: "busy" };
+  }
+  if (aside.old !== null) rmSync(aside.old, { recursive: true, force: true });
+
+  const existing = getAccount(store.db, id);
+  if (existing === undefined) addAccount(store.db, { runner, name, kind: "login", ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
+  else {
+    // The state may have changed while the login ran. Only a dead account is revived.
+    if (existing.state === "dead") reviveByLogin(store.db, id);
+    if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
+  }
+  store.event({ at: p.now.toISOString(), kind: "login", account: id });
+  return { ok: true, ownerEmail };
 }
 
 export interface Out {
@@ -141,49 +212,14 @@ export async function runLogin(p: LoginParams): Promise<number> {
     out.stderr(`the login did not finish (exit ${code}); nothing was changed\n`);
     return 1;
   }
-  if (readdirSync(staging).length === 0) {
-    drop();
-    out.stderr("the login wrote no files; nothing was changed\n");
+  const fin = await finishLogin({ store, home, runner, name, staging, ...(p.owner === undefined ? {} : { owner: p.owner }), now: p.now });
+  if (!fin.ok) {
+    if (fin.reason === "empty") out.stderr("the login wrote no files; nothing was changed\n");
+    else if (fin.reason === "owner-mismatch") out.stderr(`the login is for ${fin.found}, not ${p.owner}; nothing was moved\n`);
+    else out.stderr(`${id}: account busy (a pass holds it); the new login was dropped, nothing was changed\n`);
     return 1;
   }
-
-  const found = identityOf(runner, "login", staging);
-  if (p.owner !== undefined && found !== null && found.email.toLowerCase() !== p.owner.toLowerCase()) {
-    drop();
-    out.stderr(`the login is for ${found.email}, not ${p.owner}; nothing was moved\n`);
-    return 1;
-  }
-  const ownerEmail = found?.email ?? p.owner ?? null;
-
-  const dest = join(home.accounts, runner, name);
-  const stamp = p.now.toISOString().replace(/\D/g, "");
-  const aside: { old: string | null } = { old: null };
-  const locked = await withHostLock(join(home.locks, runner, `${name}.lock`), () => {
-    mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
-    const oldPath = join(dirname(dest), `.${name}.old-${stamp}`);
-    const had = existsSync(dest);
-    if (had) renameSync(dest, oldPath);
-    try {
-      renameSync(staging, dest);
-    } catch (e) {
-      if (had) renameSync(oldPath, dest);
-      throw e;
-    }
-    aside.old = had ? oldPath : null;
-  });
-  if (locked === "busy") {
-    drop();
-    out.stderr(`${id}: account busy (a pass holds it); the new login was dropped, nothing was changed\n`);
-    return 1;
-  }
-  if (aside.old !== null) rmSync(aside.old, { recursive: true, force: true });
-
-  if (existing === undefined) addAccount(store.db, { runner, name, kind: "login", ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
-  else {
-    reviveByLogin(store.db, id);
-    if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
-  }
-  store.event({ at: p.now.toISOString(), kind: "login", account: id });
+  const ownerEmail = fin.ownerEmail;
   out.stdout(`logged in ${id}${ownerEmail === null ? "" : ` (${ownerEmail})`}\n`);
   return 0;
 }

@@ -190,13 +190,16 @@ test("consent stamps the time; agree must be true", async () => {
   await r.close();
 });
 
-test("startLogin and loginStatus answer 501 for now, with an ApiError", async () => {
-  const r = await rig();
+test("a dry run answers startLogin with 501 disabled and starts nothing; an unknown login id is a 404", async () => {
+  const f = fakeLogin();
+  const r = await rig({ login: f.opts }, { SQUAD_DRY_RUN: "1" });
   seed(r);
+  setState(r.store.db, "codex/alice", "dead", "refresh_token_reused", NOW);
   const c = await signIn(r, "alice@example.test");
   const start = await api<ApiError>(r, c, "POST", "/api/accounts/codex/alice/login");
   assert.deepEqual([start.status, start.body.error], [501, "disabled"]);
-  assert.equal((await api<ApiError>(r, c, "GET", "/api/logins/01ABC")).status, 501);
+  assert.equal(f.procs.length, 0);
+  assert.equal((await api<ApiError>(r, c, "GET", "/api/logins/01ABC")).status, 404);
   await r.close();
 });
 
@@ -487,4 +490,48 @@ test("startWeb starts the ticker only with a probe runner, not api-only; close s
   assert.equal(on.t.set, 1);
   await r.close();
   assert.equal(on.t.cleared, 1);
+});
+
+// ---- web device login ----
+
+function fakeLogin() {
+  const stops: string[] = [];
+  const procs: { say: (s: string) => void; exit: (c: number) => void; name: string }[] = [];
+  return {
+    stops, procs,
+    opts: {
+      start: (_argv: string[], name: string) => {
+        let cb: (s: string) => void = () => {};
+        let end: (c: number) => void = () => {};
+        const exited = new Promise<number>((r) => { end = r; });
+        procs.push({ say: (s) => cb(s), exit: end, name });
+        queueMicrotask(() => procs.at(-1)!.say("   \u001b[94mhttps://auth.openai.com/codex/device\u001b[0m\n\n2. Enter this one-time code\n   \u001b[94mABCD-EFGHJ\u001b[0m\n\n"));
+        return { onStdout: (f: (s: string) => void) => { cb = f; }, exited };
+      },
+      stop: async (n: string) => { stops.push(n); procs.find((p) => p.name === n)?.exit(143); },
+    },
+  };
+}
+
+test("startLogin and loginStatus: codex login accounts only, the owner only, and the status only for who started it", async () => {
+  const f = fakeLogin();
+  const r = await rig({ login: f.opts });
+  seed(r);
+  setState(r.store.db, "codex/alice", "dead", "refresh_token_reused", NOW);
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  const pi = await api<ApiError>(r, alice, "POST", "/api/accounts/pi/alice-key/login");
+  assert.equal(pi.status, 400);
+  assert.match(pi.body.message, /squad login/);
+  assert.equal((await api<ApiError>(r, bob, "POST", "/api/accounts/codex/alice/login")).status, 404);
+  const ok = await api<{ loginId: string; userCode: string; verifyUrl: string; expiresAt: string }>(r, alice, "POST", "/api/accounts/codex/alice/login");
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.userCode, "ABCD-EFGHJ");
+  assert.equal(ok.body.verifyUrl, "https://auth.openai.com/codex/device");
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/codex/alice/login")).status, 409);
+  const st = await api<{ state: string }>(r, alice, "GET", `/api/logins/${ok.body.loginId}`);
+  assert.deepEqual(st.body, { loginId: ok.body.loginId, state: "pending" });
+  assert.equal((await api<ApiError>(r, bob, "GET", `/api/logins/${ok.body.loginId}`)).status, 404);
+  await r.close();
+  assert.equal(f.stops.length, 1, "server close stops the running login container");
 });

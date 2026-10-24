@@ -1,13 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useOne } from "@refinedev/core";
-import type { AccountView, Runner } from "@squad/contract";
-import { useState } from "react";
+import type { AccountView, LoginStart, LoginStatus, Runner } from "@squad/contract";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { api } from "../api.ts";
 import { Room } from "../Meter.tsx";
-import { failureText, isNotReady } from "../lib/errors.ts";
+import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
 import { agoText } from "../lib/format.ts";
+import { isFinalLogin, loginStateText, POLL_MS } from "../lib/login.ts";
 
 type Notice = { kind: "ok" | "error"; text: string } | undefined;
 
@@ -20,6 +21,37 @@ export function Account() {
   const [busy, setBusy] = useState(false);
   const [f5, setF5] = useState<string | undefined>();
   const [fw, setFw] = useState<string | undefined>();
+  const [started, setStarted] = useState<LoginStart | undefined>();
+  const [loginState, setLoginState] = useState<LoginStatus | undefined>();
+
+  // Ask for the login state until it is final or the page goes away.
+  const loginId = started?.loginId;
+  useEffect(() => {
+    if (loginId === undefined) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const st = await api("loginStatus", { params: { loginId } });
+        if (stop) return;
+        setLoginState(st);
+        if (isFinalLogin(st.state)) {
+          if (st.state === "done") void qc.invalidateQueries();
+          return;
+        }
+      } catch (e) {
+        if (stop) return;
+        setNotice({ kind: "error", text: failureText(e) });
+        return;
+      }
+      timer = setTimeout(() => void poll(), POLL_MS);
+    };
+    timer = setTimeout(() => void poll(), POLL_MS);
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [loginId, qc]);
 
   if (query.isLoading) return <p>Loading…</p>;
   if (query.isError || result === undefined) return <p className="error">Could not load this account.</p>;
@@ -62,14 +94,11 @@ export function Account() {
     setBusy(true);
     setNotice(undefined);
     try {
-      const s = await api("startLogin", { params });
-      setNotice({ kind: "ok", text: `Open ${s.verifyUrl} and enter the code ${s.userCode}.` });
+      setLoginState(undefined);
+      setStarted(await api("startLogin", { params }));
     } catch (e) {
-      setNotice(
-        isNotReady(e)
-          ? { kind: "error", text: `Web login is not available yet; run \`squad login ${a.account}\` on the host.` }
-          : { kind: "error", text: failureText(e) },
-      );
+      setStarted(undefined);
+      setNotice({ kind: "error", text: failureText(e) });
     } finally {
       setBusy(false);
     }
@@ -83,6 +112,14 @@ export function Account() {
       </p>
       <h1>{a.account}</h1>
       {notice === undefined ? null : <p className={`notice ${notice.kind}`}>{notice.text}</p>}
+      {started === undefined ? null : (
+        <div className="notice ok">
+          <p>
+            Open <a href={started.verifyUrl} target="_blank" rel="noreferrer">{started.verifyUrl}</a> and enter this code: <strong>{started.userCode}</strong>
+          </p>
+          <p>{loginStateText(loginState ?? { loginId: started.loginId, state: "pending" })}</p>
+        </div>
+      )}
       <dl className="facts">
         <dt>Kind</dt>
         <dd>{a.kind}</dd>
