@@ -115,3 +115,18 @@ export function costCompare(rows: readonly { key: string; passes: number; cliCos
     })
     .sort((a, b) => (b.catalogCostUsd ?? b.cliCostUsd ?? 0) - (a.catalogCostUsd ?? a.cliCostUsd ?? 0) || a.key.localeCompare(b.key));
 }
+
+export type Tone = "green" | "red" | "grey";
+
+/** The Chakra colour token for a tone. */
+export const TONE_COLOR: Readonly<Record<Tone, string>> = { green: "green.fg", red: "red.fg", grey: "fg.muted" };
+
+/** The colour of a gap: the catalog cheaper than the CLI is good news (green), pricier is red. */
+export const gapTone = (gap: number | undefined): Tone => (gap === undefined || gap === 0 ? "grey" : gap < 0 ? "green" : "red");
+
+/** The same rule on the two costs, so a zero CLI cost still shows a pricier catalog as red. */
+export function diffTone(cli: number | undefined, catalog: number | undefined): Tone {
+  if (cli === undefined || catalog === undefined) return "grey";
+  const d = catalog - cli;
+  return d === 0 ? "grey" : d < 0 ? "green" : "red";
+}

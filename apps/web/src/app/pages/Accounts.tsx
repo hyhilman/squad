@@ -176,10 +176,10 @@ export function Accounts() {
                         <HealthBadge health={a.health} />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.left5h} floor={a.floor5h} width="170px" />
+                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="170px" />
+                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" />
                       </Table.Cell>
                       <Table.Cell hideBelow="lg" textAlign="end" color="fg.muted" fontSize="sm" whiteSpace="nowrap">
                         {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}

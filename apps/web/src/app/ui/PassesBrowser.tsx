@@ -5,7 +5,7 @@ import type { PassView } from "@squad/contract";
 import { ChevronLeft, ChevronRight, History } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
-import { diffText, moneyText, tokensText, totalTokens } from "../lib/format.ts";
+import { diffText, diffTone, moneyText, TONE_COLOR, tokensText, totalTokens } from "../lib/format.ts";
 import { filterPasses, type OutcomeGroup } from "../lib/passFilter.ts";
 import { useAccounts, usePasses } from "../queries.ts";
 import { PassDrawer } from "./PassDrawer.tsx";
@@ -82,7 +82,7 @@ function Rows({ rows, onOpen, showAccount }: { rows: readonly PassView[]; onOpen
               <Table.Cell {...num} hideBelow="md">
                 {moneyText(p.catalogCostUsd) || "-"}
               </Table.Cell>
-              <Table.Cell {...num} hideBelow="lg" color="fg.muted" pe="5">
+              <Table.Cell {...num} hideBelow="lg" color={TONE_COLOR[diffTone(p.cliCostUsd, p.catalogCostUsd)]} pe="5">
                 {diffText(p.cliCostUsd, p.catalogCostUsd) || "-"}
               </Table.Cell>
             </Table.Row>

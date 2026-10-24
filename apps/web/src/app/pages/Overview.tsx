@@ -79,8 +79,8 @@ export function Overview() {
                         </Box>
                       </HStack>
                       <HStack gap="6" flexShrink={0} w={{ base: "full", md: "auto" }}>
-                        <RoomBar left={a.left5h} floor={a.floor5h} width="150px" label="5h" />
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="150px" label="Week" />
+                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" label="5h" />
+                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" label="Week" />
                         <Box w="20" textAlign="right" hideBelow="md">
                           <HealthBadge health={a.health} />
                         </Box>

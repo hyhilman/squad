@@ -1,12 +1,12 @@
 // Small building blocks every page uses, so spacing, type and colour stay the same everywhere.
-import { Badge, Box, Button, Clipboard, EmptyState, Flex, HStack, IconButton, Skeleton, Stack, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Clipboard, EmptyState, Flex, HStack, IconButton, Portal, Skeleton, Stack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import type { Health } from "@squad/contract";
 import { AlertTriangle, Check, Copy, Inbox, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
-import { roomLabel, roomState } from "../lib/room.ts";
+import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
 
 export function PageHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
@@ -171,27 +171,62 @@ export function ProviderLogo({ logoId, name, size = 8 }: { logoId: string | unde
 
 const ROOM_COLOR = { blue: "room.blue", yellow: "room.yellow", orange: "room.orange", red: "room.red" } as const;
 
+/** A short hover note on any element. */
+export function Hint({ text, children }: { text: string; children: ReactNode }) {
+  return (
+    <Tooltip.Root openDelay={200} closeDelay={50}>
+      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content maxW="64" fontSize="xs">{text}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip.Root>
+  );
+}
+
+/** A coloured dot and a short label; the hover note says what the number means. */
+function Legend({ color, text, hint }: { color: string; text: string; hint: string }) {
+  return (
+    <Hint text={hint}>
+      <HStack gap="1.5" cursor="help" tabIndex={0} whiteSpace="nowrap">
+        <Box boxSize="2" rounded="full" bg={color} flexShrink={0} />
+        <Text fontVariantNumeric="tabular-nums">{text}</Text>
+      </HStack>
+    </Hint>
+  );
+}
+
 /**
  * The room left in one window. The part under the floor is grey (the owner keeps it); the part above
- * takes the state colour; a tick marks the floor.
+ * takes the state colour; a tick marks the floor. Under the bar, the floor sits on the left and what
+ * is available sits on the right, each in its own colour.
  */
 export function RoomBar({ left, floor, width = "100%", label }: { left: number | undefined; floor: number; width?: string; label?: string }) {
   const l = Math.max(0, Math.min(100, left ?? 0));
   const f = Math.max(0, Math.min(100, floor));
   const color = left === undefined ? "room.track" : ROOM_COLOR[roomState(l, f)];
+  const parts = roomParts(left, f);
   return (
     <Stack gap="1.5" w={width} minW="0">
-      <Flex justify="space-between" gap="2" fontSize="xs" lineHeight="1">
-        {label === undefined ? null : <Text color="fg.muted">{label}</Text>}
-        <Text color={left === undefined ? "fg.subtle" : "fg"} fontVariantNumeric="tabular-nums" whiteSpace="nowrap">
-          {roomLabel(left, floor)}
+      {label === undefined ? null : (
+        <Text fontSize="xs" lineHeight="1" color="fg.muted">
+          {label}
         </Text>
-      </Flex>
+      )}
       <Box position="relative" h="1.5" rounded="full" bg="room.track" aria-hidden>
         <Box position="absolute" insetY="0" left="0" roundedLeft="full" bg="room.floor" style={{ width: `${Math.min(l, f)}%` }} />
         {l > f ? <Box position="absolute" insetY="0" bg={color} roundedRight="full" style={{ left: `${f}%`, width: `${l - f}%` }} /> : null}
         {f > 0 ? <Box position="absolute" top="-3px" bottom="-3px" w="2px" rounded="full" bg="room.tick" style={{ left: `calc(${f}% - 1px)` }} /> : null}
       </Box>
+      <Flex justify="space-between" gap="2" fontSize="xs" lineHeight="1" color="fg.muted">
+        <Legend color="room.floor" text={`Floor ${f}%`} hint={floorHint(f)} />
+        {parts.available === undefined ? (
+          <Text color="fg.subtle">no read yet</Text>
+        ) : (
+          <Legend color={color} text={`${parts.available}% available`} hint={availableHint(parts)} />
+        )}
+      </Flex>
     </Stack>
   );
 }

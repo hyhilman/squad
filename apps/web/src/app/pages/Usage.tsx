@@ -1,7 +1,7 @@
 import { Box, Flex, SegmentGroup, SimpleGrid, Skeleton, Table, Text } from "@chakra-ui/react";
 import { Activity, Coins, DollarSign, Receipt } from "lucide-react";
 import { useState } from "react";
-import { costCompare, gapText, moneyText, compactNumber, tokensText } from "../lib/format.ts";
+import { costCompare, gapText, gapTone, moneyText, TONE_COLOR, compactNumber, tokensText } from "../lib/format.ts";
 import { RANGES, sinceFor, type Bucket, type Range } from "../lib/range.ts";
 import { seriesTotals } from "../lib/totals.ts";
 import { useUsageByModel, useUsageSeries } from "../queries.ts";
@@ -97,7 +97,7 @@ export function Usage() {
                         {moneyText(r.cliCostUsd) || "-"}
                       </Table.Cell>
                       <Table.Cell {...num}>{moneyText(r.catalogCostUsd) || "-"}</Table.Cell>
-                      <Table.Cell {...num} pe="5" color={r.gap === undefined ? "fg.subtle" : "fg"}>
+                      <Table.Cell {...num} pe="5" fontWeight={r.gap === undefined ? undefined : "500"} color={r.gap === undefined ? "fg.subtle" : TONE_COLOR[gapTone(r.gap)]}>
                         {gapText(r.gap)}
                       </Table.Cell>
                     </Table.Row>

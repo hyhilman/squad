@@ -1,4 +1,4 @@
-import { diffText } from "./format.ts";
+import { diffText, diffTone, gapTone } from "./format.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agoText, costText, hasCost, pctText, roomByRunner, totalTokens } from "./format.ts";
@@ -104,4 +104,14 @@ test("diffText is catalog minus CLI, in dollars and as a share of the CLI cost",
   assert.equal(diffText(undefined, 0.5), "");
   assert.equal(diffText(0.5, undefined), "");
   assert.equal(diffText(0, 0.5), "+$0.50", "no share of a zero CLI cost");
+});
+
+test("gapTone: green when the catalog is cheaper, red when pricier, grey when equal or unknown", () => {
+  assert.equal(gapTone(-12.5), "green");
+  assert.equal(gapTone(50.7), "red");
+  assert.equal(gapTone(0), "grey");
+  assert.equal(gapTone(undefined), "grey");
+  assert.equal(diffTone(0.01, 0.012), "red");
+  assert.equal(diffTone(0.004, 0), "green");
+  assert.equal(diffTone(undefined, 0.5), "grey");
 });

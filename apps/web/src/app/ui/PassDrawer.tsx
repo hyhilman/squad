@@ -4,7 +4,7 @@ import type { PassDetail } from "@squad/contract";
 import { Info } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link as RouterLink } from "react-router";
-import { diffText, durationText, moneyText, tokensText, totalTokens } from "../lib/format.ts";
+import { diffText, diffTone, durationText, TONE_COLOR, moneyText, tokensText, totalTokens } from "../lib/format.ts";
 import { usePass } from "../queries.ts";
 import { CopyButton, ErrorBlock, Fact, OutcomeBadge } from "./parts.tsx";
 
@@ -106,7 +106,9 @@ function Body({ p }: { p: PassDetail }) {
         <Box>
           <Fact label="CLI cost">{moneyText(p.cliCostUsd) || "-"}</Fact>
           <Fact label="Catalog cost">{moneyText(p.catalogCostUsd) || "-"}</Fact>
-          <Fact label="Catalog minus CLI">{diffText(p.cliCostUsd, p.catalogCostUsd) || "-"}</Fact>
+          <Fact label="Catalog minus CLI">
+            <Text as="span" color={TONE_COLOR[diffTone(p.cliCostUsd, p.catalogCostUsd)]}>{diffText(p.cliCostUsd, p.catalogCostUsd) || "-"}</Text>
+          </Fact>
         </Box>
       </Section>
 
