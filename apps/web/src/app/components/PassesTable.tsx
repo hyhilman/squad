@@ -1,9 +1,9 @@
 import type { PassView } from "@squad/contract";
-import { Table, Tag, Typography } from "antd";
+import { Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useNavigate } from "react-router";
 import { outcomeBadge } from "../lib/badges.ts";
-import { moneyText, totalTokens, tokensText } from "../lib/format.ts";
+import { diffText, moneyText, totalTokens, tokensText } from "../lib/format.ts";
 
 export function PassesTable({ rows, loading, showAccount }: { rows: readonly PassView[]; loading: boolean; showAccount: boolean }) {
   const navigate = useNavigate();
@@ -23,6 +23,7 @@ export function PassesTable({ rows, loading, showAccount }: { rows: readonly Pas
     { title: "Tokens", align: "right", render: (_: unknown, p: PassView) => tokensText(totalTokens(p.tokens)) },
     { title: "CLI cost", align: "right", render: (_: unknown, p: PassView) => moneyText(p.cliCostUsd) },
     { title: "Catalog cost", align: "right", render: (_: unknown, p: PassView) => moneyText(p.catalogCostUsd) },
+    { title: <Tooltip title="Catalog cost minus CLI cost">Diff</Tooltip>, align: "right", render: (_: unknown, p: PassView) => diffText(p.cliCostUsd, p.catalogCostUsd) },
   ];
   return (
     <Table<PassView>

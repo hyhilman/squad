@@ -86,6 +86,15 @@ export function gapPercent(cli: number | undefined, catalog: number | undefined)
   return ((catalog - cli) / cli) * 100;
 }
 
+/** Catalog cost minus CLI cost, signed, with its share of the CLI cost when that is above zero. Empty unless both exist. */
+export function diffText(cli: number | undefined, catalog: number | undefined): string {
+  if (cli === undefined || catalog === undefined) return "";
+  const d = catalog - cli;
+  const money = `${d > 0 ? "+" : d < 0 ? "-" : ""}${moneyText(Math.abs(d))}`;
+  const gap = gapPercent(cli, catalog);
+  return gap === undefined ? money : `${money} (${gapText(gap)})`;
+}
+
 export const gapText = (gap: number | undefined): string => (gap === undefined ? "-" : `${gap > 0 ? "+" : ""}${gap.toFixed(1)}%`);
 
 export interface CostCompareRow {

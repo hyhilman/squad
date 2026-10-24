@@ -50,10 +50,10 @@ function AccountBody({ a }: { a: AccountView }) {
           <Descriptions.Item label="Cooling until">{a.coolUntil === undefined ? "not cooling" : new Date(a.coolUntil).toLocaleString()}</Descriptions.Item>
           <Descriptions.Item label="Last read">{agoText(a.readAt, new Date())}</Descriptions.Item>
           <Descriptions.Item label="5-hour left">
-            <Room value={a.left5h} />
+            <Room value={a.left5h} floor={a.floor5h} />
           </Descriptions.Item>
           <Descriptions.Item label="Week left">
-            <Room value={a.leftWeek} />
+            <Room value={a.leftWeek} floor={a.floorWeek} />
           </Descriptions.Item>
           <Descriptions.Item label="Floors">
             5-hour {a.floor5h}%, week {a.floorWeek}% ({a.floorSource})

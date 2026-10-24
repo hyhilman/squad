@@ -46,8 +46,8 @@ export function Accounts() {
       onFilter: (v, a) => a.health === v,
       render: (h: AccountView["health"]) => <Tag color={healthColor(h)}>{h}</Tag>,
     },
-    { title: "5-hour left", dataIndex: "left5h", sorter: (a, b) => cmp(a.left5h, b.left5h), render: (v: number | undefined) => <Room value={v} /> },
-    { title: "Week left", dataIndex: "leftWeek", sorter: (a, b) => cmp(a.leftWeek, b.leftWeek), render: (v: number | undefined) => <Room value={v} /> },
+    { title: "5-hour left", dataIndex: "left5h", sorter: (a, b) => cmp(a.left5h, b.left5h), render: (v: number | undefined, a) => <Room value={v} floor={a.floor5h} /> },
+    { title: "Week left", dataIndex: "leftWeek", sorter: (a, b) => cmp(a.leftWeek, b.leftWeek), render: (v: number | undefined, a) => <Room value={v} floor={a.floorWeek} /> },
     { title: "Last read", dataIndex: "readAt", sorter: (a, b) => Date.parse(a.readAt ?? "") - Date.parse(b.readAt ?? "") || 0, render: (v: string | undefined) => agoText(v, now) },
     { title: "Actions", key: "actions", fixed: "right", render: (_: unknown, a) => <AccountActions a={a} compact /> },
   ];

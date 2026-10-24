@@ -1,3 +1,4 @@
+import { diffText } from "./format.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agoText, costText, hasCost, pctText, roomByRunner, totalTokens } from "./format.ts";
@@ -94,4 +95,13 @@ test("costCompare keeps rows with either cost, adds the gap, biggest first", asy
   assert.deepEqual(rows.map((r) => r.key), ["p/y", "p/x", "p/z"]);
   assert.ok(Math.abs(rows[1]!.gap! - 10) < 1e-9);
   assert.equal(rows[0]!.gap, undefined);
+});
+
+test("diffText is catalog minus CLI, in dollars and as a share of the CLI cost", () => {
+  assert.equal(diffText(0.004071, 0), "-$0.0041 (-100.0%)");
+  assert.equal(diffText(0.01, 0.012), "+$0.0020 (+20.0%)");
+  assert.equal(diffText(0.01, 0.01), "$0.00 (0.0%)");
+  assert.equal(diffText(undefined, 0.5), "");
+  assert.equal(diffText(0.5, undefined), "");
+  assert.equal(diffText(0, 0.5), "+$0.50", "no share of a zero CLI cost");
 });
