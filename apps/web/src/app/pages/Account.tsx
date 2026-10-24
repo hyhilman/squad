@@ -8,7 +8,7 @@ import { Room } from "../Meter.tsx";
 import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
 import { agoText } from "../lib/format.ts";
-import { isFinalLogin, loginStateText, POLL_MS } from "../lib/login.ts";
+import { canLogInAgain, isFinalLogin, loginStateText, POLL_MS } from "../lib/login.ts";
 
 type Notice = { kind: "ok" | "error"; text: string } | undefined;
 
@@ -181,9 +181,11 @@ export function Account() {
             Give consent
           </button>
         ) : null}
-        <button type="button" disabled={busy} onClick={() => void login()}>
-          Log in again
-        </button>
+        {canLogInAgain(a) ? (
+          <button type="button" disabled={busy} onClick={() => void login()}>
+            Log in again
+          </button>
+        ) : null}
       </div>
     </>
   );
