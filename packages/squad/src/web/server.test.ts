@@ -1,10 +1,10 @@
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { refreshPrices } from "../prices.ts";
+import { recordPriceHistory, refreshPrices } from "../prices.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import { NO_SESSION_ROUTES, ROUTES, findForbidden, type ConnectStart, type ConnectStatus, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
+import { NO_SESSION_ROUTES, ROUTES, findForbidden, type CatalogModelCompare, type CatalogProviderDetail, type CatalogProviderView, type ConnectStart, type ConnectStatus, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
 import { CLIENT_ID, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
 import { emptyHealth } from "../accounts/health.ts";
 import { addAccount, getAccount, putHealth, recordRoom, setState } from "../accounts/store.ts";
@@ -404,6 +404,10 @@ test("static files: index.html for client routes, assets by type, nothing outsid
   assert.match(index.type ?? "", /text\/html/);
   const noNonce = (t: string): string => t.replace(/<meta name="csp-nonce" content="[^"]*">/, "");
   assert.equal(noNonce((await get("/accounts/codex/alice")).text), noNonce(index.text), "a client route gets index.html");
+  for (const route of ["/catalog/models/qwen3.8-max", "/catalog/models/solar-mini4:free", "/catalog/glm-5.2", "/catalog/models/%40cf%2Fmeta%2Fllama-4.1"]) {
+    assert.equal(noNonce((await get(route)).text), noNonce(index.text), `a client route with a dot or an odd part gets index.html: ${route}`);
+  }
+  assert.equal((await get("/missing.png")).status, 404, "a file type the server knows stays a 404");
   assert.match(index.csp ?? "", /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/, "the one inline script is allowed by hash, nothing else");
   assert.equal((await get("/_astro/a.js")).type?.startsWith("text/javascript"), true);
   assert.equal((await get("/missing.js")).status, 404);
@@ -1164,6 +1168,78 @@ test("the usage and pass answers carry both costs", async () => {
   assert.deepEqual([u[0]!.key, u[0]!.cliCostUsd, u[0]!.catalogCostUsd], ["engy/glm-5.2", 0.4, 0.5]);
   const s = (await api<UsageSeriesPoint[]>(r, c, "GET", "/api/usage/series?by=day&since=2d")).body;
   assert.deepEqual([s[0]!.cliCostUsd, s[0]!.catalogCostUsd], [0.4, 0.5]);
+  await r.close();
+});
+
+// ---- the catalog pages ----
+
+test("catalogProviders: every saved provider with its runner, offer state and the person's own account count; empty with no saved copy", async () => {
+  const r = await rig();
+  const c0 = await signIn(r, "alice@example.test");
+  assert.deepEqual((await api(r, c0, "GET", "/api/catalog/providers")).body, []);
+  await withCatalog(r);
+  seed(r);
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  assert.equal((await api(r, alice, "POST", "/api/accounts", { runner: "pi", name: "og", provider: "opencode-go", key: FAKE_KEY })).status, 200);
+  const res = await api<CatalogProviderView[]>(r, alice, "GET", "/api/catalog/providers");
+  assert.equal(res.status, 200);
+  assert.equal(findForbidden(res.body), undefined);
+  assert.deepEqual(res.body.map((p) => p.id), ["alibaba-token-plan", "anthropic", "engy", "kenari", "openai", "opencode", "opencode-go", "sumopod"]);
+  const used = (b: CatalogProviderView[]) => Object.fromEntries(b.filter((p) => p.accounts > 0).map((p) => [p.id, p.accounts]));
+  assert.deepEqual(used(res.body), { openai: 1, "opencode-go": 1 }, "codex/alice counts for openai");
+  assert.deepEqual(used((await api<CatalogProviderView[]>(r, bob, "GET", "/api/catalog/providers")).body), {}, "never another person's");
+  assert.deepEqual(res.body.find((p) => p.id === "sumopod"), { id: "sumopod", name: "SumoPod", runner: "pi", offered: true, addAs: "sumopod", models: 2, accounts: 0, cheapest: { input: 0.14, output: 0.28 } });
+  await r.close();
+});
+
+test("catalogProviders: offered follows SQUAD_WEB_PROVIDERS", async () => {
+  const r = await rig({}, { SQUAD_WEB_PROVIDERS: "engy,codex" });
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const res = await api<CatalogProviderView[]>(r, c, "GET", "/api/catalog/providers");
+  assert.deepEqual(res.body.filter((p) => p.offered).map((p) => [p.id, p.addAs]), [["engy", "engy"], ["openai", "codex"]]);
+  assert.equal(res.body.length, 8, "a provider that is not offered still shows");
+  await r.close();
+});
+
+test("catalogProvider: the models of one provider; 404 for an unknown id, 400 for a bad one", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const res = await api<CatalogProviderDetail>(r, c, "GET", "/api/catalog/providers/opencode");
+  assert.equal(res.status, 200);
+  assert.equal(findForbidden(res.body), undefined);
+  assert.equal(res.body.provider.name, "OpenCode");
+  assert.deepEqual(res.body.models.map((m) => [m.id, m.otherProviders]), [["claude-sonnet-4-6", 1], ["muse-wonder-1.0", 0], ["qwen3.8-max", 3]]);
+  const nope = await api<ApiError>(r, c, "GET", "/api/catalog/providers/nope");
+  assert.deepEqual([nope.status, nope.body.error], [404, "not-found"]);
+  for (const bad of ["-x", "a%20b", "x".repeat(65)]) assert.equal((await api(r, c, "GET", `/api/catalog/providers/${bad}`)).status, 400, bad);
+  assert.equal((await api(r, undefined, "GET", "/api/catalog/providers/opencode")).status, 401);
+  await r.close();
+});
+
+test("catalogModel: one exact model id across providers, cheapest first, with the price history of the last 90 days", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  recordPriceHistory(r.store.db, new Map([["sumopod/qwen3.8-max", { input: 1.5, output: 4 }]]), new Date("2026-05-01T00:00:00Z"));
+  recordPriceHistory(r.store.db, new Map([["sumopod/qwen3.8-max", { input: 1.2, output: 3.5 }], ["engy/glm-5.2", { input: 0.68, output: 1.5 }]]), new Date("2026-09-01T00:00:00Z"));
+  recordPriceHistory(r.store.db, new Map([["sumopod/qwen3.8-max", { input: 1, output: 3 }]]), new Date("2026-10-10T00:00:00Z"));
+  const c = await signIn(r, "alice@example.test");
+  const res = await api<CatalogModelCompare>(r, c, "GET", "/api/catalog/models/qwen3.8-max");
+  assert.equal(res.status, 200);
+  assert.equal(findForbidden(res.body), undefined);
+  assert.deepEqual(res.body.offers.map((o) => [o.provider, o.cheapest]), [["sumopod", true], ["alibaba-token-plan", false], ["opencode", false], ["opencode-go", false]]);
+  assert.deepEqual(res.body.history, [
+    { provider: "sumopod", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
+    { provider: "sumopod", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
+  ]);
+  const colon = await api<CatalogModelCompare>(r, c, "GET", `/api/catalog/models/${encodeURIComponent("solar-mini4:free")}`);
+  assert.deepEqual([colon.status, colon.body.offers.map((o) => o.provider)], [200, ["kenari"]]);
+  for (const id of ["nope", "text-embedding-3-large", encodeURIComponent("a/b")]) assert.equal((await api(r, c, "GET", `/api/catalog/models/${id}`)).status, 404, id);
+  for (const id of ["x".repeat(201), "a%20b", "%zz", "a%00b"]) assert.equal((await api(r, c, "GET", `/api/catalog/models/${id}`)).status, 400, id);
+  // The URL parser folds an encoded `..` into a path step, so it never reaches the route.
+  assert.equal((await api(r, c, "GET", "/api/catalog/models/%2E%2E")).status, 404);
   await r.close();
 });
 

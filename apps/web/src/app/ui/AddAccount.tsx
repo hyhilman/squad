@@ -1,10 +1,12 @@
 // Add an account in steps: pick a provider, name it (and give the key or token), then follow the login.
 // A secret lives only in this dialog while it is open; closing it clears it.
-import { Badge, Box, useBreakpointValue, Button, Code, CloseButton, Dialog, Field, Flex, HStack, Input, InputGroup, Portal, RadioCard, SimpleGrid, Skeleton, Stack, Text } from "@chakra-ui/react";
+import { Badge, Box, useBreakpointValue, Button, Code, CloseButton, Dialog, Field, Flex, HStack, Input, InputGroup, Link, Portal, RadioCard, SimpleGrid, Skeleton, Stack, Text } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ConnectStart, ConnectStatus, LoginStart, LoginStatus, ProviderView } from "@squad/contract";
 import { ArrowLeft, Plus, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link as RouterLink } from "react-router";
+import { providerPath } from "../lib/catalog.ts";
 import { api } from "../api.ts";
 import { accountNameError, suggestName } from "../lib/accountName.ts";
 import { CLAUDE_WAYS, submitTextFor, wayNeedsSecret, type ClaudeWay } from "../lib/connect.ts";
@@ -27,12 +29,11 @@ const codeSpans = (text: string) =>
     ),
   );
 
-function Tile({ item, onPick }: { item: PickerItem; onPick: () => void }) {
+function Tile({ item, onPick, onLeave }: { item: PickerItem; onPick: () => void; onLeave: () => void }) {
+  // The pick button covers the tile (its ::before); the details link sits above it, so the two never nest.
   return (
     <Box
-      as="button"
-      onClick={onPick}
-      textAlign="left"
+      position="relative"
       p="3"
       rounded="lg"
       borderWidth="1px"
@@ -40,18 +41,41 @@ function Tile({ item, onPick }: { item: PickerItem; onPick: () => void }) {
       bg="surface"
       transition="border-color 0.12s, background 0.12s, box-shadow 0.12s"
       _hover={{ borderColor: "brand.border", bg: "brand.subtle/40" }}
-      _focusVisible={{ outline: "2px solid", outlineColor: "brand.focusRing", outlineOffset: "1px" }}
+      _focusWithin={{ outline: "2px solid", outlineColor: "brand.focusRing", outlineOffset: "1px" }}
       minW="0"
     >
       <HStack gap="3" minW="0">
         <ProviderLogo logoId={item.logoId} name={item.name} size={9} />
         <Box minW="0" flex="1">
-          <Text fontSize="sm" fontWeight="500" truncate>
+          <Box
+            as="button"
+            onClick={onPick}
+            textAlign="left"
+            display="block"
+            w="full"
+            fontSize="sm"
+            fontWeight="500"
+            truncate
+            outline="none"
+            _before={{ content: '""', position: "absolute", inset: "0", rounded: "lg" }}
+          >
             {item.name}
-          </Text>
-          <Text fontSize="xs" color="fg.muted" truncate>
-            {item.sub}
-          </Text>
+          </Box>
+          <HStack gap="1.5" minW="0" fontSize="xs">
+            <Text color="fg.muted" truncate>
+              {item.sub}
+            </Text>
+            {item.catalogId === undefined ? null : (
+              <>
+                <Text color="fg.subtle">·</Text>
+                <Link asChild position="relative" zIndex="1" color="fg.muted" textDecoration="underline" textDecorationColor="border.emphasized" textUnderlineOffset="2px" _hover={{ color: "brand.fg" }} flexShrink={0}>
+                  <RouterLink to={providerPath(item.catalogId)} onClick={onLeave} aria-label={`${item.name} details`}>
+                    details
+                  </RouterLink>
+                </Link>
+              </>
+            )}
+          </HStack>
         </Box>
         {item.accounts > 0 ? (
           <Badge size="sm" variant="subtle" flexShrink={0} fontVariantNumeric="tabular-nums">
@@ -63,7 +87,7 @@ function Tile({ item, onPick }: { item: PickerItem; onPick: () => void }) {
   );
 }
 
-function Picker({ providers, onPick }: { providers: readonly ProviderView[]; onPick: (p: ProviderView) => void }) {
+function Picker({ providers, onPick, onLeave }: { providers: readonly ProviderView[]; onPick: (p: ProviderView) => void; onLeave: () => void }) {
   const [q, setQ] = useState("");
   const groups = useMemo(() => pickerGroups(providers, q), [providers, q]);
   return (
@@ -86,7 +110,7 @@ function Picker({ providers, onPick }: { providers: readonly ProviderView[]; onP
             </HStack>
             <SimpleGrid columns={{ base: 1, sm: 2, md: 3 }} gap="2">
               {g.items.map((i) => (
-                <Tile key={i.id} item={i} onPick={() => onPick(providers.find((p) => p.id === i.id)!)} />
+                <Tile key={i.id} item={i} onPick={() => onPick(providers.find((p) => p.id === i.id)!)} onLeave={onLeave} />
               ))}
             </SimpleGrid>
           </Stack>
@@ -115,7 +139,11 @@ function Chosen({ p, onChange }: { p: ProviderView; onChange: () => void }) {
   );
 }
 
-export function AddAccount() {
+/**
+ * `preselect`: a ProviderView id (such as `codex` or `engy`) to start on step 2 with. It is used once,
+ * when the dialog opens, so Change and Back still go to the list.
+ */
+export function AddAccount({ preselect }: { preselect?: string } = {}) {
   const qc = useQueryClient();
   const me = useMe().data;
   const [open, setOpen] = useState(false);
@@ -130,6 +158,13 @@ export function AddAccount() {
   const [connect, setConnect] = useState<ConnectStart>();
   const [final, setFinal] = useState<LoginStatus | ConnectStatus>();
   const providers = useProviders(open);
+  const [pending, setPending] = useState<string>();
+  useEffect(() => {
+    if (pending === undefined || providers.data === undefined) return;
+    const p = providers.data.find((x) => x.id === pending);
+    if (p !== undefined) setProvider(p);
+    setPending(undefined);
+  }, [pending, providers.data]);
   const suggested = suggestName(me?.email);
   const size = useBreakpointValue({ base: "full", md: "xl" } as const) ?? "xl";
 
@@ -148,6 +183,7 @@ export function AddAccount() {
     setOpen(false);
     reset();
     void qc.invalidateQueries({ queryKey: ["accounts"] });
+    void qc.invalidateQueries({ queryKey: ["catalog"] });
   };
 
   const usedName = name === "" ? suggested : name;
@@ -188,7 +224,14 @@ export function AddAccount() {
 
   return (
     <>
-      <Button colorPalette="brand" size="sm" onClick={() => setOpen(true)}>
+      <Button
+        colorPalette="brand"
+        size="sm"
+        onClick={() => {
+          setPending(preselect);
+          setOpen(true);
+        }}
+      >
         <Plus size={15} /> Add account
       </Button>
       <Dialog.Root open={open} onOpenChange={(d) => !d.open && close()} size={size} placement="center" scrollBehavior="inside" lazyMount unmountOnExit>
@@ -204,7 +247,7 @@ export function AddAccount() {
               </Dialog.Header>
               <Dialog.Body py="5">
                 {step === 1 ? (
-                  providers.isPending ? (
+                  providers.isPending || (pending !== undefined && providers.data !== undefined) ? (
                     <Stack gap="3">
                       <Skeleton h="10" rounded="md" />
                       <SimpleGrid columns={{ base: 1, sm: 2, md: 3 }} gap="2">
@@ -216,7 +259,7 @@ export function AddAccount() {
                   ) : providers.isError ? (
                     <ErrorBlock error={providers.error} onRetry={() => void providers.refetch()} />
                   ) : (
-                    <Picker providers={providers.data} onPick={setProvider} />
+                    <Picker providers={providers.data} onPick={setProvider} onLeave={close} />
                   )
                 ) : null}
                 {step === 2 && provider !== undefined ? (

@@ -2,9 +2,10 @@
 // height, so the app also works inside an iframe of another page.
 import { Badge, Box, Button, Flex, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
 import type { Me } from "@squad/contract";
-import { BarChart3, Boxes, Check, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
+import { BarChart3, BookOpen, Boxes, Check, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
+import { inFrame } from "../lib/embed.ts";
 import { useColorMode, type ThemeChoice } from "./colorMode.ts";
 
 const NAV = [
@@ -12,7 +13,11 @@ const NAV = [
   { to: "/accounts", label: "Accounts", icon: Users, end: false },
   { to: "/passes", label: "Passes", icon: History, end: false },
   { to: "/usage", label: "Usage", icon: BarChart3, end: false },
+  { to: "/catalog", label: "Catalog", icon: BookOpen, end: false },
 ] as const;
+
+// In a frame the parent page owns who is signed in and the look: the bar shows the nav only.
+const FRAMED = typeof window !== "undefined" && inFrame(window);
 
 /** The one width every page and the bar line up to. */
 export function Container({ children, ...rest }: { children: ReactNode } & React.ComponentProps<typeof Box>) {
@@ -125,32 +130,40 @@ function PhoneMenu({ me }: { me: Me }) {
       <Portal>
         <Menu.Positioner>
           <Menu.Content minW="60">
-            <Box px="2" py="1.5">
-              <HStack gap="2" minW="0">
-                <Text fontSize="sm" truncate flex="1">
-                  {me.email}
-                </Text>
-                {me.admin ? <AdminBadge /> : null}
-              </HStack>
-            </Box>
-            <Menu.Separator />
+            {FRAMED ? null : (
+              <>
+                <Box px="2" py="1.5">
+                  <HStack gap="2" minW="0">
+                    <Text fontSize="sm" truncate flex="1">
+                      {me.email}
+                    </Text>
+                    {me.admin ? <AdminBadge /> : null}
+                  </HStack>
+                </Box>
+                <Menu.Separator />
+              </>
+            )}
             {NAV.map(({ to, label, icon: I }) => (
               <Menu.Item key={to} value={to} onSelect={() => void navigate(to)} fontSize="sm">
                 <I size={15} /> {label}
               </Menu.Item>
             ))}
-            <Menu.Separator />
-            {THEMES.map(({ value, label, icon: I }) => (
-              <Menu.Item key={value} value={`theme-${value}`} onSelect={() => setChoice(value)} fontSize="sm">
-                <I size={15} />
-                <Box flex="1">{label} theme</Box>
-                {choice === value ? <Check size={14} /> : null}
-              </Menu.Item>
-            ))}
-            <Menu.Separator />
-            <Menu.Item value="sign-out" onSelect={() => void signOut()} fontSize="sm">
-              <LogOut size={15} /> Sign out
-            </Menu.Item>
+            {FRAMED ? null : (
+              <>
+                <Menu.Separator />
+                {THEMES.map(({ value, label, icon: I }) => (
+                  <Menu.Item key={value} value={`theme-${value}`} onSelect={() => setChoice(value)} fontSize="sm">
+                    <I size={15} />
+                    <Box flex="1">{label} theme</Box>
+                    {choice === value ? <Check size={14} /> : null}
+                  </Menu.Item>
+                ))}
+                <Menu.Separator />
+                <Menu.Item value="sign-out" onSelect={() => void signOut()} fontSize="sm">
+                  <LogOut size={15} /> Sign out
+                </Menu.Item>
+              </>
+            )}
           </Menu.Content>
         </Menu.Positioner>
       </Portal>
@@ -165,31 +178,33 @@ export function Shell({ me, children }: { me: Me; children: ReactNode }) {
       <Box as="header" bg="surface" borderBottomWidth="1px" borderColor="border" position="sticky" top="0" zIndex="sticky">
         <Container>
           <Flex h="14" align="center" gap="6">
-            <Wordmark />
-            <Box hideBelow="md">
+            {FRAMED ? null : <Wordmark />}
+            <Box hideBelow="md" ms={FRAMED ? "-3" : undefined}>
               <NavItems />
             </Box>
             <Box flex="1" />
-            <HStack gap="2" hideBelow="md" minW="0">
-              <Text fontSize="sm" color="fg.muted" truncate maxW="56" hideBelow="lg" title={me.email}>
-                {me.email}
-              </Text>
-              {me.admin ? <AdminBadge /> : null}
-              <ThemeMenu />
-              <Button
-                size="sm"
-                variant="ghost"
-                color="fg.muted"
-                mr="-3"
-                loading={busy}
-                onClick={() => {
-                  setBusy(true);
-                  void signOut().finally(() => setBusy(false));
-                }}
-              >
-                <LogOut size={15} /> Sign out
-              </Button>
-            </HStack>
+            {FRAMED ? null : (
+              <HStack gap="2" hideBelow="md" minW="0">
+                <Text fontSize="sm" color="fg.muted" truncate maxW="56" hideBelow="lg" title={me.email}>
+                  {me.email}
+                </Text>
+                {me.admin ? <AdminBadge /> : null}
+                <ThemeMenu />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  color="fg.muted"
+                  mr="-3"
+                  loading={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    void signOut().finally(() => setBusy(false));
+                  }}
+                >
+                  <LogOut size={15} /> Sign out
+                </Button>
+              </HStack>
+            )}
             <Box hideFrom="md" mr="-2">
               <PhoneMenu me={me} />
             </Box>
