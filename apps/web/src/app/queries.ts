@@ -19,3 +19,9 @@ export const useUsageSeries = (by: "day" | "hour", since: string) =>
 
 export const useUsageByAccount = (since: string) =>
   useQuery({ queryKey: ["usageAccount", since], queryFn: () => api("usage", { query: { by: "account", since } }) });
+
+export const useUsageByModel = (since: string) =>
+  useQuery({ queryKey: ["usageModel", since], queryFn: () => api("usage", { query: { by: "model", since } }) });
+
+/** Only while the Add account box is open. */
+export const useProviders = (enabled: boolean) => useQuery({ queryKey: ["providers"], queryFn: () => api("listProviders", {}), enabled, staleTime: 60_000 });

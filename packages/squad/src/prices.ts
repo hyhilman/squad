@@ -6,6 +6,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { AccountKind } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
 import { SQUAD_DRY_RUN_ENV, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, envOn } from "./settings.ts";
@@ -56,17 +57,95 @@ export const PRICES_TTL_MS = 6 * 60 * 60 * 1000;
 /** The most the refresh reads. The real catalog is about 5 MB. */
 const MAX_BYTES = 32 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
-/** A file of another version is read as no copy, so the next refresh renews it. */
-const SAVED_VERSION = 1;
+/** What the saved copy keeps of one model: the price, and what a models.json entry needs. */
+export interface CatalogModel {
+  readonly id: string;
+  readonly name?: string;
+  /** `embedding` models are priced but never offered to pi. */
+  readonly type?: string;
+  readonly reasoning?: boolean;
+  readonly context?: number;
+  readonly output?: number;
+  /** `modalities.input`, such as `["text", "image"]`. */
+  readonly input?: readonly string[];
+  readonly price: Price;
+}
 
-type Catalog = Record<string, { models: Record<string, { cost: Record<string, number> }> }>;
+export interface CatalogProvider {
+  readonly id: string;
+  readonly name?: string;
+  /** The base URL of an OpenAI-compatible API. */
+  readonly api?: string;
+  readonly npm?: string;
+  readonly models: readonly CatalogModel[];
+}
+
+const posInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0;
+const str = (v: unknown): v is string => typeof v === "string" && v !== "" && v.length <= 300;
+
+/** Every provider of the catalog with the models that have a usable price. Junk gives an empty list, never a throw. */
+export function parseProviders(json: unknown): CatalogProvider[] {
+  const out: CatalogProvider[] = [];
+  if (!isObj(json)) return out;
+  for (const [id, entry] of Object.entries(json)) {
+    if (!isObj(entry) || !isObj(entry.models)) continue;
+    const models: CatalogModel[] = [];
+    for (const [mid, m] of Object.entries(entry.models)) {
+      if (!isObj(m) || !isObj(m.cost) || !money(m.cost.input) || !money(m.cost.output)) continue;
+      const c = m.cost as { input: number; output: number; cache_read?: unknown; cache_write?: unknown };
+      const limit = isObj(m.limit) ? m.limit : {};
+      const input = isObj(m.modalities) && Array.isArray(m.modalities.input) ? m.modalities.input.filter((x): x is string => str(x)) : [];
+      models.push({
+        id: mid,
+        ...(str(m.name) ? { name: m.name } : {}),
+        ...(str(m.type) ? { type: m.type } : {}),
+        ...(typeof m.reasoning === "boolean" ? { reasoning: m.reasoning } : {}),
+        ...(posInt(limit.context) ? { context: limit.context } : {}),
+        ...(posInt(limit.output) ? { output: limit.output } : {}),
+        ...(input.length > 0 ? { input } : {}),
+        price: { input: c.input, output: c.output, ...(money(c.cache_read) ? { cacheRead: c.cache_read } : {}), ...(money(c.cache_write) ? { cacheWrite: c.cache_write } : {}) },
+      });
+    }
+    if (models.length === 0) continue;
+    out.push({ id, ...(str(entry.name) ? { name: entry.name } : {}), ...(str(entry.api) ? { api: entry.api } : {}), ...(str(entry.npm) ? { npm: entry.npm } : {}), models });
+  }
+  return out;
+}
+
+/** The trimmed catalog in the models.dev shape, so `parseCatalog` and `parseProviders` read it as they read the raw one. */
+function trim(providers: readonly CatalogProvider[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of providers) {
+    const models: Record<string, unknown> = {};
+    for (const m of p.models) {
+      models[m.id] = {
+        ...(m.name === undefined ? {} : { name: m.name }),
+        ...(m.type === undefined ? {} : { type: m.type }),
+        ...(m.reasoning === undefined ? {} : { reasoning: m.reasoning }),
+        ...(m.context === undefined && m.output === undefined ? {} : { limit: { ...(m.context === undefined ? {} : { context: m.context }), ...(m.output === undefined ? {} : { output: m.output }) } }),
+        ...(m.input === undefined ? {} : { modalities: { input: m.input } }),
+        cost: {
+          input: m.price.input, output: m.price.output,
+          ...(m.price.cacheRead === undefined ? {} : { cache_read: m.price.cacheRead }),
+          ...(m.price.cacheWrite === undefined ? {} : { cache_write: m.price.cacheWrite }),
+        },
+      };
+    }
+    out[p.id] = { ...(p.name === undefined ? {} : { name: p.name }), ...(p.api === undefined ? {} : { api: p.api }), ...(p.npm === undefined ? {} : { npm: p.npm }), models };
+  }
+  return out;
+}
+
+/** Version 1 held prices only. It still loads, but a refresh renews it, so the new fields arrive. */
+const SAVED_VERSION = 2;
+const LOADABLE_VERSIONS: readonly unknown[] = [1, SAVED_VERSION];
 
 /** The saved file, or undefined when it is missing, broken or of another shape. Never throws. */
-function readSaved(home: HomeLayout): { readonly fetchedAt: number; readonly catalog: unknown } | undefined {
+function readSaved(home: HomeLayout): { readonly v: number; readonly fetchedAt: number; readonly catalog: unknown } | undefined {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8"));
-    if (!isObj(raw) || raw.v !== SAVED_VERSION || typeof raw.fetchedAt !== "number" || !isObj(raw.catalog)) return undefined;
-    return { fetchedAt: raw.fetchedAt, catalog: raw.catalog };
+    if (!isObj(raw) || !LOADABLE_VERSIONS.includes(raw.v) || typeof raw.fetchedAt !== "number" || !isObj(raw.catalog)) return undefined;
+    return { v: raw.v as number, fetchedAt: raw.fetchedAt, catalog: raw.catalog };
   } catch {
     return undefined;
   }
@@ -75,6 +154,11 @@ function readSaved(home: HomeLayout): { readonly fetchedAt: number; readonly cat
 /** The saved catalog, or no prices when the file is missing or broken: a bad catalog must not stop a pass. */
 export function loadPrices(home: HomeLayout): Prices {
   return parseCatalog(readSaved(home)?.catalog);
+}
+
+/** The saved providers and models (empty when there is no usable copy). */
+export function loadProviders(home: HomeLayout): CatalogProvider[] {
+  return parseProviders(readSaved(home)?.catalog);
 }
 
 export interface RefreshPrices {
@@ -95,25 +179,18 @@ export async function refreshPrices(r: RefreshPrices): Promise<RefreshResult> {
   if (r.url === "" || envOn(SQUAD_NO_PRICES_ENV, env) || envOn(SQUAD_DRY_RUN_ENV, env)) return "off";
   const saved = readSaved(r.home);
   // A copy stamped in the future means the clock moved back; renew it.
-  if (saved !== undefined && r.now >= saved.fetchedAt && r.now - saved.fetchedAt < PRICES_TTL_MS) return "fresh";
+  if (saved !== undefined && saved.v === SAVED_VERSION && r.now >= saved.fetchedAt && r.now - saved.fetchedAt < PRICES_TTL_MS) return "fresh";
   try {
     const res = await r.fetch(r.url, { redirect: "error", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) return `kept: the catalog answered ${res.status}`;
     const text = await res.text();
     if (text.length > MAX_BYTES) return "kept: the catalog is too big";
-    const prices = parseCatalog(JSON.parse(text));
+    const json: unknown = JSON.parse(text);
+    const prices = parseCatalog(json);
     // A catalog with no usable model is the wrong file; it must not replace a good copy.
     if (prices.size === 0) return "kept: the catalog has no model with a price";
-    // Keep only what parseCatalog reads, so the file stays small.
-    const catalog: Catalog = {};
-    for (const [key, p] of prices) {
-      const i = key.indexOf("/");
-      const provider = key.slice(0, i);
-      const cost: Record<string, number> = { input: p.input, output: p.output };
-      if (p.cacheRead !== undefined) cost.cache_read = p.cacheRead;
-      if (p.cacheWrite !== undefined) cost.cache_write = p.cacheWrite;
-      (catalog[provider] ??= { models: {} }).models[key.slice(i + 1)] = { cost };
-    }
+    // Keep only what the app reads, so the file stays small.
+    const catalog = trim(parseProviders(json));
     mkdirSync(r.home.state, { recursive: true });
     const file = join(r.home.state, PRICES_FILE);
     const tmp = `${file}.${process.pid}.tmp`;
@@ -135,4 +212,55 @@ export function passCost(kind: AccountKind, providerModel: string, usage: Usage,
   if (kind !== "key") return null;
   const p = prices.get(providerModel);
   return p === undefined ? null : { costUsd: costOf(usage, p), priceSrc: PRICE_SRC };
+}
+
+// ---- the price a pass was charged at ----
+
+/** The catalog key of a model for a runner: pi names its model `<provider>/<id>` already. */
+export function catalogKey(runner: string, model: string): string | undefined {
+  if (runner === "pi") return model.includes("/") ? model : undefined;
+  if (runner === "codex") return `openai/${model}`;
+  if (runner === "claude") return `anthropic/${model}`;
+  return undefined;
+}
+
+interface HistoryRaw { input: number; output: number; cache_read: number | null; cache_write: number | null }
+
+/** Appends a row for each model whose price is new or differs from its latest row. One transaction. Returns the rows written. */
+export function recordPriceHistory(db: DatabaseSync, prices: Prices, now: Date): number {
+  const latest = new Map<string, HistoryRaw>();
+  const rows = db.prepare("SELECT p.provider, p.model, p.input, p.output, p.cache_read, p.cache_write FROM price_history p JOIN (SELECT MAX(rowid) AS r FROM price_history GROUP BY provider, model) m ON p.rowid = m.r").all() as unknown as (HistoryRaw & { provider: string; model: string })[];
+  for (const r of rows) latest.set(`${r.provider}/${r.model}`, r);
+  const insert = db.prepare("INSERT INTO price_history (provider, model, input, output, cache_read, cache_write, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  let written = 0;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [key, p] of prices) {
+      const old = latest.get(key);
+      if (old !== undefined && old.input === p.input && old.output === p.output && old.cache_read === (p.cacheRead ?? null) && old.cache_write === (p.cacheWrite ?? null)) continue;
+      const i = key.indexOf("/");
+      insert.run(key.slice(0, i), key.slice(i + 1), p.input, p.output, p.cacheRead ?? null, p.cacheWrite ?? null, now.toISOString());
+      written++;
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return written;
+}
+
+/** The price in force at `at`: the last row seen at or before it. undefined when the history has none. */
+export function priceAt(db: DatabaseSync, key: string, at: Date): Price | undefined {
+  const i = key.indexOf("/");
+  const r = db.prepare("SELECT input, output, cache_read, cache_write FROM price_history WHERE provider = ? AND model = ? AND seen_at <= ? ORDER BY seen_at DESC, rowid DESC LIMIT 1").get(key.slice(0, i), key.slice(i + 1), at.toISOString()) as HistoryRaw | undefined;
+  return r === undefined ? undefined : { input: r.input, output: r.output, ...(r.cache_read === null ? {} : { cacheRead: r.cache_read }), ...(r.cache_write === null ? {} : { cacheWrite: r.cache_write }) };
+}
+
+/** Tokens times the catalog price at `at`, for any kind of account; the saved copy stands in when the history has no row. null = no price. */
+export function catalogCost(db: DatabaseSync, prices: Prices, runner: string, model: string, usage: Usage, at: Date): number | null {
+  const key = catalogKey(runner, model);
+  if (key === undefined) return null;
+  const p = priceAt(db, key, at) ?? prices.get(key);
+  return p === undefined ? null : costOf(usage, p);
 }

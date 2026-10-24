@@ -84,3 +84,7 @@ test("a failure message that is not JSON is a provider failure with no code", ()
   const o = parseCodexStream(line({ type: "turn.failed", error: { message: "plain words" } }));
   assert.deepEqual(o.failure, { kind: "provider", code: "", message: "plain words" });
 });
+
+test("codex has no CLI cost", () => {
+  assert.equal(parseCodexStream(fixture("ok-gpt-6-1-sol.jsonl")).cliCostUsd, undefined);
+});

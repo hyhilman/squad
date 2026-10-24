@@ -2,7 +2,7 @@ import { Alert, Card, Collapse, Descriptions, Skeleton, Space, Tag, Typography }
 import { Link, useParams } from "react-router";
 import { ErrorNote } from "../components/ErrorNote.tsx";
 import { outcomeBadge } from "../lib/badges.ts";
-import { costText, durationText, tokensText } from "../lib/format.ts";
+import { durationText, moneyText, tokensText } from "../lib/format.ts";
 import { usePass } from "../queries.ts";
 
 // Text from a pass is shown as plain text in <pre>. It is never turned into HTML.
@@ -44,7 +44,8 @@ export function Pass() {
             <Tag color={b.color}>{b.text}</Tag>
             {p.failKind === undefined ? "" : `${p.failKind}${p.failCode === undefined ? "" : ` (${p.failCode})`}`}
           </Descriptions.Item>
-          <Descriptions.Item label="Cost">{costText(p.costUsd) || "none"}</Descriptions.Item>
+          <Descriptions.Item label="CLI cost">{moneyText(p.cliCostUsd) || "none"}</Descriptions.Item>
+          <Descriptions.Item label="Catalog cost">{moneyText(p.catalogCostUsd) || "none"}</Descriptions.Item>
           <Descriptions.Item label="Tokens" span={2}>
             input {tokensText(t.input)}, output {tokensText(t.output)}, cache read {tokensText(t.cacheRead)}, cache write {tokensText(t.cacheWrite)}, reasoning {tokensText(t.reasoning)}
           </Descriptions.Item>

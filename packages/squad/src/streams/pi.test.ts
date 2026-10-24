@@ -86,3 +86,8 @@ test("non-JSON lines are counted, not fatal", () => {
   assert.equal(o.badLines, 2);
   assert.equal(o.text, "ok");
 });
+
+test("pi: the CLI cost is the sum of the assistant message_end costs, not repeated by turn_end or agent_end", () => {
+  const o = parsePiStream(fixture("ok.jsonl"));
+  assert.ok(Math.abs((o.cliCostUsd ?? NaN) - 0.001425421) < 1e-12);
+});

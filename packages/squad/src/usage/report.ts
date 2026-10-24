@@ -17,6 +17,10 @@ export interface UsageRow {
   readonly reasoning: number;
   /** null when no pass in the group has a price: a seat has no bill. */
   readonly costUsd: number | null;
+  /** Sum of what the CLIs said; null when no pass has one. */
+  readonly cliCostUsd: number | null;
+  /** Sum of tokens times the catalog price at the pass time; null when no pass has a price. */
+  readonly catalogCostUsd: number | null;
 }
 
 /** The SQL that makes the group key. Fixed text per case, never built from input. */
@@ -40,13 +44,13 @@ export function usageBy(db: DatabaseSync, by: UsageBy, since: Date, accounts?: r
       `SELECT ${KEY[by]} AS k, COUNT(*) AS passes,
          SUM(outcome = 'ok') AS ok, SUM(outcome IS NOT NULL AND outcome NOT IN ('ok', 'busy')) AS fail,
          SUM(input) AS input, SUM(output) AS output, SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
-         SUM(reasoning) AS reasoning, SUM(cost_usd) AS cost
+         SUM(reasoning) AS reasoning, SUM(cost_usd) AS cost, SUM(cli_cost_usd) AS cli_cost, SUM(catalog_cost_usd) AS catalog_cost
        FROM passes
        WHERE started_at >= ? AND (outcome IS NULL OR outcome <> 'busy')${only}
        GROUP BY k ORDER BY k`,
     )
-    .all(since.toISOString(), ...(accounts ?? [])) as unknown as { k: string; passes: number; ok: number; fail: number; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost: number | null }[];
-  return rows.map((r) => ({ key: r.k, passes: r.passes, ok: r.ok, fail: r.fail, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost }));
+    .all(since.toISOString(), ...(accounts ?? [])) as unknown as { k: string; passes: number; ok: number; fail: number; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost: number | null; cli_cost: number | null; catalog_cost: number | null }[];
+  return rows.map((r) => ({ key: r.k, passes: r.passes, ok: r.ok, fail: r.fail, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost, cliCostUsd: r.cli_cost, catalogCostUsd: r.catalog_cost }));
 }
 
 export type SeriesBy = "day" | "hour";
@@ -61,6 +65,8 @@ export interface SeriesRow {
   readonly cacheWrite: number;
   readonly reasoning: number;
   readonly costUsd: number | null;
+  readonly cliCostUsd: number | null;
+  readonly catalogCostUsd: number | null;
 }
 
 /** The SQL of a bucket's UTC start. Fixed text per case. `started_at` is always an ISO string with a Z. */
@@ -76,13 +82,13 @@ export function usageSeries(db: DatabaseSync, by: SeriesBy, since: Date, account
     .prepare(
       `SELECT ${BUCKET[by]} AS b, COALESCE(account, '-') AS a, COUNT(*) AS passes,
          SUM(input) AS input, SUM(output) AS output, SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write,
-         SUM(reasoning) AS reasoning, SUM(cost_usd) AS cost
+         SUM(reasoning) AS reasoning, SUM(cost_usd) AS cost, SUM(cli_cost_usd) AS cli_cost, SUM(catalog_cost_usd) AS catalog_cost
        FROM passes
        WHERE started_at >= ? AND (outcome IS NULL OR outcome <> 'busy')${only}
        GROUP BY b, a ORDER BY b, a`,
     )
-    .all(since.toISOString(), ...(accounts ?? [])) as unknown as { b: string; a: string; passes: number; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost: number | null }[];
-  return rows.map((r) => ({ bucket: r.b, account: r.a, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost }));
+    .all(since.toISOString(), ...(accounts ?? [])) as unknown as { b: string; a: string; passes: number; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost: number | null; cli_cost: number | null; catalog_cost: number | null }[];
+  return rows.map((r) => ({ bucket: r.b, account: r.a, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost, cliCostUsd: r.cli_cost, catalogCostUsd: r.catalog_cost }));
 }
 
 export interface PassRow {
@@ -105,15 +111,17 @@ export interface PassRow {
   readonly cacheWrite: number;
   readonly reasoning: number;
   readonly costUsd: number | null;
+  readonly cliCostUsd: number | null;
+  readonly catalogCostUsd: number | null;
 }
 
-const PASS_COLUMNS = "id, account, started_at, ended_at, flow, action, task_kind, task_id, runner, model, outcome, fail_kind, fail_code, input, output, cache_read, cache_write, reasoning, cost_usd";
+const PASS_COLUMNS = "id, account, started_at, ended_at, flow, action, task_kind, task_id, runner, model, outcome, fail_kind, fail_code, input, output, cache_read, cache_write, reasoning, cost_usd, cli_cost_usd, catalog_cost_usd";
 
-interface RawPass { id: string; account: string | null; started_at: string; ended_at: string | null; flow: string; action: string; task_kind: string | null; task_id: string | null; runner: string; model: string; outcome: string | null; fail_kind: string | null; fail_code: string | null; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost_usd: number | null }
+interface RawPass { id: string; account: string | null; started_at: string; ended_at: string | null; flow: string; action: string; task_kind: string | null; task_id: string | null; runner: string; model: string; outcome: string | null; fail_kind: string | null; fail_code: string | null; input: number; output: number; cache_read: number; cache_write: number; reasoning: number; cost_usd: number | null; cli_cost_usd: number | null; catalog_cost_usd: number | null }
 
 const toPass = (r: RawPass): PassRow => ({
   id: r.id, account: r.account, startedAt: r.started_at, endedAt: r.ended_at, flow: r.flow, action: r.action, taskKind: r.task_kind, taskId: r.task_id, runner: r.runner, model: r.model,
-  outcome: r.outcome, failKind: r.fail_kind, failCode: r.fail_code, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost_usd,
+  outcome: r.outcome, failKind: r.fail_kind, failCode: r.fail_code, input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning, costUsd: r.cost_usd, cliCostUsd: r.cli_cost_usd, catalogCostUsd: r.catalog_cost_usd,
 });
 
 /** One pass row by id. */

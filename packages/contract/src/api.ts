@@ -59,8 +59,12 @@ export interface UsageRow {
   readonly cacheRead: number;
   readonly cacheWrite: number;
   readonly reasoning: number;
-  /** Money only for `key` accounts; seats show room left instead. */
+  /** Money only for `key` accounts; seats show room left instead. Equal to `catalogCostUsd` there. */
   readonly costUsd?: number;
+  /** The sum of what each CLI said the pass cost (pi, claude). Unset when no pass in the group has one. */
+  readonly cliCostUsd?: number;
+  /** The sum of tokens times the catalog price at the pass time, for every kind of account. Unset when no pass has a price. */
+  readonly catalogCostUsd?: number;
   /** For `window`: the drop in percent left that the pool's passes caused. */
   readonly used5hPct?: number;
   readonly usedWeekPct?: number;
@@ -77,6 +81,8 @@ export interface UsageSeriesPoint {
   readonly cacheWrite: number;
   readonly reasoning: number;
   readonly costUsd?: number;
+  readonly cliCostUsd?: number;
+  readonly catalogCostUsd?: number;
 }
 
 /** One reading of the room left in an account's windows. */
@@ -112,6 +118,10 @@ export interface PassView {
   readonly failCode?: string;
   readonly tokens: PassTokens;
   readonly costUsd?: number;
+  /** What the CLI itself said the pass cost (pi, claude). Unset for codex. */
+  readonly cliCostUsd?: number;
+  /** Tokens times the catalog price at the pass time. Unset when the catalog has no price for the model. */
+  readonly catalogCostUsd?: number;
   /** The stored stream is still on disk. */
   readonly hasTranscript: boolean;
 }
@@ -154,6 +164,26 @@ export interface LoginStatus {
   readonly reason?: string;
 }
 
+/** One provider the web app may offer when a person adds an account. */
+export interface ProviderView {
+  /** `codex`, `claude`, or a pi provider id such as `opencode-go`. */
+  readonly id: string;
+  readonly name: string;
+  readonly runner: Runner;
+  /** `login`: device login. `token`: a claude setup-token. `key`: an API key. */
+  readonly kind: AccountKind;
+  /** A provider pi knows by itself: only the key is written, no models.json. */
+  readonly builtin?: true;
+  /** How many models the catalog lists for it. */
+  readonly models: number;
+}
+
+/** What a person sends to add an account. The token and the key are shape-checked, never echoed. */
+export type AddAccountBody =
+  | { readonly runner: "codex"; readonly name: string }
+  | { readonly runner: "claude"; readonly name: string; readonly token: string }
+  | { readonly runner: "pi"; readonly name: string; readonly provider: string; readonly key: string };
+
 export type ErrorCode = "unauthenticated" | "forbidden" | "not-found" | "bad-request" | "conflict" | "disabled" | "internal";
 
 export interface ApiError {
@@ -177,6 +207,7 @@ export const ROUTES = {
   listPasses: { method: "GET", path: "/api/passes" },
   getPass: { method: "GET", path: "/api/passes/:passId" },
   addAccount: { method: "POST", path: "/api/accounts" },
+  listProviders: { method: "GET", path: "/api/providers" },
 } as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
 
 export type RouteName = keyof typeof ROUTES;
@@ -198,8 +229,13 @@ export interface Api {
   roomSeries: { params: AccountParams; query: { readonly since?: string }; body: void; res: readonly RoomPoint[] };
   listPasses: { params: void; query: { readonly account?: string; readonly since?: string; readonly limit?: number; readonly before?: string }; body: void; res: readonly PassView[] };
   getPass: { params: { readonly passId: string }; query: void; body: void; res: PassDetail };
-  /** Starts a device login for a NEW codex account owned by the signed-in person. The account exists once the login ends well. */
-  addAccount: { params: void; query: void; body: { readonly runner: "codex"; readonly name: string }; res: LoginStart };
+  /**
+   * codex: starts a device login for a NEW account (the answer is a LoginStart; the account exists once the login ends well).
+   * claude with a token, or pi with a provider and a key: writes the account at once (the answer is its AccountView).
+   * The person who is signed in owns it.
+   */
+  addAccount: { params: void; query: void; body: AddAccountBody; res: LoginStart | AccountView };
+  listProviders: { params: void; query: void; body: void; res: readonly ProviderView[] };
 }
 
 // Every route has a type entry, and every type entry a route.

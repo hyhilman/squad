@@ -1,0 +1,1291 @@
+{
+ "opencode": {
+  "id": "opencode",
+  "env": [
+   "OPENCODE_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://opencode.ai/inference/openai/v1",
+  "name": "OpenCode",
+  "doc": "https://opencode.ai/v2/docs/console/models/",
+  "models": {
+   "qwen3.8-max": {
+    "id": "qwen3.8-max",
+    "name": "Qwen3.8 Max",
+    "description": "2.4-trillion-parameter MoE flagship for coding, professional work, multimodal understanding, and long-horizon agentic workflows",
+    "family": "qwen",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "xhigh"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "min": 1024
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "modalities": {
+     "input": [
+      "text",
+      "image"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 262144,
+     "output": 131072
+    },
+    "provider": {
+     "api": "https://opencode.ai/inference/openai/v1"
+    },
+    "cost": {
+     "input": 2,
+     "output": 6,
+     "cache_read": 0.25,
+     "cache_write": 2.5
+    },
+    "canonical_model_id": "alibaba/qwen3.8-max"
+   },
+   "muse-wonder-1.0": {
+    "id": "muse-wonder-1.0",
+    "name": "Muse Wonder",
+    "description": "Muse Wonder is a frontier multimodal reasoning model from Meta for personal and professional agents, long-horizon coding, and computer use. It combines Active Memory, which carries relevant context across conversations, with Active Focus, which keeps it working through blockers toward a goal.",
+    "family": "muse",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "minimal",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": true,
+    "release_date": "2026-10-12",
+    "last_updated": "2026-10-12",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video",
+      "pdf",
+      "audio"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1048576,
+     "output": 131072
+    },
+    "provider": {
+     "npm": "@ai-sdk/openai",
+     "api": "https://opencode.ai/inference/openai/v1"
+    },
+    "cost": {
+     "input": 4,
+     "output": 20,
+     "cache_read": 0.2
+    },
+    "canonical_model_id": "meta/muse-wonder-1.0"
+   },
+   "claude-sonnet-4-6": {
+    "id": "claude-sonnet-4-6",
+    "name": "Claude Sonnet 4.6",
+    "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
+    "family": "claude-sonnet",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high",
+       "max"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "min": 1024
+     }
+    ],
+    "tool_call": true,
+    "interleaved": true,
+    "temperature": true,
+    "knowledge": "2025-08-31",
+    "release_date": "2026-02-17",
+    "last_updated": "2026-03-13",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 64000
+    },
+    "provider": {
+     "npm": "@ai-sdk/anthropic",
+     "api": "https://opencode.ai/inference/anthropic/v1"
+    },
+    "cost": {
+     "input": 3,
+     "output": 15,
+     "cache_read": 0.3,
+     "cache_write": 3.75
+    },
+    "canonical_model_id": "anthropic/claude-sonnet-4-6"
+   }
+  }
+ },
+ "opencode-go": {
+  "id": "opencode-go",
+  "env": [
+   "OPENCODE_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://opencode.ai/inference/go/openai/v1",
+  "name": "OpenCode Go",
+  "doc": "https://opencode.ai/v2/docs/console/go/",
+  "models": {
+   "qwen3.8-max": {
+    "id": "qwen3.8-max",
+    "name": "Qwen3.8 Max",
+    "description": "2.4-trillion-parameter multimodal flagship for coding, professional work, and long-horizon agentic workflows",
+    "family": "qwen3.8-max",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "xhigh"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "max": 262144
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": true,
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 131072
+    },
+    "provider": {
+     "npm": "@ai-sdk/anthropic",
+     "api": "https://opencode.ai/inference/go/anthropic/v1"
+    },
+    "cost": {
+     "input": 2,
+     "output": 6,
+     "cache_read": 0.25,
+     "cache_write": 2.5
+    },
+    "canonical_model_id": "alibaba/qwen3.8-max"
+   },
+   "mimo-v2.6-flash": {
+    "id": "mimo-v2.6-flash",
+    "name": "MiMo-V2.6-Flash",
+    "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+    "family": "mimo",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "temperature": true,
+    "release_date": "2026-09-22",
+    "last_updated": "2026-09-22",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "audio",
+      "video"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1048576,
+     "output": 131072
+    },
+    "provider": {
+     "api": "https://opencode.ai/inference/go/openai/v1"
+    },
+    "cost": {
+     "input": 0.14,
+     "output": 0.28,
+     "cache_read": 0.0028
+    },
+    "canonical_model_id": "xiaomi/mimo-v2.6-flash"
+   },
+   "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro (New)",
+    "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+    "family": "deepseek-thinking",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "knowledge": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1000000,
+     "output": 384000
+    },
+    "provider": {
+     "api": "https://opencode.ai/inference/go/openai/v1"
+    },
+    "cost": {
+     "input": 0.66,
+     "output": 1.98,
+     "cache_read": 0.022
+    },
+    "canonical_model_id": "deepseek/deepseek-v4-pro"
+   }
+  }
+ },
+ "engy": {
+  "id": "engy",
+  "env": [
+   "ENGY_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://api.engy.ai/v1",
+  "name": "engy",
+  "doc": "https://engy.ai/pricing",
+  "models": {
+   "deepseek-v4-flash-0731": {
+    "id": "deepseek-v4-flash-0731",
+    "name": "DeepSeek V4 Flash 0731",
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "family": "deepseek-flash",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "knowledge": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1048576,
+     "input": 920576,
+     "output": 128000
+    },
+    "cost": {
+     "input": 0.045,
+     "output": 0.09,
+     "cache_read": 0.009
+    },
+    "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
+   },
+   "glm-5.2": {
+    "id": "glm-5.2",
+    "name": "GLM-5.2",
+    "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
+    "family": "glm",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "release_date": "2026-06-13",
+    "last_updated": "2026-06-13",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 262144,
+     "input": 229376,
+     "output": 32768
+    },
+    "cost": {
+     "input": 0.68,
+     "output": 1.5,
+     "cache_read": 0.18
+    },
+    "canonical_model_id": "zhipuai/glm-5.2"
+   },
+   "glm-5.3-flash": {
+    "id": "glm-5.3-flash",
+    "name": "GLM-5.3-Flash",
+    "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+    "family": "glm-flash",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "release_date": "2026-08-26",
+    "last_updated": "2026-08-26",
+    "modalities": {
+     "input": [
+      "text",
+      "image"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 327680,
+     "input": 294912,
+     "output": 32768
+    },
+    "cost": {
+     "input": 0.135,
+     "output": 0.45,
+     "cache_read": 0.027
+    },
+    "canonical_model_id": "zhipuai/glm-5.3-flash"
+   }
+  }
+ },
+ "sumopod": {
+  "id": "sumopod",
+  "env": [
+   "SUMOPOD_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://ai.sumopod.com/v1",
+  "name": "SumoPod",
+  "doc": "https://ai.sumopod.com",
+  "models": {
+   "qwen3.8-max": {
+    "id": "qwen3.8-max",
+    "name": "Qwen3.8 Max",
+    "description": "2.4-trillion-parameter MoE flagship for coding, professional work, multimodal understanding, and long-horizon agentic workflows",
+    "family": "qwen",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "xhigh"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "max": 262144
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 991808,
+     "output": 131072
+    },
+    "cost": {
+     "input": 1,
+     "output": 3,
+     "cache_read": 0.125
+    },
+    "canonical_model_id": "alibaba/qwen3.8-max"
+   },
+   "text-embedding-3-large": {
+    "id": "text-embedding-3-large",
+    "type": "embedding",
+    "name": "text-embedding-3-large",
+    "description": "Most capable OpenAI embedding model for English and non-English text",
+    "family": "text-embedding",
+    "attachment": false,
+    "reasoning": false,
+    "tool_call": false,
+    "temperature": false,
+    "release_date": "2024-01-25",
+    "last_updated": "2024-01-25",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 8191,
+     "output": 0
+    },
+    "cost": {
+     "input": 0.13,
+     "output": 0
+    },
+    "canonical_model_id": "openai/text-embedding-3-large"
+   },
+   "mimo-v2.6-flash": {
+    "id": "mimo-v2.6-flash",
+    "name": "MiMo-V2.6-Flash",
+    "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+    "family": "mimo",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "release_date": "2026-09-22",
+    "last_updated": "2026-09-22",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "audio",
+      "video"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1100000,
+     "output": 131072
+    },
+    "cost": {
+     "input": 0.14,
+     "output": 0.28,
+     "cache_read": 0.0028
+    },
+    "canonical_model_id": "xiaomi/mimo-v2.6-flash"
+   }
+  }
+ },
+ "alibaba-token-plan": {
+  "id": "alibaba-token-plan",
+  "env": [
+   "ALIBABA_TOKEN_PLAN_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  "name": "Alibaba Token Plan",
+  "doc": "https://www.alibabacloud.com/help/en/model-studio/token-plan-overview",
+  "models": {
+   "qwen3.8-max": {
+    "id": "qwen3.8-max",
+    "name": "Qwen3.8 Max",
+    "description": "2.4-trillion-parameter MoE flagship for coding, professional work, multimodal understanding, and long-horizon agentic workflows",
+    "family": "qwen",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "xhigh"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "min": 0,
+      "max": 262144
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 131072
+    },
+    "cost": {
+     "input": 2,
+     "output": 6,
+     "cache_read": 0.17,
+     "cache_write": 2.5
+    },
+    "canonical_model_id": "alibaba/qwen3.8-max"
+   },
+   "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro",
+    "description": "Open MoE flagship with million-token context for coding and long agent runs",
+    "family": "deepseek-thinking",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "knowledge": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1000000,
+     "output": 384000
+    },
+    "cost": {
+     "input": 2.4,
+     "output": 4.8,
+     "cache_read": 0.2
+    },
+    "canonical_model_id": "deepseek/deepseek-v4-pro"
+   },
+   "deepseek-v4-flash-0731": {
+    "id": "deepseek-v4-flash-0731",
+    "name": "DeepSeek V4 Flash 0731",
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "family": "deepseek-flash",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "toggle"
+     },
+     {
+      "type": "effort",
+      "values": [
+       "high",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "interleaved": {
+     "field": "reasoning_content"
+    },
+    "structured_output": true,
+    "temperature": true,
+    "knowledge": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1000000,
+     "output": 384000
+    },
+    "cost": {
+     "input": 0.22,
+     "output": 0.66,
+     "cache_read": 0.022
+    },
+    "canonical_model_id": "deepseek/deepseek-v4-flash-0731"
+   }
+  }
+ },
+ "kenari": {
+  "id": "kenari",
+  "env": [
+   "KENARI_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai-compatible",
+  "api": "https://kenari.id/v1",
+  "name": "Kenari",
+  "doc": "https://kenari.id/docs",
+  "models": {
+   "muse-wonder-1-0": {
+    "id": "muse-wonder-1-0",
+    "name": "Muse Wonder",
+    "description": "Muse Wonder is a frontier multimodal reasoning model from Meta for personal and professional agents, long-horizon coding, and computer use. It combines Active Memory, which carries relevant context across conversations, with Active Focus, which keeps it working through blockers toward a goal.",
+    "family": "muse",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "minimal",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "release_date": "2026-10-12",
+    "last_updated": "2026-10-12",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video",
+      "pdf",
+      "audio"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1007997,
+     "output": 131072
+    },
+    "cost": {
+     "input": 3.90059,
+     "output": 19.503,
+     "cache_read": 0.19503
+    },
+    "canonical_model_id": "meta/muse-wonder-1.0"
+   },
+   "solar-mini4:free": {
+    "id": "solar-mini4:free",
+    "name": "Solar Mini 4",
+    "description": "Upstage's compact, cost-efficient model for agentic use",
+    "family": "solar-mini",
+    "attachment": false,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "none",
+       "minimal",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "knowledge": "2026-02",
+    "release_date": "2026-09-22",
+    "last_updated": "2026-09-22",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 524288,
+     "output": 131072
+    },
+    "cost": {
+     "input": 0,
+     "output": 0
+    },
+    "canonical_model_id": "upstage/solar-mini4"
+   },
+   "muse-spark-open": {
+    "id": "muse-spark-open",
+    "name": "Muse Spark Open",
+    "description": "Muse Spark Open is an 816B total / 42B active open-weight multimodal reasoning model from Meta for coding and long-horizon agentic work, with 1M-token context.",
+    "family": "muse",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high",
+       "xhigh"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "temperature": true,
+    "knowledge": "2026-01-04",
+    "release_date": "2026-10-15",
+    "last_updated": "2026-10-15",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "video",
+      "audio"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": true,
+    "limit": {
+     "context": 1048576,
+     "output": 131072
+    },
+    "cost": {
+     "input": 1.11445,
+     "output": 4.45782,
+     "cache_read": 0.111445
+    },
+    "canonical_model_id": "meta/muse-spark-open"
+   }
+  }
+ },
+ "anthropic": {
+  "id": "anthropic",
+  "env": [
+   "ANTHROPIC_API_KEY"
+  ],
+  "npm": "@ai-sdk/anthropic",
+  "name": "Anthropic",
+  "doc": "https://docs.anthropic.com/en/docs/about-claude/models",
+  "models": {
+   "claude-sonnet-4-6": {
+    "id": "claude-sonnet-4-6",
+    "name": "Claude Sonnet 4.6",
+    "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+    "family": "claude-sonnet",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high",
+       "max"
+      ]
+     },
+     {
+      "type": "budget_tokens",
+      "min": 1024
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": true,
+    "knowledge": "2025-08-31",
+    "release_date": "2026-02-17",
+    "last_updated": "2026-03-13",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 128000
+    },
+    "cost": {
+     "input": 3,
+     "output": 15,
+     "cache_read": 0.3,
+     "cache_write": 3.75
+    }
+   },
+   "claude-opus-4-8": {
+    "id": "claude-opus-4-8",
+    "name": "Claude Opus 4.8",
+    "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+    "family": "claude-opus",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": false,
+    "knowledge": "2026-01",
+    "release_date": "2026-05-28",
+    "last_updated": "2026-05-28",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 128000
+    },
+    "experimental": {
+     "modes": {
+      "fast": {
+       "cost": {
+        "input": 10,
+        "output": 50,
+        "cache_read": 1,
+        "cache_write": 12.5
+       },
+       "provider": {
+        "body": {
+         "speed": "fast"
+        },
+        "headers": {
+         "anthropic-beta": "fast-mode-2026-02-01"
+        }
+       }
+      }
+     }
+    },
+    "cost": {
+     "input": 5,
+     "output": 25,
+     "cache_read": 0.5,
+     "cache_write": 6.25
+    }
+   },
+   "claude-opus-5": {
+    "id": "claude-opus-5",
+    "name": "Claude Opus 5",
+    "description": "Strongest Claude Opus model for coding, agents, and professional work",
+    "family": "claude-opus",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": false,
+    "knowledge": "2026-05",
+    "release_date": "2026-07-24",
+    "last_updated": "2026-07-24",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 1000000,
+     "output": 128000
+    },
+    "experimental": {
+     "modes": {
+      "fast": {
+       "cost": {
+        "input": 10,
+        "output": 50,
+        "cache_read": 1,
+        "cache_write": 12.5
+       },
+       "provider": {
+        "body": {
+         "speed": "fast"
+        },
+        "headers": {
+         "anthropic-beta": "fast-mode-2026-02-01"
+        }
+       }
+      }
+     }
+    },
+    "cost": {
+     "input": 5,
+     "output": 25,
+     "cache_read": 0.5,
+     "cache_write": 6.25
+    },
+    "canonical_model_id": "anthropic/claude-opus-5"
+   }
+  }
+ },
+ "openai": {
+  "id": "openai",
+  "env": [
+   "OPENAI_API_KEY"
+  ],
+  "npm": "@ai-sdk/openai",
+  "name": "OpenAI",
+  "doc": "https://platform.openai.com/docs/models",
+  "models": {
+   "text-embedding-3-large": {
+    "id": "text-embedding-3-large",
+    "type": "embedding",
+    "name": "text-embedding-3-large",
+    "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+    "family": "text-embedding",
+    "attachment": false,
+    "reasoning": false,
+    "tool_call": false,
+    "temperature": false,
+    "knowledge": "2024-01",
+    "release_date": "2024-01-25",
+    "last_updated": "2024-01-25",
+    "modalities": {
+     "input": [
+      "text"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 8191,
+     "output": 3072
+    },
+    "cost": {
+     "input": 0.13,
+     "output": 0
+    }
+   },
+   "o1-pro": {
+    "id": "o1-pro",
+    "name": "o1-pro",
+    "description": "O-series reasoning model for hard analysis, math, coding, and planning",
+    "family": "o-pro",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": false,
+    "knowledge": "2023-09",
+    "release_date": "2025-03-19",
+    "last_updated": "2025-03-19",
+    "modalities": {
+     "input": [
+      "text",
+      "image"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 200000,
+     "output": 100000
+    },
+    "status": "deprecated",
+    "cost": {
+     "input": 150,
+     "output": 600
+    }
+   },
+   "o3": {
+    "id": "o3",
+    "name": "o3",
+    "description": "Deliberate o-series reasoner for hard math, coding, and multi-step analysis",
+    "family": "o",
+    "attachment": true,
+    "reasoning": true,
+    "reasoning_options": [
+     {
+      "type": "effort",
+      "values": [
+       "low",
+       "medium",
+       "high"
+      ]
+     }
+    ],
+    "tool_call": true,
+    "structured_output": true,
+    "temperature": false,
+    "knowledge": "2024-05",
+    "release_date": "2025-04-16",
+    "last_updated": "2025-04-16",
+    "modalities": {
+     "input": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "output": [
+      "text"
+     ]
+    },
+    "open_weights": false,
+    "limit": {
+     "context": 200000,
+     "output": 100000
+    },
+    "experimental": {
+     "modes": {
+      "fast": {
+       "cost": {
+        "input": 3.5,
+        "output": 14,
+        "cache_read": 0.875
+       },
+       "provider": {
+        "body": {
+         "service_tier": "priority"
+        }
+       }
+      },
+      "flex": {
+       "cost": {
+        "input": 1,
+        "output": 4,
+        "cache_read": 0.25
+       },
+       "provider": {
+        "body": {
+         "service_tier": "flex"
+        }
+       }
+      }
+     }
+    },
+    "cost": {
+     "input": 2,
+     "output": 8,
+     "cache_read": 0.5
+    }
+   }
+  }
+ }
+}

@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createFileAccount } from "../accounts/add.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -176,6 +177,21 @@ test("prices: the step calls refreshPrices with the url setting; SQUAD_NO_PRICES
   const off = rig({ SQUAD_NO_PRICES: "1" });
   await tickSteps(off.deps)[2]!.run();
   assert.equal(off.calls.prices, 0);
+});
+
+test("prices: after a refreshed copy the step writes the price history and rewrites models.json; a fresh copy does neither", async () => {
+  const r = rig();
+  createFileAccount(r.store.db, r.deps.home, { runner: "pi", name: "e1", kind: "key" }, [{ name: "auth.json", body: "{}" }, { name: "models.json", body: JSON.stringify({ providers: { engy: { baseUrl: "https://old", api: "openai-completions", models: [] } } }) }], NOW);
+  const catalog = { engy: { api: "https://api.engy.ai/v1", npm: "@ai-sdk/openai-compatible", models: { a: { cost: { input: 1, output: 2 } } } } };
+  const save = () => writeFileSync(join(r.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog }));
+  const count = () => (r.store.db.prepare("SELECT COUNT(*) AS n FROM price_history").get() as { n: number }).n;
+  await tickSteps({ ...r.deps, refreshPrices: async () => { save(); return "fresh"; } })[2]!.run();
+  assert.equal(count(), 0);
+  await tickSteps({ ...r.deps, refreshPrices: async () => { save(); return "refreshed"; } })[2]!.run();
+  assert.equal(count(), 1);
+  const doc = JSON.parse(readFileSync(join(r.deps.home.accounts, "pi", "e1", "models.json"), "utf8"));
+  assert.deepEqual([doc.providers.engy.baseUrl, doc.providers.engy.models.map((m: { id: string }) => m.id)], ["https://api.engy.ai/v1", ["a"]]);
+  assert.ok(r.lines.some((l) => l.includes("models-json-updated")));
 });
 
 // ---- startTicker ----

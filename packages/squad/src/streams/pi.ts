@@ -11,6 +11,7 @@ export class PiStream {
   #last: Record<string, unknown> | undefined;
   #turns = 0;
   #ended = false;
+  #cost: number | undefined;
   #usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
 
   push(chunk: string): void {
@@ -35,6 +36,8 @@ export class PiStream {
       this.#usage.cacheRead += num(u.cacheRead);
       this.#usage.cacheWrite += num(u.cacheWrite);
       this.#usage.reasoning += num(u.reasoning);
+      const c = isObj(u.cost) ? u.cost.total : undefined;
+      if (typeof c === "number" && Number.isFinite(c)) this.#cost = (this.#cost ?? 0) + c;
     }
   }
 
@@ -54,6 +57,7 @@ export class PiStream {
       ended: this.#ended,
       model,
       usage,
+      ...(this.#cost === undefined ? {} : { cliCostUsd: this.#cost }),
       ...(failure === undefined ? {} : { failure }),
       badLines: this.#lines.badLines,
     };

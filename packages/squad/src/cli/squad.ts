@@ -6,20 +6,21 @@
 import "./quiet.ts";
 import { findPassFile, readPassFile } from "../passfiles.ts";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { roomOf } from "../accounts/room.ts";
 import { dueReads, readIntervalMs, refreshUsage } from "../accounts/usage-read.ts";
 import type { UsageReadResult } from "../accounts/health.ts";
+import { createFileAccount } from "../accounts/add.ts";
 import { withKeyCopy } from "../accounts/keycopy.ts";
-import { addAccount, getAccount, getHealth, healthOf, listAccounts, setFloors, setOwnerEmail } from "../accounts/store.ts";
+import { getAccount, getHealth, healthOf, listAccounts, setFloors, setOwnerEmail } from "../accounts/store.ts";
 import type { Runner } from "../docker.ts";
 import { describeAction, executeGc, gatherGcState, gcSettings, planGc } from "../gc.ts";
 import { ensureHome, homeRoot, layoutOf } from "../home.ts";
 import { ULID_RE, ulid } from "../ids.ts";
-import { runImport } from "../import.ts";
+import { runImport, runImportDoppelganger } from "../import.ts";
 import { ensureLockFile } from "../lock.ts";
 import { identityOf } from "../accounts/identity.ts";
 import { runLogin, shellArgv } from "../login.ts";
@@ -62,7 +63,7 @@ const USAGE = `usage: squad <verb>
   probe <runner>/<name> [--model <id>]     one tiny real pass on one account; pi, claude and codex need --model
   gc [--dry-run]                           remove orphan containers, lost passes, old files and sessions
   login <runner>/<name> [--owner <email>]  log in to a new account (or a dead one) in a container
-  import <home> [<account>...]             bring accounts from another home (a login is moved, a key copied)
+  import <home> [<account>...]             bring accounts from another home (a login is moved, a key copied); a doppelganger project: its pi keys are copied (--owner <email>)
   import --back <account> <home>           send one account to another home
   shell <account>                          a bash session in a container on one account
   log <passId>                             the last 50 lines of a pass log
@@ -203,24 +204,9 @@ function addKey(store: Store, io: Io, args: readonly string[]): number {
   const runner = id[1]!;
   const name = id[2]!;
   try {
-    // The row first: it checks the runner, the name and a duplicate before any file is made.
-    addAccount(store.db, { runner: runner as Runner, name, kind: "key", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, (io.now ?? (() => new Date()))());
+    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "key", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, [{ name: "auth.json", body }], (io.now ?? (() => new Date()))());
   } catch (e) {
     io.stderr(`${e instanceof Error ? e.message : "cannot add the account"}\n`);
-    return 1;
-  }
-  const home = layoutOf(homeRoot(io.cwd, io.env), io.env);
-  const dir = join(home.accounts, runner, name);
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    chmodSync(dir, 0o700);
-    const tmp = join(dir, ".auth.json.tmp");
-    writeFileSync(tmp, body, { mode: 0o600 });
-    renameSync(tmp, join(dir, "auth.json"));
-  } catch {
-    store.db.prepare("DELETE FROM accounts WHERE id = ?").run(`${runner}/${name}`);
-    rmSync(dir, { recursive: true, force: true });
-    io.stderr("cannot write the account folder\n");
     return 1;
   }
   io.stdout(`added key account ${runner}/${name}\n`);
@@ -249,22 +235,9 @@ function addToken(store: Store, io: Io, args: readonly string[]): number {
   const runner = id[1]!;
   const name = id[2]!;
   try {
-    addAccount(store.db, { runner: runner as Runner, name, kind: "token", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, (io.now ?? (() => new Date()))());
+    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "token", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, [{ name: "token", body: text }], (io.now ?? (() => new Date()))());
   } catch (e) {
     io.stderr(`${e instanceof Error ? e.message : "cannot add the account"}\n`);
-    return 1;
-  }
-  const dir = join(layoutOf(homeRoot(io.cwd, io.env), io.env).accounts, runner, name);
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    chmodSync(dir, 0o700);
-    const tmp = join(dir, ".token.tmp");
-    writeFileSync(tmp, text, { mode: 0o600 });
-    renameSync(tmp, join(dir, "token"));
-  } catch {
-    store.db.prepare("DELETE FROM accounts WHERE id = ?").run(`${runner}/${name}`);
-    rmSync(dir, { recursive: true, force: true });
-    io.stderr("cannot write the account folder\n");
     return 1;
   }
   io.stdout(`added token account ${runner}/${name}\n`);
@@ -442,7 +415,7 @@ async function login(store: Store, io: Io, args: readonly string[]): Promise<num
 /** `import <home> [<account>...]` or `import --back <account> <home>`. */
 async function importCmd(store: Store, io: Io, args: readonly string[]): Promise<number> {
   const back = args.includes("--back");
-  const { rest } = options(args.filter((a) => a !== "--back"), []);
+  const { rest } = options(args.filter((a) => a !== "--back"), ["owner"]);
   if (back ? rest.length !== 2 : rest.length < 1) throw new UsageError("import needs <home> [<account>...], or --back <account> <home>");
   const here = layoutOf(homeRoot(io.cwd, io.env), io.env);
   const otherRoot = resolve(io.cwd, back ? rest[1]! : rest[0]!);
@@ -456,6 +429,15 @@ async function importCmd(store: Store, io: Io, args: readonly string[]): Promise
   }
   // The other home never takes this process's SQUAD_DB: that setting is for this home.
   const other = layoutOf(otherRoot, {});
+  // A doppelganger project has no squad database, only `creds/pi/<name>/`. Its pi key accounts are copied, never moved.
+  const creds = [join(otherRoot, "creds"), join(otherRoot, ".doppelganger", "creds")].find((d) => existsSync(join(d, "pi")));
+  if (!back && !existsSync(other.db) && creds !== undefined) {
+    const owner = options(args.filter((a) => a !== "--back"), ["owner"]).opts.get("owner");
+    return runImportDoppelganger({
+      creds, to: { home: here, store }, names: rest.slice(1), ...(owner === undefined ? {} : { ownerEmail: cleanEmail(owner) }),
+      dryRun: envOn(SQUAD_DRY_RUN_ENV, io.env), now: (io.now ?? (() => new Date()))(), out: io,
+    });
+  }
   if (!back && !existsSync(other.db)) {
     io.stderr("the other home has no database\n");
     return 1;

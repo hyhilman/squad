@@ -166,6 +166,46 @@ the browser.
 It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A client secret, if
 any, goes in `squad.secret.toml` (mode 600) in the squad home.
 
+### Add an account from the web
+
+The "Add account" box offers the providers of the price catalog (`SQUAD_PRICES_URL`, a models.dev
+style `api.json`):
+
+- Seats: `codex` (device login) and `claude` (a `claude setup-token` token).
+- Built into pi: the providers that take one API key (opencode, opencode-go, zai, ...). squad writes
+  only `auth.json`.
+- Other providers from the catalog that have an `api` address and the `@ai-sdk/openai-compatible`
+  package (engy, sumopod, ...). squad writes `auth.json` and a `models.json` built from the catalog.
+
+`SQUAD_WEB_PROVIDERS` is `all` by default; a comma list of ids restricts what is offered, and the
+server refuses the rest. The table that says which runner serves a provider is `PROVIDER_RUNNER` in
+`packages/squad/src/providers.ts`. While the web loop runs, a new catalog copy also rewrites the
+`models.json` of pi key accounts for the custom providers they hold (never `auth.json`).
+
+**A pasted key crosses the network.** The page sends the key or token once, over HTTPS, to the
+server. It is checked for shape only, written to the account folder (mode 600) and never logged or
+returned. A TLS-terminating proxy in between (a Cloudflare tunnel, for example) can see it. Use this
+only when you trust that hop; otherwise use `add-key` or `add-token` on the host.
+
+### Two costs per pass
+
+Each pass row keeps two costs:
+
+- `cli_cost_usd`: what the CLI said (pi: the sum of `message_end` `usage.cost.total`; claude: the
+  result's `total_cost_usd`; codex has none, so it is empty).
+- `catalog_cost_usd`: the tokens times the catalog price in force when the pass started (from the
+  `price_history` table, which gets a row when a model's price is new or changed). Pi uses
+  `<provider>/<model>`, codex `openai/<model>`, claude `anthropic/<model>`. It is set for every kind
+  of account, seats too, and empty when the catalog has no price.
+
+The older `cost_usd` and `price_src` columns stay. `cost_usd` equals `catalog_cost_usd` for a `key`
+account and is empty for a seat. The Usage page compares the two sums by provider/model.
+
+`squad import <home>` also reads a doppelganger project (a folder with `creds/pi/<name>/` or
+`.doppelganger/creds/pi/<name>/` and no squad database). It copies the pi key accounts
+(`auth.json` and `models.json`) and never moves them; a folder with a login entry is refused.
+`--owner <email>` sets their owner.
+
 ## Layout
 
 ```

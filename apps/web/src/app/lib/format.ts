@@ -76,3 +76,33 @@ export function durationText(startIso: string, endIso: string | undefined): stri
   const rest = min % 60;
   return rest === 0 ? `${Math.floor(min / 60)} h` : `${Math.floor(min / 60)} h ${rest} min`;
 }
+
+/** Money for a pass or a model: cents when it is a cent or more, else four decimals (a pass often costs a fraction of a cent). */
+export const moneyText = (usd: number | undefined): string => (usd === undefined ? "" : usd === 0 || usd >= 0.01 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(4)}`);
+
+/** How far the catalog cost is from the CLI cost, in percent of the CLI cost. Unset unless both exist and the CLI cost is above zero. */
+export function gapPercent(cli: number | undefined, catalog: number | undefined): number | undefined {
+  if (cli === undefined || catalog === undefined || !(cli > 0)) return undefined;
+  return ((catalog - cli) / cli) * 100;
+}
+
+export const gapText = (gap: number | undefined): string => (gap === undefined ? "-" : `${gap > 0 ? "+" : ""}${gap.toFixed(1)}%`);
+
+export interface CostCompareRow {
+  readonly key: string;
+  readonly passes: number;
+  readonly cliCostUsd?: number;
+  readonly catalogCostUsd?: number;
+  readonly gap?: number;
+}
+
+/** Rows of usage by model that have either cost, with the gap. Biggest catalog cost first. */
+export function costCompare(rows: readonly { key: string; passes: number; cliCostUsd?: number; catalogCostUsd?: number }[]): CostCompareRow[] {
+  return rows
+    .filter((r) => r.cliCostUsd !== undefined || r.catalogCostUsd !== undefined)
+    .map((r) => {
+      const gap = gapPercent(r.cliCostUsd, r.catalogCostUsd);
+      return { key: r.key, passes: r.passes, ...(r.cliCostUsd === undefined ? {} : { cliCostUsd: r.cliCostUsd }), ...(r.catalogCostUsd === undefined ? {} : { catalogCostUsd: r.catalogCostUsd }), ...(gap === undefined ? {} : { gap }) };
+    })
+    .sort((a, b) => (b.catalogCostUsd ?? b.cliCostUsd ?? 0) - (a.catalogCostUsd ?? a.cliCostUsd ?? 0) || a.key.localeCompare(b.key));
+}

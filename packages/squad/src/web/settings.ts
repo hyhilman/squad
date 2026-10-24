@@ -18,7 +18,20 @@ export const SQUAD_OIDC_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_GROUP", why: "a 
 
 export const SQUAD_OIDC_ADMIN_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_ADMIN_GROUP", why: "a group the ID token's `groups` claim must hold for a person to be an admin who sees every account; unset = nobody is admin" };
 
-export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV];
+export const SQUAD_WEB_PROVIDERS_ENV: EnvSpec = {
+  key: "SQUAD_WEB_PROVIDERS",
+  default: "all",
+  why: "which providers the web app offers for a new account: `all`, or a comma list of ids (codex, claude, or a pi provider id); the server refuses any other",
+};
+
+export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV];
+
+/** The ids the setting allows; undefined = all. */
+export function allowedProviders(env: Readonly<Record<string, string | undefined>>): ReadonlySet<string> | undefined {
+  const raw = (envOptional(SQUAD_WEB_PROVIDERS_ENV, env) ?? "all").trim();
+  if (raw.toLowerCase() === "all") return undefined;
+  return new Set(raw.split(",").map((s) => s.trim()).filter((s) => s !== ""));
+}
 
 export interface WebConfig {
   /** The public base URL, without a trailing slash. */

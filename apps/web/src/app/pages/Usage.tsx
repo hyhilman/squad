@@ -4,9 +4,9 @@ import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 import { UsageCharts } from "../components/UsageCharts.tsx";
 import { ErrorNote } from "../components/ErrorNote.tsx";
-import { costText, hasCost, tokensText, totalTokens } from "../lib/format.ts";
+import { costCompare, costText, gapText, hasCost, moneyText, tokensText, totalTokens, type CostCompareRow } from "../lib/format.ts";
 import { RANGES, sinceFor, type Bucket, type Range } from "../lib/range.ts";
-import { useUsageByAccount, useUsageSeries } from "../queries.ts";
+import { useUsageByAccount, useUsageByModel, useUsageSeries } from "../queries.ts";
 
 export function Usage() {
   const [range, setRange] = useState<Range>("7d");
@@ -15,6 +15,15 @@ export function Usage() {
   const series = useUsageSeries(by, since);
   const totals = useUsageByAccount(since);
   const rows = totals.data ?? [];
+  const models = useUsageByModel(since);
+  const compare = costCompare(models.data ?? []);
+  const compareColumns: ColumnsType<CostCompareRow> = [
+    { title: "Provider / model", dataIndex: "key", sorter: (a, b) => a.key.localeCompare(b.key) },
+    { title: "Passes", dataIndex: "passes", align: "right" },
+    { title: "CLI cost", align: "right", render: (_: unknown, r: CostCompareRow) => moneyText(r.cliCostUsd) || "-" },
+    { title: "Catalog cost", align: "right", render: (_: unknown, r: CostCompareRow) => moneyText(r.catalogCostUsd) || "-" },
+    { title: "Gap", align: "right", render: (_: unknown, r: CostCompareRow) => gapText(r.gap) },
+  ];
   const num = (title: string, f: (r: UsageRow) => number) => ({ title, align: "right" as const, sorter: (a: UsageRow, b: UsageRow) => f(a) - f(b), render: (_: unknown, r: UsageRow) => tokensText(f(r)) });
   const columns: ColumnsType<UsageRow> = [
     { title: "Account", dataIndex: "key", sorter: (a, b) => a.key.localeCompare(b.key) },
@@ -45,6 +54,10 @@ export function Usage() {
       <Card title="Totals by account">
         {totals.isError ? <ErrorNote error={totals.error} /> : null}
         <Table<UsageRow> rowKey="key" size="small" loading={totals.isLoading} dataSource={[...rows]} columns={columns} pagination={false} scroll={{ x: "max-content" }} locale={{ emptyText: "No usage in this time." }} />
+      </Card>
+      <Card title="CLI vs catalog, by provider / model" extra={<Typography.Text type="secondary">Gap = (catalog - CLI) / CLI, only where both exist.</Typography.Text>}>
+        {models.isError ? <ErrorNote error={models.error} /> : null}
+        <Table<CostCompareRow> rowKey="key" size="small" loading={models.isLoading} dataSource={compare} columns={compareColumns} pagination={false} scroll={{ x: "max-content" }} locale={{ emptyText: "No cost in this time." }} />
       </Card>
     </Space>
   );

@@ -74,7 +74,7 @@ export function Accounts() {
         columns={columns}
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         scroll={{ x: "max-content" }}
-        locale={{ emptyText: <Empty description="No accounts yet. Add a codex account to start." /> }}
+        locale={{ emptyText: <Empty description="No accounts yet. Add an account to start." /> }}
       />
     </Space>
   );

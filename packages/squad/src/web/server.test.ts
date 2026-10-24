@@ -1,9 +1,10 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { refreshPrices } from "../prices.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import { ROUTES, findForbidden, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
+import { ROUTES, findForbidden, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
 import { CLIENT_ID, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
 import { emptyHealth } from "../accounts/health.ts";
 import { addAccount, getAccount, putHealth, recordRoom, setState } from "../accounts/store.ts";
@@ -875,12 +876,12 @@ test("roomSeries: the readings of one account, oldest first, since a time; owner
 
 // ---- add a new codex account ----
 
-test("addAccount: codex only; a bad name is 400, an existing name 409; the login starts for the person", async () => {
+test("addAccount codex: a bad body is 400; a bad name is 400, an existing name 409; the login starts for the person", async () => {
   const f = fakeLogin();
   const r = await rig({ login: f.opts });
   seed(r);
   const alice = await signIn(r, "alice@example.test");
-  for (const body of [{ runner: "claude", name: "x" }, { runner: "pi", name: "x" }, { runner: "dsh", name: "x" }, { name: "x" }, { runner: "codex" }, { runner: "codex", name: 5 }, { runner: "codex", name: "x", extra: 1 }]) {
+  for (const body of [{ runner: "claude", name: "x" }, { runner: "pi", name: "x" }, { runner: "pi", name: "x", key: "k" }, { runner: "dsh", name: "x" }, { name: "x" }, { runner: "codex" }, { runner: "codex", name: 5 }, { runner: "codex", name: "x", extra: 1 }, { runner: "codex", name: "x", key: "k" }]) {
     assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", body)).status, 400, JSON.stringify(body));
   }
   assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", { runner: "codex", name: "../evil" })).status, 400);
@@ -953,5 +954,130 @@ test("every new route's answer passes findForbidden", async () => {
     assert.equal(res.status, 200, path);
     assert.equal(findForbidden(res.body), undefined, path);
   }
+  await r.close();
+});
+
+// ---- providers, and adding a claude token or a pi key from the web ----
+
+const LOCAL_CATALOG = readFileSync(new URL("../../test/fixtures/captures/prices/local-models-dev-excerpt.json", import.meta.url), "utf8");
+const FAKE_KEY = "sk-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
+const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKE";
+
+async function withCatalog(r: Rig): Promise<void> {
+  assert.equal(await refreshPrices({ home: r.home, url: "https://catalog.test/api.json", now: NOW.getTime(), fetch: async () => ({ ok: true, status: 200, text: async () => LOCAL_CATALOG }), env: {} }), "refreshed");
+}
+
+test("listProviders: seats, pi built-ins and custom catalog providers with their model counts; passes findForbidden", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const res = await api<ProviderView[]>(r, c, "GET", "/api/providers");
+  assert.equal(res.status, 200);
+  assert.equal(findForbidden(res.body), undefined);
+  assert.deepEqual(res.body.slice(0, 2).map((p) => [p.id, p.runner, p.kind]), [["codex", "codex", "login"], ["claude", "claude", "token"]]);
+  assert.deepEqual(res.body.find((p) => p.id === "opencode-go"), { id: "opencode-go", name: "OpenCode Go", runner: "pi", kind: "key", builtin: true, models: res.body.find((p) => p.id === "opencode-go")!.models });
+  assert.ok(res.body.find((p) => p.id === "engy")!.models > 0);
+  assert.equal(res.body.find((p) => p.id === "engy")!.builtin, undefined);
+  assert.equal((await api(r, undefined, "GET", "/api/providers")).status, 401);
+  await r.close();
+});
+
+test("SQUAD_WEB_PROVIDERS restricts the list and the server refuses the rest, for every runner", async () => {
+  const r = await rig({}, { SQUAD_WEB_PROVIDERS: "engy,codex" });
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  assert.deepEqual((await api<ProviderView[]>(r, c, "GET", "/api/providers")).body.map((p) => p.id), ["codex", "engy"]);
+  assert.equal((await api(r, c, "POST", "/api/accounts", { runner: "claude", name: "t", token: FAKE_TOKEN })).status, 400);
+  assert.equal((await api(r, c, "POST", "/api/accounts", { runner: "pi", name: "k", provider: "sumopod", key: FAKE_KEY })).status, 400);
+  assert.equal((await api(r, c, "POST", "/api/accounts", { runner: "pi", name: "k", provider: "engy", key: FAKE_KEY })).status, 200);
+  await r.close();
+});
+
+test("addAccount claude: writes a token account owned by the person (file 0600), answers the AccountView, and never echoes or logs the token", async () => {
+  const r = await rig();
+  const c = await signIn(r, "Alice@Example.Test");
+  const res = await api<AccountView>(r, c, "POST", "/api/accounts", { runner: "claude", name: "my-claude", token: FAKE_TOKEN });
+  assert.equal(res.status, 200);
+  assert.deepEqual([res.body.account, res.body.kind, res.body.ownerEmail, res.body.runner], ["claude/my-claude", "token", "alice@example.test", "claude"]);
+  assert.equal(findForbidden(res.body), undefined);
+  const file = join(r.home.accounts, "claude", "my-claude", "token");
+  assert.equal(readFileSync(file, "utf8"), FAKE_TOKEN);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(getAccount(r.store.db, "claude/my-claude")?.kind, "token");
+  assert.ok(!JSON.stringify(res.body).includes("FAKEFAKE"));
+  assert.ok(!r.logs.join("\n").includes("FAKEFAKE"), "no log line holds the token");
+  assert.equal((await api<AccountView[]>(r, c, "GET", "/api/accounts")).body.some((a) => a.account === "claude/my-claude"), true);
+  await r.close();
+});
+
+test("addAccount pi: a built-in provider gets only auth.json; a custom one also gets a models.json built from the catalog", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const a = await api<AccountView>(r, c, "POST", "/api/accounts", { runner: "pi", name: "oc", provider: "opencode-go", key: FAKE_KEY });
+  assert.deepEqual([a.status, a.body.kind, a.body.runner], [200, "key", "pi"]);
+  const dirA = join(r.home.accounts, "pi", "oc");
+  assert.deepEqual(readdirSync(dirA), ["auth.json"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dirA, "auth.json"), "utf8")), { "opencode-go": { type: "api_key", key: FAKE_KEY } });
+  const b = await api<AccountView>(r, c, "POST", "/api/accounts", { runner: "pi", name: "eg", provider: "engy", key: FAKE_KEY });
+  assert.equal(b.status, 200);
+  const dirB = join(r.home.accounts, "pi", "eg");
+  assert.deepEqual(readdirSync(dirB).sort(), ["auth.json", "models.json"]);
+  assert.equal(statSync(join(dirB, "models.json")).mode & 0o777, 0o600);
+  const models = JSON.parse(readFileSync(join(dirB, "models.json"), "utf8"));
+  assert.equal(models.providers.engy.baseUrl, "https://api.engy.ai/v1");
+  assert.ok(models.providers.engy.models.length > 0);
+  assert.ok(!readFileSync(join(dirB, "models.json"), "utf8").includes("FAKEFAKE"), "the key is only in auth.json");
+  for (const x of [a, b]) assert.ok(!JSON.stringify(x.body).includes("FAKEFAKE"));
+  assert.ok(!r.logs.join("\n").includes("FAKEFAKE"));
+  await r.close();
+});
+
+test("addAccount key/token: bad shapes are 400 with a fixed message, an existing name is 409, a dry run is 501; nothing is written and nothing is echoed", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  seed(r);
+  const c = await signIn(r, "alice@example.test");
+  const post = (body: unknown) => api<ApiError>(r, c, "POST", "/api/accounts", body);
+  const secret = "sk-SECRET-with space";
+  for (const body of [
+    { runner: "claude", name: "x", token: "" }, { runner: "claude", name: "x", token: secret }, { runner: "claude", name: "x", token: "a\nb" }, { runner: "claude", name: "x", token: "t".repeat(5000) },
+    { runner: "pi", name: "x", provider: "engy", key: secret }, { runner: "pi", name: "x", provider: "nope", key: FAKE_KEY }, { runner: "pi", name: "x", provider: "engy", key: 5 },
+    { runner: "pi", name: "../x", provider: "engy", key: FAKE_KEY }, { runner: "claude", name: "Big", token: FAKE_TOKEN }, { runner: "pi", name: "x", provider: "azure", key: FAKE_KEY },
+  ]) {
+    const res = await post(body);
+    assert.equal(res.status, 400, JSON.stringify(body).slice(0, 60));
+    assert.ok(!JSON.stringify(res.body).includes("SECRET") && !JSON.stringify(res.body).includes("FAKEFAKE"), "the answer does not echo the secret");
+  }
+  assert.deepEqual(readdirSync(r.home.accounts), [], "nothing was written");
+  const dupe = await post({ runner: "pi", name: "alice-key", provider: "engy", key: FAKE_KEY });
+  assert.deepEqual([dupe.status, dupe.body.error], [409, "conflict"]);
+  assert.equal((await post({ runner: "claude", name: "x", token: FAKE_TOKEN })).status, 200);
+  assert.equal((await post({ runner: "claude", name: "x", token: FAKE_TOKEN })).status, 409);
+  assert.equal((await post({ runner: "claude", name: "q", token: FAKE_TOKEN, extra: 1 })).status, 400);
+  assert.ok(!r.logs.join("\n").includes("SECRET") && !r.logs.join("\n").includes("FAKEFAKE"));
+  assert.equal((await api(r, undefined, "POST", "/api/accounts", { runner: "claude", name: "q", token: FAKE_TOKEN })).status, 401);
+  await r.close();
+  const dry = await rig({}, { SQUAD_DRY_RUN: "1" });
+  const d = await signIn(dry, "alice@example.test");
+  assert.equal((await api(dry, d, "POST", "/api/accounts", { runner: "claude", name: "x", token: FAKE_TOKEN })).status, 501);
+  assert.deepEqual(readdirSync(dry.home.accounts), []);
+  await dry.close();
+});
+
+test("the usage and pass answers carry both costs", async () => {
+  const r = await rig();
+  seed(r);
+  r.store.startPass({ id: "C1", startedAt: "2026-10-24T10:00:00.000Z", project: "p", flow: "f", action: "a", runner: "pi", model: "engy/glm-5.2", account: "pi/alice-key" });
+  r.store.endPass({ id: "C1", endedAt: "2026-10-24T10:01:00.000Z", outcome: "ok", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costUsd: 0.5, cliCostUsd: 0.4, catalogCostUsd: 0.5 });
+  const c = await signIn(r, "alice@example.test");
+  const one = (await api<PassView>(r, c, "GET", "/api/passes/C1")).body;
+  assert.deepEqual([one.costUsd, one.cliCostUsd, one.catalogCostUsd], [0.5, 0.4, 0.5]);
+  const list = (await api<PassView[]>(r, c, "GET", "/api/passes")).body;
+  assert.deepEqual([list[0]!.cliCostUsd, list[0]!.catalogCostUsd], [0.4, 0.5]);
+  const u = (await api<UsageRow[]>(r, c, "GET", "/api/usage?by=model&since=2d")).body;
+  assert.deepEqual([u[0]!.key, u[0]!.cliCostUsd, u[0]!.catalogCostUsd], ["engy/glm-5.2", 0.4, 0.5]);
+  const s = (await api<UsageSeriesPoint[]>(r, c, "GET", "/api/usage/series?by=day&since=2d")).body;
+  assert.deepEqual([s[0]!.cliCostUsd, s[0]!.catalogCostUsd], [0.4, 0.5]);
   await r.close();
 });

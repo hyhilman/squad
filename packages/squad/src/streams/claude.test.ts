@@ -70,3 +70,9 @@ test("no rate_limit_event means no room; a stream with no result is not ended", 
 test("non-JSON lines are counted, not fatal", () => {
   assert.equal(parseClaudeStream("nope\n{x\n").badLines, 2);
 });
+
+test("claude: the CLI cost is the result event's total_cost_usd", () => {
+  assert.equal(parseClaudeStream(fixture("ok-sonnet-5-5.jsonl")).cliCostUsd, 0.0238973);
+  assert.equal(parseClaudeStream(fixture("ok-opus-5-5.jsonl")).cliCostUsd, 0.0477306);
+  assert.equal(parseClaudeStream("").cliCostUsd, undefined);
+});

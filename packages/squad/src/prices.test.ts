@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ensureHome, layoutOf } from "./home.ts";
-import { PRICES_FILE, PRICES_TTL_MS, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, costOf, loadPrices, parseCatalog, passCost, refreshPrices } from "./prices.ts";
+import { DatabaseSync } from "node:sqlite";
+import { migrate } from "./store/db.ts";
+import { PRICES_FILE, PRICES_TTL_MS, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, catalogCost, catalogKey, costOf, loadPrices, loadProviders, parseCatalog, parseProviders, passCost, priceAt, recordPriceHistory, refreshPrices } from "./prices.ts";
 
 const near = (a: number, b: number): void => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -192,4 +194,73 @@ test("the settings rows", () => {
   assert.equal(SQUAD_PRICES_URL_ENV.default, "https://models.dev/api.json");
   assert.equal(SQUAD_NO_PRICES_ENV.key, "SQUAD_NO_PRICES");
   assert.ok(!SQUAD_PRICES_URL_ENV.why.includes("\n"));
+});
+
+// ---- the richer saved copy, the history, the catalog cost ----
+
+const LOCAL = readFileSync(new URL("../test/fixtures/captures/prices/local-models-dev-excerpt.json", import.meta.url), "utf8");
+
+test("refresh keeps the base URL, names, limits, reasoning and input kinds, and the saved version is 2", async () => {
+  const home = tmpHome();
+  assert.equal(await run(home, { fetch: answer(LOCAL) }), "refreshed");
+  assert.equal(JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8")).v, 2);
+  const engy = loadProviders(home).find((p) => p.id === "engy")!;
+  assert.equal(engy.api, "https://api.engy.ai/v1");
+  assert.equal(engy.name, "engy");
+  assert.equal(engy.npm, "@ai-sdk/openai-compatible");
+  const glm = engy.models.find((m) => m.id === "glm-5.2")!;
+  assert.deepEqual({ ...glm }, { id: "glm-5.2", name: "GLM-5.2", reasoning: true, context: 262144, output: 32768, input: ["text"], price: { input: 0.68, output: 1.5, cacheRead: 0.18 } });
+  assert.equal(loadProviders(home).find((p) => p.id === "anthropic")!.api, undefined);
+  assert.ok(readFileSync(join(home.state, PRICES_FILE)).length < LOCAL.length / 2, "no description or other bulk is kept");
+  assert.equal(loadPrices(home).size, parseCatalog(JSON.parse(LOCAL)).size);
+});
+
+test("an old version-1 file still loads its prices, but a refresh renews it at once", async () => {
+  const home = tmpHome();
+  writeFileSync(join(home.state, PRICES_FILE), JSON.stringify({ v: 1, fetchedAt: NOW, catalog: CATALOG }));
+  assert.equal(loadPrices(home).size, 3);
+  assert.equal(await run(home, { fetch: answer(LOCAL) }), "refreshed");
+});
+
+test("parseProviders takes junk without throwing", () => {
+  for (const j of [null, 1, "x", [], {}, { a: { models: 3 } }, { a: { models: { m: {} } } }]) assert.deepEqual(parseProviders(j), []);
+});
+
+const history = () => {
+  const db = new DatabaseSync(":memory:");
+  migrate(db);
+  return db;
+};
+
+test("price history: a row for a new or changed price only, and priceAt gives the price in force at a time", () => {
+  const db = history();
+  const t = (n: number) => new Date(Date.UTC(2026, 9, n));
+  assert.equal(recordPriceHistory(db, new Map([["p/m", { input: 1, output: 2 }], ["p/n", { input: 5, output: 6, cacheRead: 1 }]]), t(1)), 2);
+  assert.equal(recordPriceHistory(db, new Map([["p/m", { input: 1, output: 2 }], ["p/n", { input: 5, output: 6, cacheRead: 1 }]]), t(2)), 0, "unchanged");
+  assert.equal(recordPriceHistory(db, new Map([["p/m", { input: 1.5, output: 2 }], ["p/n", { input: 5, output: 6, cacheRead: 1 }]]), t(3)), 1, "one changed");
+  assert.equal(priceAt(db, "p/m", t(0)), undefined, "before the first row");
+  assert.deepEqual(priceAt(db, "p/m", t(2)), { input: 1, output: 2 });
+  assert.deepEqual(priceAt(db, "p/m", t(3)), { input: 1.5, output: 2 });
+  assert.deepEqual(priceAt(db, "p/n", t(9)), { input: 5, output: 6, cacheRead: 1 });
+  assert.equal(priceAt(db, "p/none", t(9)), undefined);
+});
+
+test("catalogKey: pi keeps provider/model, codex is under openai, claude under anthropic", () => {
+  assert.equal(catalogKey("pi", "engy/glm-5.2"), "engy/glm-5.2");
+  assert.equal(catalogKey("pi", "bare"), undefined);
+  assert.equal(catalogKey("codex", "gpt-6-1-sol"), "openai/gpt-6-1-sol");
+  assert.equal(catalogKey("claude", "claude-sonnet-5-5"), "anthropic/claude-sonnet-5-5");
+});
+
+test("catalogCost uses the price at the pass time, falls back to the saved copy, and is null with no price", () => {
+  const db = history();
+  recordPriceHistory(db, new Map([["anthropic/m", { input: 1, output: 2 }]]), new Date("2026-10-01T00:00:00Z"));
+  recordPriceHistory(db, new Map([["anthropic/m", { input: 10, output: 20 }]]), new Date("2026-10-10T00:00:00Z"));
+  const u = { input: 1e6, output: 1e6, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+  const cur = new Map([["anthropic/m", { input: 10, output: 20 }], ["openai/x", { input: 3, output: 0 }]]);
+  near(catalogCost(db, cur, "claude", "m", u, new Date("2026-10-05T00:00:00Z"))!, 3);
+  near(catalogCost(db, cur, "claude", "m", u, new Date("2026-10-11T00:00:00Z"))!, 30);
+  near(catalogCost(db, cur, "codex", "x", u, new Date("2026-10-11T00:00:00Z"))!, 3); // from the saved copy: no history row
+  assert.equal(catalogCost(db, cur, "codex", "nope", u, new Date()), null);
+  assert.equal(catalogCost(db, cur, "pi", "bare", u, new Date()), null);
 });

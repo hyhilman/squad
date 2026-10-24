@@ -15,6 +15,7 @@ import { openStore, type Store } from "./store/db.ts";
 import { findForbidden } from "@squad/contract";
 import { chmodSync } from "node:fs";
 import { bundledPath } from "./paths.ts";
+import { recordPriceHistory } from "./prices.ts";
 
 interface Rig {
   home: HomeLayout;
@@ -850,4 +851,67 @@ test("codex: the config guard is a copy in the home, mode 0644, and is restored 
   await runPass(codexReq(r), r.deps);
   assert.equal(readFileSync(copy, "utf8"), readFileSync(bundledPath("assets/codex-config.toml"), "utf8"));
   assert.equal(statSync(copy).mode & 0o777, 0o644);
+});
+
+// ---- the two costs ----
+
+const saveCatalog = (r: Rig, catalog: unknown): void => writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog }));
+
+test("a pi key pass has the CLI cost, the catalog cost, and cost_usd equal to the catalog cost", async () => {
+  const r = rig();
+  saveCatalog(r, CATALOG);
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  const want = (1493 * 0.15 + 71 * 0.5 + 64 * 0.03) / 1e6;
+  assert.ok(Math.abs((p.cli_cost_usd as number) - 0.001425421) < 1e-12);
+  assert.ok(Math.abs((p.catalog_cost_usd as number) - want) < 1e-12);
+  assert.equal(p.cost_usd, p.catalog_cost_usd);
+  assert.equal(p.price_src, "catalog");
+});
+
+test("the catalog cost uses the price in force when the pass started, not today's copy", async () => {
+  const r = rig();
+  saveCatalog(r, { "opencode-go": { models: { "hy4-preview": { cost: { input: 100, output: 100 } } } } });
+  recordPriceHistory(r.store.db, new Map([["opencode-go/hy4-preview", { input: 0.15, output: 0.5, cacheRead: 0.03 }]]), new Date(NOW.getTime() - 1000));
+  await runPass(req(r), r.deps);
+  assert.ok(Math.abs((passes(r)[0]!.catalog_cost_usd as number) - (1493 * 0.15 + 71 * 0.5 + 64 * 0.03) / 1e6) < 1e-12);
+});
+
+test("a pi pass with no catalog price has a CLI cost and no catalog cost", async () => {
+  const r = rig();
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.deepEqual([p.catalog_cost_usd, p.cost_usd, p.price_src], [null, null, null]);
+  assert.ok((p.cli_cost_usd as number) > 0);
+});
+
+test("a login pass has a catalog cost but no cost_usd", async () => {
+  const r = rig([], { busy: () => false });
+  saveCatalog(r, CATALOG);
+  addAccount(r.store.db, { runner: "pi", name: "l1", kind: "login" }, NOW);
+  mkdirSync(join(r.home.accounts, "pi", "l1"), { recursive: true });
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.deepEqual([p.account, p.cost_usd, p.price_src], ["pi/l1", null, null]);
+  assert.ok((p.catalog_cost_usd as number) > 0);
+});
+
+test("claude token pass: the CLI cost is total_cost_usd and the catalog cost is under anthropic/<model>", async () => {
+  const r = claudeRig();
+  saveCatalog(r, { anthropic: { models: { "claude-opus-5-5": { cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 } } } } });
+  await runPass(claudeReq(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.equal(p.cli_cost_usd, 0.0477306);
+  assert.ok(Math.abs((p.catalog_cost_usd as number) - (2 * 5 + 4 * 25 + 11333 * 0.5 + 5672 * 6.25) / 1e6) < 1e-12);
+  assert.equal(p.cost_usd, null, "a token account has no bill");
+});
+
+test("codex login pass: no CLI cost, catalog cost under openai/<model>", async () => {
+  const r = codexRig("login");
+  saveCatalog(r, { openai: { models: { "gpt-6.1-sol": { cost: { input: 2, output: 10 } } } } });
+  await runPass(codexReq(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.equal(p.cli_cost_usd, null);
+  assert.ok(Math.abs((p.catalog_cost_usd as number) - (14081 * 2 + 5 * 10) / 1e6) < 1e-12);
+  assert.equal(p.cost_usd, null);
 });

@@ -132,6 +132,21 @@ export const MIGRATIONS: readonly string[] = [
   // The times the windows reset, with the room left (see room_reads).
   `ALTER TABLE health ADD COLUMN resets_5h TEXT`,
   `ALTER TABLE health ADD COLUMN resets_week TEXT`,
+  // Two costs per pass. \`cost_usd\` and \`price_src\` stay as they were: they hold the money cost of a key
+  // account and equal \`catalog_cost_usd\` there (null for a seat). New readers use the two columns below.
+  `ALTER TABLE passes ADD COLUMN cli_cost_usd REAL`,
+  `ALTER TABLE passes ADD COLUMN catalog_cost_usd REAL`,
+  // One row each time a model's catalog price is new or changed. A cache price of NULL means the input price.
+  `CREATE TABLE price_history (
+     provider TEXT NOT NULL,
+     model TEXT NOT NULL,
+     input REAL NOT NULL,
+     output REAL NOT NULL,
+     cache_read REAL,
+     cache_write REAL,
+     seen_at TEXT NOT NULL
+   ) STRICT`,
+  `CREATE INDEX price_history_model ON price_history (provider, model, seen_at)`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */
@@ -174,6 +189,10 @@ export interface PassEnd {
   readonly tokens: Tokens;
   readonly costUsd?: number;
   readonly priceSrc?: string;
+  /** What the CLI said the pass cost (pi, claude). */
+  readonly cliCostUsd?: number;
+  /** Tokens times the catalog price at the pass time. */
+  readonly catalogCostUsd?: number;
   readonly left5hBefore?: number;
   readonly left5hAfter?: number;
   readonly leftWeekBefore?: number;
@@ -259,7 +278,7 @@ export function openStore(opts: StoreOptions): Store {
   );
   const updateEnd = db.prepare(
     `UPDATE passes SET ended_at = ?, outcome = ?, fail_kind = ?, fail_code = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, reasoning = ?,
-       cost_usd = ?, price_src = ?, left_5h_before = ?, left_5h_after = ?, left_week_before = ?, left_week_after = ?, turns = ?, exit_code = ?, model = COALESCE(?, model)
+       cost_usd = ?, price_src = ?, cli_cost_usd = ?, catalog_cost_usd = ?, left_5h_before = ?, left_5h_after = ?, left_week_before = ?, left_week_after = ?, turns = ?, exit_code = ?, model = COALESCE(?, model)
      WHERE id = ?`,
   );
   const insertEvent = db.prepare("INSERT INTO events (at, account, kind, code, pass_id, detail) VALUES (?, ?, ?, ?, ?, ?)");
@@ -271,7 +290,7 @@ export function openStore(opts: StoreOptions): Store {
     } else if (line.op === "end") {
       const r = line.row;
       const t = r.tokens;
-      updateEnd.run(r.endedAt, r.outcome, nul(r.failKind), nul(r.failCode), t.input, t.output, t.cacheRead, t.cacheWrite, t.reasoning, nul(r.costUsd), nul(r.priceSrc), nul(r.left5hBefore), nul(r.left5hAfter), nul(r.leftWeekBefore), nul(r.leftWeekAfter), nul(r.turns), nul(r.exitCode), nul(r.model), r.id);
+      updateEnd.run(r.endedAt, r.outcome, nul(r.failKind), nul(r.failCode), t.input, t.output, t.cacheRead, t.cacheWrite, t.reasoning, nul(r.costUsd), nul(r.priceSrc), nul(r.cliCostUsd), nul(r.catalogCostUsd), nul(r.left5hBefore), nul(r.left5hAfter), nul(r.leftWeekBefore), nul(r.leftWeekAfter), nul(r.turns), nul(r.exitCode), nul(r.model), r.id);
     } else {
       const r = line.row;
       insertEvent.run(r.at, nul(r.account), r.kind, nul(r.code), nul(r.passId), nul(r.detail));

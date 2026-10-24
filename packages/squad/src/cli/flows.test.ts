@@ -9,6 +9,9 @@ import { gzipSync } from "node:zlib";
 import { makeFakeDocker } from "../../test/fake-docker.ts";
 import { fakeIdToken } from "../../test/fake-jwt.ts";
 import { addAccount, candidates, getAccount, getHealth, putHealth, setState, type AccountRow } from "../accounts/store.ts";
+import { servesOf } from "../accounts/serves.ts";
+import { modelsJsonFor } from "../providers.ts";
+import { parseProviders } from "../prices.ts";
 import { emptyHealth } from "../accounts/health.ts";
 import { ensureHome, layoutOf, type HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
@@ -473,3 +476,73 @@ test("log: an unknown or malformed id is exit 2", async () => {
   assert.equal(await r.run("log"), 2);
 });
 
+
+// --- import of doppelganger's pi key accounts ---
+
+const FAKE_AUTH = JSON.stringify({ engy: { type: "api_key", key: "FAKE-KEY-FOR-TEST" } });
+const BUILT_MODELS = modelsJsonFor(parseProviders({ engy: { name: "engy", api: "https://api.engy.ai/v1", npm: "@ai-sdk/openai-compatible", models: { "glm-5.2": { name: "GLM-5.2", reasoning: true, cost: { input: 0.68, output: 1.5 } } } } })[0]!);
+
+test("import of a squad home brings a pi key account with auth.json and models.json, and its provider list is read", async () => {
+  const r = rig();
+  const src = otherHome(r);
+  seedAccount(src, "pi", "engy", "key", { "auth.json": FAKE_AUTH, "models.json": BUILT_MODELS });
+  assert.equal(await r.run("import", src.root, "pi/engy"), 0);
+  const row = rowOf(r.home, "pi/engy")!;
+  assert.equal(row.kind, "key");
+  assert.equal(readFileSync(join(r.home.accounts, "pi", "engy", "models.json"), "utf8"), BUILT_MODELS);
+  assert.deepEqual(servesOf(r.home, row), [{ provider: "engy", models: ["glm-5.2"] }]);
+  assert.equal(readFileSync(join(src.accounts, "pi", "engy", "auth.json"), "utf8"), FAKE_AUTH, "copied, not moved");
+  assert.ok(!r.text().includes("FAKE-KEY-FOR-TEST"));
+});
+
+/** A doppelganger project: creds/pi/<name>/ with auth.json and models.json, and no squad database. */
+function doppelganger(r: Rig, accounts: Record<string, Record<string, string>>): string {
+  const root = join(r.root, "dop");
+  for (const [name, files] of Object.entries(accounts)) {
+    mkdirSync(join(root, ".doppelganger", "creds", "pi", name), { recursive: true });
+    for (const [f, body] of Object.entries(files)) writeFileSync(join(root, ".doppelganger", "creds", "pi", name, f), body);
+  }
+  return root;
+}
+
+test("import from a doppelganger project copies its pi key accounts as key accounts; the source is untouched and nothing is printed from the files", async () => {
+  const r = rig();
+  const dop = doppelganger(r, {
+    engy: { "auth.json": FAKE_AUTH, "models.json": BUILT_MODELS },
+    plain: { "auth.json": JSON.stringify({ opencode: { type: "api_key", key: "FAKE-OTHER" } }) },
+  });
+  assert.equal(await r.run("import", dop, "--owner", "Boss@Example.Test"), 0);
+  assert.deepEqual([rowOf(r.home, "pi/engy")?.kind, rowOf(r.home, "pi/engy")?.ownerEmail, rowOf(r.home, "pi/plain")?.kind], ["key", "boss@example.test", "key"]);
+  assert.equal(readFileSync(join(r.home.accounts, "pi", "engy", "auth.json"), "utf8"), FAKE_AUTH);
+  assert.equal(readFileSync(join(r.home.accounts, "pi", "engy", "models.json"), "utf8"), BUILT_MODELS);
+  assert.deepEqual(servesOf(r.home, rowOf(r.home, "pi/engy")!), [{ provider: "engy", models: ["glm-5.2"] }]);
+  assert.deepEqual(servesOf(r.home, rowOf(r.home, "pi/plain")!), [{ provider: "opencode" }]);
+  assert.equal(readFileSync(join(dop, ".doppelganger", "creds", "pi", "engy", "auth.json"), "utf8"), FAKE_AUTH);
+  assert.ok(!existsSync(join(dop, ".doppelganger", "creds", "pi", "engy", "MOVED-TO-SQUAD")));
+  assert.ok(!/FAKE-/.test(r.text()));
+  assert.equal(await r.run("import", dop), 1, "a second run: both exist");
+  assert.match(r.text(), /pi\/engy: refused: already exists/);
+});
+
+test("import from a doppelganger project: a login entry is refused, a named account only, and a dry run copies nothing", async () => {
+  const r = rig();
+  const dop = doppelganger(r, {
+    good: { "auth.json": FAKE_AUTH },
+    oauth: { "auth.json": JSON.stringify({ x: { type: "oauth", refresh: "FAKE-REFRESH" } }) },
+    empty: { "models.json": "{}" },
+  });
+  const env = r.io.env as Record<string, string | undefined>;
+  env.SQUAD_DRY_RUN = "1";
+  assert.equal(await r.run("import", dop), 1);
+  assert.match(r.text(), /would copy pi\/good/);
+  assert.match(r.text(), /pi\/oauth: refused: it holds a login/);
+  assert.match(r.text(), /skipped pi\/empty/);
+  assert.equal(rowOf(r.home, "pi/good"), undefined);
+  delete env.SQUAD_DRY_RUN;
+  assert.equal(await r.run("import", dop, "good"), 0);
+  assert.equal(rowOf(r.home, "pi/good")?.kind, "key");
+  assert.equal(rowOf(r.home, "pi/oauth"), undefined);
+  assert.equal(await r.run("import", dop, "oauth"), 1);
+  assert.equal(rowOf(r.home, "pi/oauth"), undefined);
+  assert.ok(!/FAKE-/.test(r.text()));
+});

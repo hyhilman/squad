@@ -6,9 +6,10 @@
 // source. The source keeps a `MOVED-TO` file and a `moved` row, so its pool never picks it again.
 // This is the only code that copies a login.
 
-import { closeSync, cpSync, chmodSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, chmodSync, existsSync, readFileSync, statSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { addAccount, getAccount, listAccounts, setOwnerEmail, setState, type AccountRow } from "./accounts/store.ts";
+import { AccountExists, createFileAccount } from "./accounts/add.ts";
+import { ACCOUNT_NAME, addAccount, getAccount, listAccounts, setOwnerEmail, setState, type AccountRow } from "./accounts/store.ts";
 import type { HomeLayout } from "./home.ts";
 import { ulid } from "./ids.ts";
 import { withHostLock } from "./lock.ts";
@@ -161,3 +162,67 @@ export async function runImport(p: ImportParams): Promise<number> {
   return failed === 0 ? 0 : 1;
 }
 
+
+export interface DoppelgangerImport {
+  /** The folder that holds `pi/<name>/auth.json` and `models.json`: doppelganger's `.doppelganger/creds`. */
+  readonly creds: string;
+  readonly to: Side;
+  /** `<name>` or `pi/<name>`. Empty = every pi folder. */
+  readonly names: readonly string[];
+  /** The owner of the new accounts; unset = none, and `squad owner` sets it later. */
+  readonly ownerEmail?: string;
+  readonly dryRun: boolean;
+  readonly now: Date;
+  readonly out: Out;
+}
+
+/** Whether auth.json holds only API keys. A pi OAuth entry is a refreshing login, which has one writer and is never copied. Never throws, never prints the file. */
+function onlyApiKeys(file: string): boolean {
+  try {
+    const doc: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return false;
+    const entries = Object.values(doc);
+    return entries.length > 0 && entries.every((e) => typeof e === "object" && e !== null && (e as { type?: unknown }).type === "api_key" && typeof (e as { key?: unknown }).key === "string");
+  } catch {
+    return false;
+  }
+}
+
+/** Copies doppelganger's pi key accounts (auth.json and models.json only) into this home as key accounts. The source is never changed. Exit code: 0 when all were done, 1 when any was refused. */
+export function runImportDoppelganger(p: DoppelgangerImport): number {
+  const piDir = join(p.creds, "pi");
+  const all = p.names.length === 0;
+  const names = (all ? readdirSync(piDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : p.names.map((n) => n.replace(/^pi\//, ""))).sort();
+  let failed = 0;
+  for (const name of names) {
+    const id = `pi/${name}`;
+    const dir = join(piDir, name);
+    const auth = join(dir, "auth.json");
+    if (!ACCOUNT_NAME.test(name) || !existsSync(dir) || !statSync(dir).isDirectory()) {
+      p.out.stderr(`${id}: refused: not in the source\n`);
+      failed++;
+    } else if (!existsSync(auth)) {
+      if (all) p.out.stdout(`skipped ${id}: no auth.json\n`);
+      else {
+        p.out.stderr(`${id}: refused: no auth.json\n`);
+        failed++;
+      }
+    } else if (!onlyApiKeys(auth)) {
+      p.out.stderr(`${id}: refused: it holds a login, not an API key: use squad login\n`);
+      failed++;
+    } else if (p.dryRun) {
+      p.out.stdout(`would copy ${id}\n`);
+    } else {
+      try {
+        const files = [{ name: "auth.json", body: readFileSync(auth) }, ...(existsSync(join(dir, "models.json")) ? [{ name: "models.json", body: readFileSync(join(dir, "models.json")) }] : [])];
+        createFileAccount(p.to.store.db, p.to.home, { runner: "pi", name, kind: "key", ...(p.ownerEmail === undefined ? {} : { ownerEmail: p.ownerEmail }) }, files, p.now);
+        p.to.store.event({ at: p.now.toISOString(), kind: "import", account: id, detail: "copy" });
+        p.out.stdout(`copied ${id}\n`);
+      } catch (e) {
+        p.out.stderr(`${id}: ${e instanceof AccountExists ? "refused: already exists in the target home" : "failed"}\n`);
+        failed++;
+      }
+    }
+  }
+  return failed === 0 ? 0 : 1;
+}

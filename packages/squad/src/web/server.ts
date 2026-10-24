@@ -10,18 +10,22 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { ROUTES, findForbidden, matchPath, type AccountView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
+import { loadProviders } from "../prices.ts";
+import { authJsonFor, modelsJsonFor, providerEntries } from "../providers.ts";
 import { getAccount, getHealth, healthOf, listAccounts, roomSince, setConsent, setOwnerFloors, setState, type AccountRow } from "../accounts/store.ts";
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
-import { SQUAD_DOCKER_ENV, SQUAD_FLOOR_DEFAULT_ENV, envNum, envOptional } from "../settings.ts";
+import { ACCOUNT_NAME } from "../accounts/store.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, envNum, envOn, envOptional } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { passDetail, passViews } from "./passes.ts";
-import { loadWebConfig } from "./settings.ts";
+import { allowedProviders, loadWebConfig } from "./settings.ts";
 import { startTicker, type Timers } from "./ticker.ts";
 
 export interface Ctx<N extends RouteName> {
@@ -98,11 +102,16 @@ const floor = (v: unknown): number | null => {
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
   me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {},
+  listProviders: {},
   addAccount: {
+    // The messages are fixed text: a refused body may hold a key, so nothing from it is echoed.
     body: (b) => {
-      if (!isObj(b) || !onlyKeys(b, ["runner", "name"]) || typeof b.name !== "string") throw bad("body must be {runner: \"codex\", name}");
-      if (b.runner !== "codex") throw bad("only a codex account can be added from the web: run `squad login` on the host for the rest");
-      return { runner: "codex", name: b.name };
+      const shape = 'body must be {runner: "codex", name}, {runner: "claude", name, token} or {runner: "pi", name, provider, key}';
+      if (!isObj(b) || typeof b.name !== "string") throw bad(shape);
+      if (b.runner === "codex" && onlyKeys(b, ["runner", "name"])) return { runner: "codex", name: b.name };
+      if (b.runner === "claude" && onlyKeys(b, ["runner", "name", "token"]) && typeof b.token === "string") return { runner: "claude", name: b.name, token: b.token };
+      if (b.runner === "pi" && onlyKeys(b, ["runner", "name", "provider", "key"]) && typeof b.provider === "string" && typeof b.key === "string") return { runner: "pi", name: b.name, provider: b.provider, key: b.key };
+      throw bad(shape);
     },
   },
   usageSeries: {
@@ -272,6 +281,8 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | und
       return usageBy(db, query.by as UsageBy, since, scope(session, query.account)).map((r): ApiUsageRow => ({
         key: r.key, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning,
         ...(r.costUsd === null ? {} : { costUsd: r.costUsd }),
+        ...(r.cliCostUsd === null ? {} : { cliCostUsd: r.cliCostUsd }),
+        ...(r.catalogCostUsd === null ? {} : { catalogCostUsd: r.catalogCostUsd }),
       }));
     },
     usageSeries: ({ session, query }) => {
@@ -279,6 +290,8 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | und
       return usageSeries(db, query.by, since, scope(session, query.account)).map((r) => ({
         bucket: r.bucket, account: r.account, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning,
         ...(r.costUsd === null ? {} : { costUsd: r.costUsd }),
+        ...(r.cliCostUsd === null ? {} : { cliCostUsd: r.cliCostUsd }),
+        ...(r.catalogCostUsd === null ? {} : { catalogCostUsd: r.catalogCostUsd }),
       }));
     },
     roomSeries: ({ session, params, query }) => {
@@ -304,7 +317,31 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | und
       if (row === undefined || !(isAdmin(session) || (owner !== undefined && owner.ownerEmail !== null && owner.ownerEmail.toLowerCase() === session.email.toLowerCase()))) throw new HttpError(404, "not-found", "no such pass");
       return passDetail(o.home, row);
     },
-    addAccount: ({ session, body }) => refuseAsync(() => logins.startAdd(session.email, body.name)),
+    listProviders: () => providerEntries(loadProviders(o.home), allowedProviders(o.env)).map((e): ProviderView => ({
+      id: e.id, name: e.name, runner: e.runner, kind: e.kind, ...(e.builtin === true ? { builtin: true as const } : {}), models: e.models,
+    })),
+    addAccount: ({ session, body }) => {
+      // The setting is enforced here, not only in the list the page shows.
+      const wanted = body.runner === "pi" ? body.provider : body.runner;
+      const entry = providerEntries(loadProviders(o.home), allowedProviders(o.env)).find((e) => e.id === wanted && e.runner === body.runner);
+      if (entry === undefined) throw bad("this provider is not offered");
+      if (body.runner === "codex") return refuseAsync(() => logins.startAdd(session.email, body.name));
+      if (envOn(SQUAD_DRY_RUN_ENV, o.env)) throw new HttpError(501, "disabled", "no account is written while SQUAD_DRY_RUN=1");
+      if (!ACCOUNT_NAME.test(body.name)) throw bad("the name must be lower-case letters, digits, dot, dash or underscore, and start with a letter or digit");
+      const secret = body.runner === "claude" ? body.token : body.key;
+      const why = secretShapeError(secret);
+      if (why !== undefined) throw bad(why);
+      const spec = { runner: body.runner, name: body.name, kind: entry.kind, ownerEmail: session.email.toLowerCase() };
+      const files = body.runner === "claude"
+        ? [{ name: "token", body: secret }]
+        : [{ name: "auth.json", body: authJsonFor(body.provider, secret) }, ...(entry.source === undefined ? [] : [{ name: "models.json", body: modelsJsonFor(entry.source) }])];
+      try {
+        return view(createFileAccount(db, o.home, spec, files, now()));
+      } catch (e) {
+        if (e instanceof AccountExists) throw new HttpError(409, "conflict", e.message);
+        throw e;
+      }
+    },
   };
   return { ...real, ...o.handlers };
 }

@@ -62,3 +62,36 @@ test("durationText: seconds, minutes, hours; unknown when unset", () => {
   assert.equal(durationText("2026-10-24T10:00:00Z", "2026-10-24T12:10:00Z"), "2 h 10 min");
   assert.equal(durationText("2026-10-24T10:00:00Z", undefined), "running");
 });
+
+test("moneyText: cents for a cent or more, four decimals below, nothing when unknown", async () => {
+  const { moneyText } = await import("./format.ts");
+  assert.equal(moneyText(undefined), "");
+  assert.equal(moneyText(0), "$0.00");
+  assert.equal(moneyText(1.5), "$1.50");
+  assert.equal(moneyText(0.001425421), "$0.0014");
+});
+
+test("gapPercent and gapText need both costs and a CLI cost above zero", async () => {
+  const { gapPercent, gapText } = await import("./format.ts");
+  assert.equal(gapPercent(2, 3), 50);
+  assert.equal(gapPercent(4, 3), -25);
+  assert.equal(gapPercent(undefined, 3), undefined);
+  assert.equal(gapPercent(2, undefined), undefined);
+  assert.equal(gapPercent(0, 3), undefined);
+  assert.equal(gapText(50), "+50.0%");
+  assert.equal(gapText(-25), "-25.0%");
+  assert.equal(gapText(undefined), "-");
+});
+
+test("costCompare keeps rows with either cost, adds the gap, biggest first", async () => {
+  const { costCompare } = await import("./format.ts");
+  const rows = costCompare([
+    { key: "a", passes: 1 },
+    { key: "p/x", passes: 2, cliCostUsd: 1, catalogCostUsd: 1.1 },
+    { key: "p/y", passes: 1, catalogCostUsd: 5 },
+    { key: "p/z", passes: 1, cliCostUsd: 0.5 },
+  ]);
+  assert.deepEqual(rows.map((r) => r.key), ["p/y", "p/x", "p/z"]);
+  assert.ok(Math.abs(rows[1]!.gap! - 10) < 1e-9);
+  assert.equal(rows[0]!.gap, undefined);
+});

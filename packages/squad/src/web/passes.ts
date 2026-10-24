@@ -26,6 +26,8 @@ const viewOf = (r: PassRow, hasTranscript: boolean): PassView => ({
   ...(r.failCode === null ? {} : { failCode: r.failCode }),
   tokens: { input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning },
   ...(r.costUsd === null ? {} : { costUsd: r.costUsd }),
+  ...(r.cliCostUsd === null ? {} : { cliCostUsd: r.cliCostUsd }),
+  ...(r.catalogCostUsd === null ? {} : { catalogCostUsd: r.catalogCostUsd }),
   hasTranscript,
 });
 

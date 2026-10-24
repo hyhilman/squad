@@ -29,6 +29,8 @@ export interface StreamOutcome {
   readonly ended: boolean;
   readonly model: string | null;
   readonly usage: Usage;
+  /** What the CLI itself said the pass cost, in dollars (pi, claude). Unset when it said nothing. */
+  readonly cliCostUsd?: number;
   readonly failure?: Failure;
   readonly room?: Room;
   readonly badLines: number;

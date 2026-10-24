@@ -74,6 +74,7 @@ export class ClaudeStream {
         cacheWrite: num(u.cache_creation_input_tokens),
         reasoning: 0,
       },
+      ...(r !== undefined && typeof r.total_cost_usd === "number" && Number.isFinite(r.total_cost_usd) ? { cliCostUsd: r.total_cost_usd } : {}),
       ...(failure === undefined ? {} : { failure }),
       ...(room === undefined ? {} : { room }),
       badLines: this.#lines.badLines,

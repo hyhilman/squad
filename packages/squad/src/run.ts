@@ -22,7 +22,7 @@ import { makeLog, type Log } from "./log.ts";
 import { scopeState } from "./health/breaker.ts";
 import { writePassFiles } from "./passfiles.ts";
 import { pick, type PickResult } from "./pool/pick.ts";
-import { loadPrices, passCost } from "./prices.ts";
+import { catalogCost, loadPrices, PRICE_SRC } from "./prices.ts";
 import { checkSessionId, deleteSession, getSession, pinSession, sessionDir, touchSession } from "./sessions.ts";
 import { isSupported, RUNNER_SPECS, type SupportedRunner } from "./runners/table.ts";
 import { isBusy, NO_TOKENS, type Store } from "./store/db.ts";
@@ -362,15 +362,19 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     const ended = nowFn();
     const failure = failureOf(sp.stream, sp.exitCode, sp.stopped, sp.stderrTail);
     const logPath = writePassFiles(deps.home, ended, passId, req.prompt, sp.raw);
-    // Only a key account has a bill. The model is what the stream saw, else what we asked for.
-    const cost = account.kind === "key" ? passCost(account.kind, sp.stream.model ?? req.model, sp.stream.usage, loadPrices(deps.home)) : null;
+    // The catalog cost is for every kind of account, at the price in force when the pass started. `cost_usd`
+    // is the older column: the same number, but only for a key account, which is the only one with a bill.
+    const model = sp.stream.model ?? req.model;
+    const catalog = catalogCost(db, loadPrices(deps.home), req.runner, model, sp.stream.usage, started);
     store.endPass({
       id: passId,
       endedAt: ended.toISOString(),
       outcome: failure === undefined ? "ok" : "fail",
       ...(failure === undefined ? {} : { failKind: failure.kind, failCode: failure.code }),
       tokens: sp.stream.usage,
-      ...(cost === null ? {} : cost),
+      ...(catalog === null ? {} : { catalogCostUsd: catalog }),
+      ...(catalog !== null && account.kind === "key" ? { costUsd: catalog, priceSrc: PRICE_SRC } : {}),
+      ...(sp.stream.cliCostUsd === undefined ? {} : { cliCostUsd: sp.stream.cliCostUsd }),
       turns: sp.stream.turns,
       ...(sp.stream.model === null ? {} : { model: sp.stream.model }),
       ...(sp.exitCode === null ? {} : { exitCode: sp.exitCode }),
