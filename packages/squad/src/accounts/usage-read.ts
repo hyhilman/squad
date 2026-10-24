@@ -16,7 +16,7 @@ import { envNum, envOn, SQUAD_NO_USAGE_READ_ENV, SQUAD_USAGE_READ_S_ENV } from "
 import { isBusy, type Store } from "../store/db.ts";
 import type { Room } from "../types.ts";
 import { applyRead, emptyHealth, type HealthRow, type UsageReadResult } from "./health.ts";
-import { getHealth, healthOf, putHealth, type AccountRow } from "./store.ts";
+import { getHealth, healthOf, putHealth, recordRoom, type AccountRow } from "./store.ts";
 
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const READ_TIMEOUT_MS = 15_000;
@@ -96,6 +96,7 @@ export async function refreshUsage(store: Store, home: HomeLayout, account: Acco
   const change = applyRead(getHealth(store.db, account.id), read, now);
   try {
     putHealth(store.db, change.health);
+    if ("ok" in read) recordRoom(store.db, account.id, now, "read", read.ok.room.left5h, read.ok.room.leftWeek);
   } catch (e) {
     if (!isBusy(e)) throw e;
     log?.warn("usage-write-busy", { account: account.id });

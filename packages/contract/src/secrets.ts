@@ -34,3 +34,26 @@ export function findForbidden(value: unknown, path = "$"): string | undefined {
   }
   return undefined;
 }
+
+/** The same shapes as SECRET_VALUES, but found inside a longer text. A word edge keeps `task-force-...` safe. */
+const SECRET_IN_TEXT: readonly RegExp[] = [
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g,
+  /(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}/g,
+  /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
+  /(?<=Bearer )[A-Za-z0-9._~+/=-]{16,}/g,
+];
+/** `"key": "value"`, also as escaped JSON inside a string. Only a forbidden key loses its value. */
+const KEYED_VALUE = /(\\?"([A-Za-z0-9_-]+)\\?"\s*:\s*\\?")([^"\\]*)(\\?")/g;
+
+export const HIDDEN = "[hidden]";
+
+/**
+ * The text with every credential replaced by `[hidden]`: the value shapes of findForbidden, and the
+ * value of a forbidden key such as `access_token` in an auth file snippet. For text that an answer
+ * carries, such as a prompt or a transcript.
+ */
+export function maskSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_IN_TEXT) out = out.replace(re, HIDDEN);
+  return out.replace(KEYED_VALUE, (whole, head: string, key: string, _v: string, tail: string) => (FORBIDDEN_KEYS.has(norm(key)) ? `${head}${HIDDEN}${tail}` : whole));
+}

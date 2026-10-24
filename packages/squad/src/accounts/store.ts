@@ -24,6 +24,8 @@ export interface AccountRow {
   readonly createdAt: string;
   /** When the owner agreed (in the web app) that the pool may use the account; null = not yet. */
   readonly consentAt: string | null;
+  /** The email of the seat that is logged in; it can differ from the owner. null = unknown. */
+  readonly loginEmail: string | null;
 }
 
 export interface NewAccount {
@@ -31,6 +33,7 @@ export interface NewAccount {
   readonly name: string;
   readonly kind: AccountKind;
   readonly ownerEmail?: string;
+  readonly loginEmail?: string;
 }
 
 const RUNNERS: readonly string[] = ["claude", "codex", "pi"];
@@ -43,12 +46,12 @@ export const accountId = (runner: string, name: string): string => `${runner}/${
 
 interface Raw {
   id: string; runner: string; name: string; kind: string; owner_email: string | null; state: string;
-  dead_code: string | null; dead_at: string | null; floor_5h: number | null; floor_week: number | null; created_at: string; consent_at: string | null;
+  dead_code: string | null; dead_at: string | null; floor_5h: number | null; floor_week: number | null; created_at: string; consent_at: string | null; login_email: string | null;
 }
 
 const toAccount = (r: Raw): AccountRow => ({
   id: r.id, runner: r.runner as Runner, name: r.name, kind: r.kind as AccountKind, ownerEmail: r.owner_email, state: r.state as AccountState,
-  deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at,
+  deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at, loginEmail: r.login_email,
 });
 
 export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date()): AccountRow {
@@ -58,7 +61,7 @@ export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date
   if (a.kind === "token" && a.runner !== "claude") throw new Error(`a token account is for claude only, not ${a.runner}`);
   if (a.kind === "key" && a.runner === "claude") throw new Error("claude has no key account kind here: use a token or a login");
   const id = accountId(a.runner, a.name);
-  db.prepare("INSERT INTO accounts (id, runner, name, kind, owner_email, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, a.runner, a.name, a.kind, a.ownerEmail ?? null, now.toISOString());
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, owner_email, login_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, a.runner, a.name, a.kind, a.ownerEmail ?? null, a.loginEmail ?? null, now.toISOString());
   return getAccount(db, id)!;
 }
 
@@ -95,6 +98,29 @@ export function reviveByLogin(db: DatabaseSync, id: string): void {
 
 export function setOwnerEmail(db: DatabaseSync, id: string, email: string | null): void {
   db.prepare("UPDATE accounts SET owner_email = ? WHERE id = ?").run(email, id);
+}
+
+export function setLoginEmail(db: DatabaseSync, id: string, email: string | null): void {
+  db.prepare("UPDATE accounts SET login_email = ? WHERE id = ?").run(email, id);
+}
+
+export interface RoomRead {
+  readonly at: string;
+  readonly source: "read" | "pass";
+  readonly left5h: number | null;
+  readonly leftWeek: number | null;
+}
+
+/** One reading of room left. A reading with neither window is not stored. */
+export function recordRoom(db: DatabaseSync, account: string, at: Date, source: RoomRead["source"], left5h: number | undefined, leftWeek: number | undefined): void {
+  if (left5h === undefined && leftWeek === undefined) return;
+  db.prepare("INSERT INTO room_reads (account, at, left_5h, left_week, source) VALUES (?, ?, ?, ?, ?)").run(account, at.toISOString(), left5h ?? null, leftWeek ?? null, source);
+}
+
+/** The readings at or after `since`, oldest first. */
+export function roomSince(db: DatabaseSync, account: string, since: Date): RoomRead[] {
+  const rows = db.prepare("SELECT at, source, left_5h, left_week FROM room_reads WHERE account = ? AND at >= ? ORDER BY at, id").all(account, since.toISOString()) as unknown as { at: string; source: string; left_5h: number | null; left_week: number | null }[];
+  return rows.map((r) => ({ at: r.at, source: r.source as RoomRead["source"], left5h: r.left_5h, leftWeek: r.left_week }));
 }
 
 interface RawHealth {

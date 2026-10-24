@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { identityOf, loginFilesOf } from "./accounts/identity.ts";
-import { addAccount, getAccount, reviveByLogin, setOwnerEmail, ACCOUNT_NAME } from "./accounts/store.ts";
+import { addAccount, getAccount, reviveByLogin, setLoginEmail, setOwnerEmail, ACCOUNT_NAME } from "./accounts/store.ts";
 import { dockerRunArgv, type AccountKind, type PassPlan, type Runner } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
 import { IMAGES } from "./images.ts";
@@ -80,14 +80,19 @@ export interface FinishParams {
   readonly runner: Runner;
   readonly name: string;
   readonly staging: string;
-  /** The email the login must belong to. Without it, whoever logged in owns the account. */
+  /** The email the login must belong to (`squad login --owner`). Without it, whoever logged in owns the account. */
   readonly owner?: string;
+  /**
+   * A NEW account added from the web: this person owns it, whatever seat they logged in with, and the
+   * seat's own email is stored apart. The login must still hold an identity.
+   */
+  readonly addFor?: string;
   readonly now: Date;
 }
 
 export type FinishResult =
   | { readonly ok: true; readonly ownerEmail: string | null }
-  | { readonly ok: false; readonly reason: "empty" | "no-login" | "owner-mismatch" | "busy"; readonly found?: string };
+  | { readonly ok: false; readonly reason: "empty" | "no-login" | "owner-mismatch" | "seat-mismatch" | "exists" | "busy"; readonly found?: string };
 
 /**
  * The part of a login after the container: check what it left in `staging`, move it into `accounts/`
@@ -111,11 +116,31 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   }
 
   const found = identityOf(runner, "login", staging);
-  if (p.owner !== undefined && found !== null && found.email.toLowerCase() !== p.owner.toLowerCase()) {
+  const before = getAccount(store.db, id);
+  if (p.addFor !== undefined && before !== undefined) {
+    drop();
+    return { ok: false, reason: "exists" };
+  }
+  const seat = before?.loginEmail ?? null;
+  if (p.addFor !== undefined && found === null) {
+    drop();
+    return { ok: false, reason: "no-login" };
+  }
+  if (seat !== null) {
+    // A re-login is for the same seat. A person may hold several seats, so the owner is not the test.
+    if (found === null) {
+      drop();
+      return { ok: false, reason: "no-login" };
+    }
+    if (found.email.toLowerCase() !== seat.toLowerCase()) {
+      drop();
+      return { ok: false, reason: "seat-mismatch", found: found.email };
+    }
+  } else if (p.owner !== undefined && found !== null && found.email.toLowerCase() !== p.owner.toLowerCase()) {
     drop();
     return { ok: false, reason: "owner-mismatch", found: found.email };
   }
-  const ownerEmail = found?.email ?? p.owner ?? null;
+  const ownerEmail = p.addFor ?? (seat !== null ? before!.ownerEmail : (found?.email ?? p.owner ?? null));
 
   const dest = join(home.accounts, runner, name);
   const stamp = p.now.toISOString().replace(/\D/g, "");
@@ -143,11 +168,15 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   // A pi login that holds only API keys is a key account: no lock, many passes. A dead login account
   // that is logged in again keeps its kind, so a re-login never changes how its row is locked.
   const kind = files === "keys" ? "key" : "login";
-  if (existing === undefined) addAccount(store.db, { runner, name, kind, ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
+  if (existing === undefined) addAccount(store.db, { runner, name, kind, ...(ownerEmail === null ? {} : { ownerEmail }), ...(found === null ? {} : { loginEmail: found.email }) }, p.now);
   else {
     // The state may have changed while the login ran. Only a dead account is revived.
     if (existing.state === "dead") reviveByLogin(store.db, id);
-    if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
+    // The owner of a row with a known seat never changes by a login.
+    if (seat === null) {
+      if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
+      if (found !== null) setLoginEmail(store.db, id, found.email);
+    }
   }
   store.event({ at: p.now.toISOString(), kind: "login", account: id });
   return { ok: true, ownerEmail };
@@ -226,6 +255,8 @@ export async function runLogin(p: LoginParams): Promise<number> {
     if (fin.reason === "empty") out.stderr("the login wrote no files; nothing was changed\n");
     else if (fin.reason === "no-login") out.stderr("the login left no login file (the CLI was stopped or you did not log in); nothing was changed\n");
     else if (fin.reason === "owner-mismatch") out.stderr(`the login is for ${fin.found}, not ${p.owner}; nothing was moved\n`);
+    else if (fin.reason === "seat-mismatch") out.stderr(`the login is for another seat than ${id} had; nothing was moved\n`);
+    else if (fin.reason === "exists") out.stderr(`${id} exists; nothing was moved\n`);
     else out.stderr(`${id}: account busy (a pass holds it); the new login was dropped, nothing was changed\n`);
     return 1;
   }

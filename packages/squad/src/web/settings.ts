@@ -16,7 +16,9 @@ export const SQUAD_OIDC_ISSUER_ENV: EnvSpec = { key: "SQUAD_OIDC_ISSUER", why: "
 export const SQUAD_OIDC_CLIENT_ID_ENV: EnvSpec = { key: "SQUAD_OIDC_CLIENT_ID", why: "the OIDC client id of squad at the identity server; required to start" };
 export const SQUAD_OIDC_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_GROUP", why: "a group the ID token's `groups` claim must hold; unset = any signed-in user with a verified email" };
 
-export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV];
+export const SQUAD_OIDC_ADMIN_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_ADMIN_GROUP", why: "a group the ID token's `groups` claim must hold for a person to be an admin who sees every account; unset = nobody is admin" };
+
+export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV];
 
 export interface WebConfig {
   /** The public base URL, without a trailing slash. */
@@ -27,6 +29,8 @@ export interface WebConfig {
   readonly issuer: string;
   readonly clientId: string;
   readonly group?: string;
+  /** The group that makes an admin; unset = nobody. */
+  readonly adminGroup?: string;
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
   /** Cookies get `Secure` when the public URL is https. */
@@ -109,6 +113,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("SQUAD_WEB_PORT must be a port from 0 to 65535");
   const secrets = loadSecrets(join(home.root, "squad.secret.toml"));
   const group = envOptional(SQUAD_OIDC_GROUP_ENV, env);
+  const adminGroup = envOptional(SQUAD_OIDC_ADMIN_GROUP_ENV, env);
   return {
     url: web.origin,
     origin: web.origin,
@@ -117,6 +122,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
     issuer: issuerRaw!,
     clientId,
     ...(group === undefined ? {} : { group }),
+    ...(adminGroup === undefined ? {} : { adminGroup }),
     ...(secrets.clientSecret === undefined ? {} : { clientSecret: secrets.clientSecret }),
     sessionKey: secrets.sessionKey,
     secure: web.protocol === "https:",

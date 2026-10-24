@@ -74,8 +74,8 @@ export const SQUAD_KEEP_PASSES_D_ENV: EnvSpec = {
 };
 export const SQUAD_KEEP_LOGS_D_ENV: EnvSpec = {
   key: "SQUAD_KEEP_LOGS_D",
-  default: "30",
-  why: "days a pass log and a usage export file are kept before the cleanup job deletes them",
+  default: "400",
+  why: "days a pass's stored stream and prompt (the history page reads them) and a usage export file are kept before the cleanup job deletes them",
 };
 export const SQUAD_FLOOR_DEFAULT_ENV: EnvSpec = {
   key: "SQUAD_FLOOR_DEFAULT",

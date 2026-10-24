@@ -95,6 +95,14 @@ test("retention: pass rows past 400 days go, logs past 30 days go; events have n
   assert.ok(acts.every((a) => !JSON.stringify(a).includes("event")));
 });
 
+test("retention: a .log.gz and .prompt.gz pair goes by the same age, together", () => {
+  const dir = join(home.passLogs, "2025-01-01");
+  const old = [join(dir, "P.log.gz"), join(dir, "P.prompt.gz")].map((path) => ({ path, mtime: ago(401 * D) }));
+  const young = [join(home.passLogs, "2026-10-10", "Q.log.gz"), join(home.passLogs, "2026-10-10", "Q.prompt.gz")].map((path) => ({ path, mtime: ago(399 * D) }));
+  const acts = planGc(state({ logs: [...old, ...young] }), NOW, { ...S, keepLogsD: 400 });
+  assert.deepEqual(acts, old.map((f) => ({ kind: "remove-path", path: f.path })));
+});
+
 test("an open pass past retention is deleted, not also ended", () => {
   const acts = planGc(state({ passes: [p("ANCIENT", 500 * D, false)] }), NOW, S);
   assert.deepEqual(acts, [{ kind: "delete-pass", id: "ANCIENT" }]);
@@ -118,7 +126,7 @@ test("the planner drops any path under accounts/ or locks/, or outside the folde
 });
 
 test("gcSettings reads the keep and TTL settings with their defaults", () => {
-  assert.deepEqual(gcSettings({}), { graceS: 20, keepPassesD: 400, keepLogsD: 30, sessionTtlD: 7, deadlineMs: 2 * H });
+  assert.deepEqual(gcSettings({}), { graceS: 20, keepPassesD: 400, keepLogsD: 400, sessionTtlD: 7, deadlineMs: 2 * H });
   assert.deepEqual(gcSettings({ SQUAD_KEEP_PASSES_D: "9", SQUAD_KEEP_LOGS_D: "3", SQUAD_SESSION_TTL_D: "1", SQUAD_STOP_GRACE_S: "5" }), { graceS: 5, keepPassesD: 9, keepLogsD: 3, sessionTtlD: 1, deadlineMs: 2 * H });
 });
 

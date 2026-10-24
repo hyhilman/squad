@@ -1,13 +1,13 @@
 // `squad login` end to end with a fake terminal: what it moves, what it refuses, what it prints.
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fakeIdToken } from "../test/fake-jwt.ts";
 import { addAccount, getAccount, setState } from "./accounts/store.ts";
 import { ensureHome, layoutOf } from "./home.ts";
-import { runLogin } from "./login.ts";
+import { finishLogin, runLogin } from "./login.ts";
 import { openStore } from "./store/db.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
@@ -76,5 +76,65 @@ test("a dead login account is revived and its old folder is replaced", async () 
   assert.ok(readFileSync(join(dest, "auth.json"), "utf8").length > 0);
   assert.equal(getAccount(r.store.db, "codex/alice")!.state, "active");
   assert.deepEqual(readdirSync(join(r.home.accounts, "codex")), ["alice"]);
+  r.store.close();
+});
+
+test("a new login stores the seat email beside the owner", async () => {
+  const r = rig(auth("Seat@Example.Test"));
+  assert.equal(await runLogin(r.params("alice")), 0);
+  const a = getAccount(r.store.db, "codex/alice")!;
+  assert.deepEqual([a.ownerEmail, a.loginEmail], ["Seat@Example.Test", "Seat@Example.Test"]);
+  r.store.close();
+});
+
+test("a re-login with another seat's email fails with seat-mismatch and moves nothing", async () => {
+  const r = rig(auth("other-seat@example.test"));
+  addAccount(r.store.db, { runner: "codex", name: "alice", kind: "login", ownerEmail: "boss@example.test", loginEmail: "seat@example.test" }, NOW);
+  setState(r.store.db, "codex/alice", "dead", "refresh_token_reused", NOW);
+  const dest = join(r.home.accounts, "codex", "alice");
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, "old.txt"), "old");
+  assert.equal(await runLogin(r.params("alice")), 1);
+  assert.ok(existsSync(join(dest, "old.txt")), "the old folder stays");
+  assert.ok(!existsSync(join(dest, "auth.json")));
+  assert.equal(readdirSync(r.home.staging).length, 0);
+  assert.equal(getAccount(r.store.db, "codex/alice")!.state, "dead");
+  assert.match(r.err.join(""), /another seat than codex\/alice had; nothing was moved/);
+  assert.ok(!r.err.join("").includes("other-seat"), "the other email is not printed");
+  r.store.close();
+});
+
+test("a re-login with the same seat (any case) revives it and the owner does not change", async () => {
+  const r = rig(auth("SEAT@example.test"));
+  addAccount(r.store.db, { runner: "codex", name: "alice", kind: "login", ownerEmail: "boss@example.test", loginEmail: "seat@example.test" }, NOW);
+  setState(r.store.db, "codex/alice", "dead", "refresh_token_reused", NOW);
+  assert.equal(await runLogin(r.params("alice")), 0);
+  const a = getAccount(r.store.db, "codex/alice")!;
+  assert.deepEqual([a.state, a.ownerEmail, a.loginEmail], ["active", "boss@example.test", "seat@example.test"]);
+  r.store.close();
+});
+
+test("finishLogin as an add: the owner is the person, the seat email is the token's, and no owner check applies", async () => {
+  const r = rig(() => {});
+  const staging = join(r.home.staging, "S1");
+  mkdirSync(staging, { recursive: true });
+  auth("seat-a@example.test")(staging);
+  const res = await finishLogin({ store: r.store, home: r.home, runner: "codex", name: "second", staging, addFor: "boss@example.test", now: NOW });
+  assert.deepEqual(res, { ok: true, ownerEmail: "boss@example.test" });
+  const a = getAccount(r.store.db, "codex/second")!;
+  assert.deepEqual([a.kind, a.state, a.ownerEmail, a.loginEmail], ["login", "active", "boss@example.test", "seat-a@example.test"]);
+  r.store.close();
+});
+
+test("finishLogin as an add with no identity in the login is no-login, and nothing is made", async () => {
+  const r = rig(() => {});
+  const staging = join(r.home.staging, "S1");
+  mkdirSync(staging, { recursive: true });
+  writeFileSync(join(staging, ".credentials.json"), JSON.stringify({ claudeAiOauth: { fake: true } }));
+  const res = await finishLogin({ store: r.store, home: r.home, runner: "claude", name: "x", staging, addFor: "boss@example.test", now: NOW });
+  assert.deepEqual(res, { ok: false, reason: "no-login" });
+  assert.equal(getAccount(r.store.db, "claude/x"), undefined);
+  assert.ok(!existsSync(join(r.home.accounts, "claude", "x")));
+  assert.ok(!existsSync(staging));
   r.store.close();
 });

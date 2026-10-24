@@ -10,7 +10,7 @@ import { ensureHome, layoutOf } from "../home.ts";
 import { openStore } from "../store/db.ts";
 import { SQUAD_USAGE_READ_S_ENV, envNum } from "../settings.ts";
 import { emptyHealth, type HealthRow } from "./health.ts";
-import { addAccount, getHealth, type AccountRow } from "./store.ts";
+import { addAccount, getHealth, roomSince, type AccountRow } from "./store.ts";
 import { dueReads, parseCodexUsage, readBudget, readCodexUsage, refreshUsage, USAGE_URL } from "./usage-read.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
@@ -148,6 +148,7 @@ test("refreshUsage: ok writes the room and read_at; 401 marks suspect and writes
   assert.equal(h1.leftWeek, 88);
   assert.equal(h1.readAt, NOW.toISOString());
   assert.equal(h1.suspectSince, null);
+  assert.deepEqual(roomSince(store.db, "codex/a", new Date(0)), [{ at: NOW.toISOString(), source: "read", left5h: 35, leftWeek: 88 }]);
   const later = new Date(NOW.getTime() + 600_000);
   const bad = await refreshUsage(store, home, acct, async () => json({}, 401), later, log);
   assert.deepEqual(bad, { suspect: true });
@@ -158,6 +159,7 @@ test("refreshUsage: ok writes the room and read_at; 401 marks suspect and writes
   await refreshUsage(store, home, acct, async () => json({}, 401), new Date(later.getTime() + 600_000), log);
   assert.equal((store.db.prepare("SELECT count(*) AS n FROM events WHERE kind = 'usage-401'").get() as { n: number }).n, 1, "no second event while still suspect");
   assert.equal(getHealth(store.db, "codex/a").suspectSince, later.toISOString(), "the first suspicion time is kept");
+  assert.equal(roomSince(store.db, "codex/a", new Date(0)).length, 1, "a 401 is no reading");
   assert.ok(lines.length > 0);
   for (const l of lines) assert.ok(!l.includes("eyJfake") && !l.includes(FAKE_ACCOUNT), l);
   store.close();
@@ -194,7 +196,7 @@ test("applyRead suspect: sets suspect_since once and gives event usage-401; erro
 });
 
 // --- the schedule
-const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: null, ...more });
+const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: null, loginEmail: null, ...more });
 const hmap = (...rows: HealthRow[]): Map<string, HealthRow> => new Map(rows.map((r) => [r.account, r]));
 const ago = (s: number): string => new Date(NOW.getTime() - s * 1000).toISOString();
 const INTERVAL = 300_000;

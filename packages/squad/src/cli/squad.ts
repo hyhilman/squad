@@ -4,8 +4,9 @@
 // Nothing here prints a key, an auth file or a path inside an account folder.
 
 import "./quiet.ts";
+import { findPassFile, readPassFile } from "../passfiles.ts";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -526,11 +527,9 @@ function logCmd(_store: Store, io: Io, args: readonly string[]): number {
   const id = rest[0]!;
   if (!ULID_RE.test(id)) throw new UsageError(`${JSON.stringify(id)} is not a pass id`);
   const home = layoutOf(homeRoot(io.cwd, io.env), io.env);
-  const days = existsSync(home.passLogs) ? readdirSync(home.passLogs) : [];
-  const day = days.find((d) => existsSync(join(home.passLogs, d, `${id}.log`)));
-  if (day === undefined) throw new UsageError(`no log for pass ${id}`);
-  const path = join(home.passLogs, day, `${id}.log`);
-  const lines = readFileSync(path, "utf8").split("\n");
+  const path = findPassFile(home, id, "log");
+  if (path === undefined) throw new UsageError(`no log for pass ${id}`);
+  const lines = readPassFile(path).split("\n");
   if (lines.at(-1) === "") lines.pop();
   io.stdout(`${path}\n${lines.slice(-LOG_LINES).filter(lineIsSafe).map((l) => `${l}\n`).join("")}`);
   return 0;

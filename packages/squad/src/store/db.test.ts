@@ -70,9 +70,29 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 10);
+  assert.equal(MIGRATIONS.length, 14);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(tables, ["accounts", "events", "health", "passes", "schema_version", "sessions"]);
+  assert.deepEqual(tables, ["accounts", "events", "health", "passes", "room_reads", "schema_version", "sessions"]);
+});
+
+test("migration 11: login_email is set from owner_email for codex and claude login rows only; room_reads exists", () => {
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
+  db.exec("CREATE TABLE schema_version (n INTEGER NOT NULL) STRICT");
+  for (const m of MIGRATIONS.slice(0, 10)) db.exec(m);
+  db.prepare("INSERT INTO schema_version (n) VALUES (10)").run();
+  const ins = db.prepare("INSERT INTO accounts (id, runner, name, kind, owner_email, created_at) VALUES (?, ?, ?, ?, ?, 't')");
+  ins.run("codex/a", "codex", "a", "login", "A@x.test");
+  ins.run("claude/c", "claude", "c", "login", "c@x.test");
+  ins.run("pi/p", "pi", "p", "login", "p@x.test");
+  ins.run("pi/k", "pi", "k", "key", "k@x.test");
+  ins.run("codex/n", "codex", "n", "login", null);
+  assert.equal(migrate(db), MIGRATIONS.length);
+  const rows = db.prepare("SELECT id, login_email FROM accounts ORDER BY id").all().map((r) => ({ ...r }));
+  assert.deepEqual(rows, [
+    { id: "claude/c", login_email: "c@x.test" }, { id: "codex/a", login_email: "A@x.test" }, { id: "codex/n", login_email: null },
+    { id: "pi/k", login_email: null }, { id: "pi/p", login_email: null },
+  ]);
+  db.prepare("INSERT INTO room_reads (account, at, left_5h, left_week, source) VALUES ('codex/a', 't', 1, 2, 'read')").run();
 });

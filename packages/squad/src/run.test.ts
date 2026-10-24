@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { gunzipSync } from "node:zlib";
 import { makeFakeDocker } from "../test/fake-docker.ts";
-import { addAccount, getAccount, getHealth, putHealth, setState } from "./accounts/store.ts";
+import { addAccount, getAccount, getHealth, putHealth, roomSince, setState } from "./accounts/store.ts";
 import { emptyHealth } from "./accounts/health.ts";
 import { getSession } from "./sessions.ts";
 import { ensureHome, layoutOf, type HomeLayout } from "./home.ts";
@@ -97,12 +98,24 @@ test("ok: one pass row with the tokens, health updated, the key copy gone, one a
   assert.equal(runs[0]!.at(-1), "say ok");
 });
 
-test("the raw stdout goes to logs/passes/<date>/<passId>.log with mode 0600", async () => {
+test("the raw stdout and the prompt go gzipped to logs/passes/<date>/<passId>.{log,prompt}.gz with mode 0600", async () => {
   const r = rig();
   const res = await runPass(req(r), r.deps);
-  assert.equal(res.logPath, join(r.home.passLogs, "2026-10-24", `${res.passId}.log`));
+  assert.equal(res.logPath, join(r.home.passLogs, "2026-10-24", `${res.passId}.log.gz`));
   assert.equal(statSync(res.logPath!).mode & 0o777, 0o600);
-  assert.equal(readFileSync(res.logPath!, "utf8"), readFileSync(join(import.meta.dirname, "..", "test/fixtures/captures/pi/ok.jsonl"), "utf8"));
+  assert.equal(gunzipSync(readFileSync(res.logPath!)).toString("utf8"), readFileSync(join(import.meta.dirname, "..", "test/fixtures/captures/pi/ok.jsonl"), "utf8"));
+  const prompt = join(r.home.passLogs, "2026-10-24", `${res.passId}.prompt.gz`);
+  assert.equal(statSync(prompt).mode & 0o777, 0o600);
+  assert.equal(gunzipSync(readFileSync(prompt)).toString("utf8"), "say ok");
+  assert.deepEqual(readdirSync(join(r.home.passLogs, "2026-10-24")).sort(), [`${res.passId}.log.gz`, `${res.passId}.prompt.gz`]);
+});
+
+test("a pass with no account writes no log and no prompt", async () => {
+  const r = rig([]);
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "no-account");
+  assert.equal(res.logPath, null);
+  assert.deepEqual(readdirSync(r.home.passLogs), []);
 });
 
 test("free-tier 403: a provider failure that leaves the key account healthy", async () => {
@@ -360,6 +373,7 @@ test("claude token pass: the prompt goes on stdin, not in the argv; tokens, mode
   assert.equal(p.cost_usd, null);
   const h = getHealth(r.store.db, "claude/t1");
   assert.deepEqual([h.left5h, h.leftWeek], [92, 70]);
+  assert.deepEqual(roomSince(r.store.db, "claude/t1", new Date(0)), [{ at: NOW.toISOString(), source: "pass", left5h: 92, leftWeek: 70 }], "the history keeps the reading");
 });
 
 test("claude token pass: the usage export holds exactly one message line from the result tokens", async () => {

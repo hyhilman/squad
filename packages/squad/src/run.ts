@@ -5,7 +5,7 @@
 // (`failureOf`, `resolveCandidates`); the spawn code is `spawnDocker` and nothing else.
 
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -13,7 +13,7 @@ import { findForbidden } from "@squad/contract";
 import { bundledPath } from "./paths.ts";
 import { applyOutcome } from "./accounts/health.ts";
 import { withKeyCopy } from "./accounts/keycopy.ts";
-import { candidates, getAccount, getHealth, putHealth, setState, type AccountRow } from "./accounts/store.ts";
+import { candidates, getAccount, getHealth, putHealth, recordRoom, setState, type AccountRow } from "./accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_NO_USAGE_EXPORT_ENV, envOn, envOptional } from "./settings.ts";
 import { dockerKillArgv, dockerRunArgv, dockerStopArgv, stopGraceS, type PassPlan } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
@@ -21,6 +21,7 @@ import { IMAGES } from "./images.ts";
 import { ulid } from "./ids.ts";
 import { makeLog, type Log } from "./log.ts";
 import { scopeState } from "./health/breaker.ts";
+import { writePassFiles } from "./passfiles.ts";
 import { pick, type PickResult } from "./pool/pick.ts";
 import { loadPrices, passCost } from "./prices.ts";
 import { checkSessionId, deleteSession, getSession, pinSession, sessionDir, touchSession } from "./sessions.ts";
@@ -221,14 +222,6 @@ function withLastMessage(sp: Spawned, outDir: string): Spawned {
   return text === "" ? sp : { ...sp, stream: { ...sp.stream, text, texts: [text] } };
 }
 
-function writeLog(home: HomeLayout, now: Date, passId: string, raw: string): string {
-  const dir = join(home.passLogs, now.toISOString().slice(0, 10));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, `${passId}.log`);
-  writeFileSync(path, raw, { mode: 0o600 });
-  return path;
-}
-
 const noAccount = (store: Store, req: PassRequest, deps: RunDeps, now: Date, failure: Failure): PassResult => {
   const id = ulid(now.getTime());
   store.startPass({ id, startedAt: now.toISOString(), project: deps.project, flow: req.caller.flow, action: req.caller.action, runner: req.runner, model: req.model, ...taskOf(req) });
@@ -344,7 +337,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
 
     const ended = nowFn();
     const failure = failureOf(sp.stream, sp.exitCode, sp.stopped, sp.stderrTail);
-    const logPath = writeLog(deps.home, ended, passId, sp.raw);
+    const logPath = writePassFiles(deps.home, ended, passId, req.prompt, sp.raw);
     // Only a key account has a bill. The model is what the stream saw, else what we asked for.
     const cost = account.kind === "key" ? passCost(account.kind, sp.stream.model ?? req.model, sp.stream.usage, loadPrices(deps.home)) : null;
     store.endPass({
@@ -396,6 +389,7 @@ function feedHealth(deps: RunDeps, log: Log, id: string, passId: string, at: Dat
   const change = applyOutcome(getHealth(db, id), { ...(failure === undefined ? {} : { failure }), ...(stream.room === undefined ? {} : { room: stream.room }) }, at, deps.env);
   try {
     putHealth(db, change.health);
+    if (stream.room !== undefined) recordRoom(db, id, at, "pass", stream.room.left5h, stream.room.leftWeek);
     if (change.accountState === "dead") setState(db, id, "dead", change.event?.code, at);
   } catch (e) {
     if (!isBusy(e)) throw e;

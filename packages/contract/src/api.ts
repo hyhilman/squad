@@ -28,6 +28,8 @@ export interface AccountView {
   readonly name: string;
   readonly kind: AccountKind;
   readonly ownerEmail: string;
+  /** The email of the seat that is logged in (the ID token's); it can differ from the owner. Unset for a key or token account. */
+  readonly loginEmail?: string;
   readonly pools: readonly string[];
   readonly health: Health;
   readonly coolUntil?: string;
@@ -64,6 +66,71 @@ export interface UsageRow {
   readonly usedWeekPct?: number;
 }
 
+/** One bucket of `usageSeries` for one account. `bucket` is the UTC start: `2026-10-24` or `2026-10-24T13:00:00Z`. */
+export interface UsageSeriesPoint {
+  readonly bucket: string;
+  readonly account: string;
+  readonly passes: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly reasoning: number;
+  readonly costUsd?: number;
+}
+
+/** One reading of the room left in an account's windows. */
+export interface RoomPoint {
+  readonly at: string;
+  /** `read`: the usage read of a codex login. `pass`: the rate-limit event of a pass. */
+  readonly source: "read" | "pass";
+  readonly left5h?: number;
+  readonly leftWeek?: number;
+}
+
+export interface PassTokens {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly reasoning: number;
+}
+
+/** One pass as the history lists it. */
+export interface PassView {
+  readonly passId: string;
+  /** Unset for a pass that found no account. */
+  readonly account?: string;
+  readonly startedAt: string;
+  readonly endedAt?: string;
+  readonly caller: { readonly flow: string; readonly action: string };
+  readonly task?: { readonly kind: string; readonly id: string };
+  readonly model: string;
+  /** Unset while the pass runs. */
+  readonly outcome?: string;
+  readonly failKind?: string;
+  readonly failCode?: string;
+  readonly tokens: PassTokens;
+  readonly costUsd?: number;
+  /** The stored stream is still on disk. */
+  readonly hasTranscript: boolean;
+}
+
+/** What the assistant said, parsed from the stored stream; never the raw stream. Secrets are `[hidden]`. */
+export interface PassTranscript {
+  readonly texts: readonly string[];
+  readonly final: string;
+}
+
+export interface PassDetail extends PassView {
+  readonly prompt?: string;
+  readonly transcript?: PassTranscript;
+  /** The prompt or the stream file is gone (cleaned up by age) though the pass should have kept it. */
+  readonly expired?: true;
+  /** The prompt or the transcript was cut at 256 KB. */
+  readonly truncated?: true;
+}
+
 export interface SetFloorBody {
   /** Percent of each window left for the owner, 0 to 100. Null = back to the default. */
   readonly floor5h: number | null;
@@ -83,7 +150,7 @@ export type LoginState = "pending" | "done" | "failed" | "expired";
 export interface LoginStatus {
   readonly loginId: string;
   readonly state: LoginState;
-  /** For `failed`: why, such as `owner-mismatch` (the login belongs to another email). */
+  /** For `failed`: why, such as `seat-mismatch` (a re-login with another seat's email). */
   readonly reason?: string;
 }
 
@@ -105,6 +172,11 @@ export const ROUTES = {
   startLogin: { method: "POST", path: "/api/accounts/:runner/:name/login" },
   loginStatus: { method: "GET", path: "/api/logins/:loginId" },
   usage: { method: "GET", path: "/api/usage" },
+  usageSeries: { method: "GET", path: "/api/usage/series" },
+  roomSeries: { method: "GET", path: "/api/accounts/:runner/:name/room" },
+  listPasses: { method: "GET", path: "/api/passes" },
+  getPass: { method: "GET", path: "/api/passes/:passId" },
+  addAccount: { method: "POST", path: "/api/accounts" },
 } as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
 
 export type RouteName = keyof typeof ROUTES;
@@ -122,6 +194,12 @@ export interface Api {
   startLogin: { params: AccountParams; query: void; body: void; res: LoginStart };
   loginStatus: { params: { readonly loginId: string }; query: void; body: void; res: LoginStatus };
   usage: { params: void; query: { readonly by: UsageBy; readonly since?: string; readonly account?: string }; body: void; res: readonly UsageRow[] };
+  usageSeries: { params: void; query: { readonly by: "day" | "hour"; readonly since?: string; readonly account?: string }; body: void; res: readonly UsageSeriesPoint[] };
+  roomSeries: { params: AccountParams; query: { readonly since?: string }; body: void; res: readonly RoomPoint[] };
+  listPasses: { params: void; query: { readonly account?: string; readonly since?: string; readonly limit?: number; readonly before?: string }; body: void; res: readonly PassView[] };
+  getPass: { params: { readonly passId: string }; query: void; body: void; res: PassDetail };
+  /** Starts a device login for a NEW codex account owned by the signed-in person. The account exists once the login ends well. */
+  addAccount: { params: void; query: void; body: { readonly runner: "codex"; readonly name: string }; res: LoginStart };
 }
 
 // Every route has a type entry, and every type entry a route.

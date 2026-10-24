@@ -361,3 +361,84 @@ async function waitFor(cond: () => boolean): Promise<void> {
   }
   assert.fail("timed out waiting");
 }
+
+// ---- add a new account, and the seat rule on a re-login ----
+
+async function beginAdd(r: Rig, email: string, name: string) {
+  const started = r.logins.startAdd(email, name);
+  await r.tick();
+  r.procs.at(-1)!.say(CAPTURE);
+  return { ...(await started), proc: r.procs.at(-1)! };
+}
+
+test("add: two names for one person, each seat with its own email; the person owns both", async () => {
+  const r = rig();
+  const one = await beginAdd(r, "Boss@Example.test", "seat-one");
+  const two = await beginAdd(r, "boss@example.test", "seat-two");
+  writeAuth(one.proc.staging, "one@seats.test");
+  writeAuth(two.proc.staging, "two@seats.test");
+  one.proc.exit(0);
+  two.proc.exit(0);
+  await waitFor(() => r.logins.status("boss@example.test", one.loginId).state !== "pending" && r.logins.status("boss@example.test", two.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("boss@example.test", one.loginId), { loginId: one.loginId, state: "done" });
+  assert.deepEqual(r.logins.status("boss@example.test", two.loginId), { loginId: two.loginId, state: "done" });
+  const rows = ["seat-one", "seat-two"].map((n) => getAccount(r.store.db, `codex/${n}`)!);
+  assert.deepEqual(rows.map((a) => [a.kind, a.state, a.ownerEmail, a.loginEmail]), [
+    ["login", "active", "Boss@Example.test", "one@seats.test"], ["login", "active", "boss@example.test", "two@seats.test"],
+  ]);
+  assert.ok(existsSync(join(r.home.accounts, "codex", "seat-one", "auth.json")));
+  await r.logins.close();
+  r.store.close();
+});
+
+test("add: an existing name is 409, a bad name is 400, the same name twice at once is 409, and the cap of running logins holds", async () => {
+  const r = rig();
+  r.acct("taken");
+  await refused(r.logins.startAdd("boss@example.test", "taken"), 409, "conflict");
+  await refused(r.logins.startAdd("boss@example.test", "../x"), 400, "bad-request");
+  await refused(r.logins.startAdd("boss@example.test", "Upper"), 400, "bad-request");
+  await beginAdd(r, "boss@example.test", "n1");
+  await refused(r.logins.startAdd("boss@example.test", "n1"), 409, "conflict");
+  await beginAdd(r, "boss@example.test", "n2");
+  await beginAdd(r, "boss@example.test", "n3");
+  await beginAdd(r, "boss@example.test", "n4");
+  await refused(r.logins.startAdd("boss@example.test", "n5"), 409, "conflict");
+  await r.logins.close();
+  r.store.close();
+});
+
+test("add: a login with no identity is no-login and no account is made", async () => {
+  const r = rig();
+  const s = await beginAdd(r, "boss@example.test", "x");
+  writeFileSync(join(s.proc.staging, "auth.json"), JSON.stringify({ tokens: { access_token: "SECRET-ACCESS" } }));
+  s.proc.exit(0);
+  await waitFor(() => r.logins.status("boss@example.test", s.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("boss@example.test", s.loginId), { loginId: s.loginId, state: "failed", reason: "no-login" });
+  assert.equal(getAccount(r.store.db, "codex/x"), undefined);
+  assert.ok(!existsSync(join(r.home.accounts, "codex", "x")));
+  await r.logins.close();
+  r.store.close();
+});
+
+test("re-login of a seat: another seat's email fails with seat-mismatch and moves nothing; the same seat revives it", async () => {
+  const r = rig();
+  const a = r.acct("alice", "boss@example.test");
+  r.store.db.prepare("UPDATE accounts SET login_email = 'seat@example.test' WHERE id = 'codex/alice'").run();
+  const bad = await begin(r, "boss@example.test", getAccount(r.store.db, a.id)!);
+  writeAuth(bad.proc.staging, "other@example.test");
+  bad.proc.exit(0);
+  await waitFor(() => r.logins.status("boss@example.test", bad.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("boss@example.test", bad.loginId), { loginId: bad.loginId, state: "failed", reason: "seat-mismatch" });
+  assert.ok(!existsSync(join(r.home.accounts, "codex", "alice")));
+  assert.equal(getAccount(r.store.db, a.id)!.state, "dead");
+  assert.ok(!r.logs.join("\n").includes("other@example"), "no email of the other seat in the log");
+  const good = await begin(r, "boss@example.test", getAccount(r.store.db, a.id)!);
+  writeAuth(good.proc.staging, "Seat@example.test");
+  good.proc.exit(0);
+  await waitFor(() => r.logins.status("boss@example.test", good.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("boss@example.test", good.loginId), { loginId: good.loginId, state: "done" });
+  const row = getAccount(r.store.db, a.id)!;
+  assert.deepEqual([row.state, row.ownerEmail], ["active", "boss@example.test"]);
+  await r.logins.close();
+  r.store.close();
+});

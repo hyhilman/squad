@@ -2,23 +2,25 @@
 // under /auth, and the built web app as static files.
 //
 // A person sees only the accounts whose owner email is theirs; any other id is a 404, so ids do not
-// leak. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
+// leak. An admin (the ID token's groups hold SQUAD_OIDC_ADMIN_GROUP) sees every account and may set
+// floors and enable or disable any of them; consent and login stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { ROUTES, findForbidden, matchPath, type AccountView, type Api, type ApiError, type ErrorCode, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
-import { getAccount, getHealth, healthOf, listAccounts, setConsent, setOwnerFloors, setState, type AccountRow } from "../accounts/store.ts";
+import { ROUTES, findForbidden, matchPath, type AccountView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { getAccount, getHealth, healthOf, listAccounts, roomSince, setConsent, setOwnerFloors, setState, type AccountRow } from "../accounts/store.ts";
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_FLOOR_DEFAULT_ENV, envNum, envOptional } from "../settings.ts";
 import type { Store } from "../store/db.ts";
-import { USAGE_BYS, usageBy, type UsageBy } from "../usage/report.ts";
+import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
+import { passDetail, passViews } from "./passes.ts";
 import { loadWebConfig } from "./settings.ts";
 import { startTicker, type Timers } from "./ticker.ts";
 
@@ -82,6 +84,9 @@ const bad = (message: string): HttpError => new HttpError(400, "bad-request", me
 // ---- input checks, one per route that takes a query or a body ----
 
 const SINCE = /^(\d+)([hd])$/;
+const PASS_ID = /^[0-9A-Za-z]{1,40}$/;
+const PASS_LIMIT_DEFAULT = 50;
+const PASS_LIMIT_MAX = 200;
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const onlyKeys = (o: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(o).every((k) => keys.includes(k));
 const floor = (v: unknown): number | null => {
@@ -92,7 +97,44 @@ const floor = (v: unknown): number | null => {
 
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
-  me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {},
+  me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {},
+  addAccount: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["runner", "name"]) || typeof b.name !== "string") throw bad("body must be {runner: \"codex\", name}");
+      if (b.runner !== "codex") throw bad("only a codex account can be added from the web: run `squad login` on the host for the rest");
+      return { runner: "codex", name: b.name };
+    },
+  },
+  usageSeries: {
+    query: (q) => {
+      const by = q.get("by");
+      if (by !== "day" && by !== "hour") throw bad("by must be day or hour");
+      const since = q.get("since");
+      const account = q.get("account");
+      return { by, ...(since === null ? {} : { since }), ...(account === null ? {} : { account }) };
+    },
+  },
+  roomSeries: {
+    query: (q) => {
+      const since = q.get("since");
+      return since === null ? {} : { since };
+    },
+  },
+  listPasses: {
+    query: (q) => {
+      const account = q.get("account");
+      const since = q.get("since");
+      const before = q.get("before");
+      const rawLimit = q.get("limit");
+      let limit: number | undefined;
+      if (rawLimit !== null) {
+        limit = /^\d{1,3}$/.test(rawLimit) ? Number(rawLimit) : NaN;
+        if (!(limit >= 1 && limit <= PASS_LIMIT_MAX)) throw bad(`limit must be a whole number from 1 to ${PASS_LIMIT_MAX}`);
+      }
+      if (before !== null && !PASS_ID.test(before)) throw bad("before must be a pass id");
+      return { ...(account === null ? {} : { account }), ...(since === null ? {} : { since }), ...(limit === undefined ? {} : { limit }), ...(before === null ? {} : { before }) };
+    },
+  },
   setFloor: {
     body: (b) => {
       if (!isObj(b) || !onlyKeys(b, ["floor5h", "floorWeek"]) || !("floor5h" in b) || !("floorWeek" in b)) throw bad("body must be {floor5h, floorWeek}");
@@ -124,7 +166,7 @@ const INPUTS: Inputs = {
 
 // ---- the handlers ----
 
-function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
+function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | undefined): Handlers {
   const db = o.store.db;
   const now = o.now ?? (() => new Date());
   const busyOf = o.busy ?? ((a: AccountRow): boolean => {
@@ -132,6 +174,14 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
     const lock = lockPathOf(o.home, a);
     return existsSync(lock) && flockBusy(lock);
   });
+  /** The groups claim holds the admin group, by exact string equality. Unset = nobody. */
+  const isAdmin = (s: Session): boolean => adminGroup !== undefined && s.groups.includes(adminGroup);
+  const sinceOf = (spec: string, fallback: string): Date => {
+    const rel = SINCE.exec(spec === "" ? fallback : spec);
+    const at = rel !== null ? new Date(now().getTime() - Number(rel[1]) * (rel[2] === "d" ? 86_400_000 : 3_600_000)) : /^\d{4}-\d{2}-\d{2}/.test(spec) ? new Date(spec) : new Date(NaN);
+    if (Number.isNaN(at.getTime())) throw bad("since must look like 7d, 12h or 2026-10-01");
+    return at;
+  };
   const mine = (s: Session): AccountRow[] => listAccounts(db).filter((a) => a.ownerEmail !== null && a.ownerEmail.toLowerCase() === s.email.toLowerCase());
   /** The person's own account, or a 404 that looks the same as "no such account". */
   const owned = (s: Session, runner: string, name: string): AccountRow => {
@@ -139,13 +189,29 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
     if (a === undefined || a.ownerEmail === null || a.ownerEmail.toLowerCase() !== s.email.toLowerCase()) throw NOT_FOUND;
     return a;
   };
+  /** An admin reads and manages any account; a person only their own. Else the same 404. */
+  const managed = (s: Session, runner: string, name: string): AccountRow => {
+    if (!isAdmin(s)) return owned(s, runner, name);
+    const a = getAccount(db, `${runner}/${name}`);
+    if (a === undefined) throw NOT_FOUND;
+    return a;
+  };
+  const visible = (s: Session): AccountRow[] => (isAdmin(s) ? listAccounts(db) : mine(s));
+  /** The account ids a query may cover: undefined = every account, also the passes that found none (an admin). */
+  const scope = (s: Session, account: string | undefined): string[] | undefined => {
+    if (account !== undefined) {
+      const [runner = "", ...rest] = account.split("/");
+      return [managed(s, runner, rest.join("/")).id];
+    }
+    return isAdmin(s) ? undefined : mine(s).map((a) => a.id);
+  };
   const view = (a: AccountRow): AccountView => {
     const h = getHealth(db, a.id);
     const health = healthOf(a, h, now());
     const dflt = envNum(SQUAD_FLOOR_DEFAULT_ENV, o.env);
     const lastCode = a.deadCode ?? h.lastFailCode;
     return {
-      account: a.id, runner: a.runner, name: a.name, kind: a.kind, ownerEmail: a.ownerEmail ?? "", pools: [], health,
+      account: a.id, runner: a.runner, name: a.name, kind: a.kind, ownerEmail: a.ownerEmail ?? "", ...(a.loginEmail === null ? {} : { loginEmail: a.loginEmail }), pools: [], health,
       ...(health === "cooling" && h.coolUntil !== null ? { coolUntil: h.coolUntil } : {}),
       ...(lastCode === null ? {} : { lastCode }),
       ...(h.left5h === null ? {} : { left5h: h.left5h }),
@@ -175,16 +241,16 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
   };
 
   const real: Handlers = {
-    me: ({ session }) => ({ email: session.email, name: session.name, admin: false }),
-    listAccounts: ({ session }) => mine(session).map(view),
-    getAccount: ({ session, params }) => view(owned(session, params.runner, params.name)),
+    me: ({ session }) => ({ email: session.email, name: session.name, admin: isAdmin(session) }),
+    listAccounts: ({ session }) => visible(session).map(view),
+    getAccount: ({ session, params }) => view(managed(session, params.runner, params.name)),
     setFloor: ({ session, params, body }) => {
-      const a = owned(session, params.runner, params.name);
+      const a = managed(session, params.runner, params.name);
       setOwnerFloors(db, a.id, body.floor5h, body.floorWeek);
       return view(getAccount(db, a.id)!);
     },
     setEnabled: ({ session, params, body }) => {
-      const a = owned(session, params.runner, params.name);
+      const a = managed(session, params.runner, params.name);
       // A dead account comes back only through a fresh login; a moved one lives in another home.
       if (a.state === "dead" || a.state === "moved") throw new HttpError(409, "conflict", `the account is ${a.state}`);
       setState(db, a.id, body.enabled ? "active" : "disabled");
@@ -202,20 +268,43 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins): Handlers {
     loginStatus: ({ session, params }) => refuse(() => logins.status(session.email, params.loginId)),
     usage: ({ session, query }) => {
       if (!(USAGE_BYS as readonly string[]).includes(query.by)) throw bad(`by must be one of ${USAGE_BYS.join(", ")}`);
-      const spec = query.since ?? "7d";
-      const rel = SINCE.exec(spec);
-      const since = rel !== null ? new Date(now().getTime() - Number(rel[1]) * (rel[2] === "d" ? 86_400_000 : 3_600_000)) : /^\d{4}-\d{2}-\d{2}/.test(spec) ? new Date(spec) : new Date(NaN);
-      if (Number.isNaN(since.getTime())) throw bad("since must look like 7d, 12h or 2026-10-01");
-      let ids = mine(session).map((a) => a.id);
-      if (query.account !== undefined) {
-        const [runner = "", ...rest] = query.account.split("/");
-        ids = [owned(session, runner, rest.join("/")).id];
-      }
-      return usageBy(db, query.by as UsageBy, since, ids).map((r): ApiUsageRow => ({
+      const since = sinceOf(query.since ?? "7d", "7d");
+      return usageBy(db, query.by as UsageBy, since, scope(session, query.account)).map((r): ApiUsageRow => ({
         key: r.key, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning,
         ...(r.costUsd === null ? {} : { costUsd: r.costUsd }),
       }));
     },
+    usageSeries: ({ session, query }) => {
+      const since = sinceOf(query.since ?? "", query.by === "hour" ? "2d" : "30d");
+      return usageSeries(db, query.by, since, scope(session, query.account)).map((r) => ({
+        bucket: r.bucket, account: r.account, passes: r.passes, input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, reasoning: r.reasoning,
+        ...(r.costUsd === null ? {} : { costUsd: r.costUsd }),
+      }));
+    },
+    roomSeries: ({ session, params, query }) => {
+      const a = managed(session, params.runner, params.name);
+      return roomSince(db, a.id, sinceOf(query.since ?? "", "7d")).map((r): RoomPoint => ({
+        at: r.at, source: r.source, ...(r.left5h === null ? {} : { left5h: r.left5h }), ...(r.leftWeek === null ? {} : { leftWeek: r.leftWeek }),
+      }));
+    },
+    listPasses: ({ session, query }) => {
+      const accounts = scope(session, query.account);
+      const rows = listPassesPage(db, {
+        limit: query.limit ?? PASS_LIMIT_DEFAULT,
+        ...(accounts === undefined ? {} : { accounts }),
+        ...(query.since === undefined ? {} : { since: sinceOf(query.since, "7d") }),
+        ...(query.before === undefined ? {} : { before: query.before }),
+      });
+      return passViews(o.home, rows);
+    },
+    getPass: ({ session, params }) => {
+      const row = PASS_ID.test(params.passId) ? getPassRow(db, params.passId) : undefined;
+      // A pass that found no account has no owner: only an admin reads it.
+      const owner = row?.account === null || row === undefined ? undefined : getAccount(db, row.account);
+      if (row === undefined || !(isAdmin(session) || (owner !== undefined && owner.ownerEmail !== null && owner.ownerEmail.toLowerCase() === session.email.toLowerCase()))) throw new HttpError(404, "not-found", "no such pass");
+      return passDetail(o.home, row);
+    },
+    addAccount: ({ session, body }) => refuseAsync(() => logins.startAdd(session.email, body.name)),
   };
   return { ...real, ...o.handlers };
 }
@@ -293,7 +382,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     start: opts.login?.start ?? real.start, stop: opts.login?.stop ?? real.stop,
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
-  const handlers = makeHandlers(opts, logins);
+  const handlers = makeHandlers(opts, logins, cfg.adminGroup);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;

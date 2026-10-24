@@ -5,6 +5,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { makeFakeDocker } from "../../test/fake-docker.ts";
 import { fakeIdToken } from "../../test/fake-jwt.ts";
 import { addAccount, candidates, getAccount, getHealth, putHealth, setState, type AccountRow } from "../accounts/store.ts";
@@ -453,6 +454,16 @@ test("log: prints the path and the last 50 lines, minus any line findForbidden f
   assert.equal(shown[0], "line 21", "the last 50 lines are taken before the bad ones are dropped");
   assert.equal(shown.at(-1), "line 70");
   assert.equal(shown.length, 50 - 3);
+});
+
+test("log: reads a gzipped pass log (.log.gz) too", async () => {
+  const r = rig();
+  const id = ulid(NOW.getTime());
+  const dir = join(r.home.passLogs, "2026-10-24");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${id}.log.gz`), gzipSync("zip line 1\nzip line 2\n"));
+  assert.equal(await r.run("log", id), 0);
+  assert.deepEqual(r.out.join("").split("\n"), [join(dir, `${id}.log.gz`), "zip line 1", "zip line 2", ""]);
 });
 
 test("log: an unknown or malformed id is exit 2", async () => {

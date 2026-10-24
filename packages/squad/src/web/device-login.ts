@@ -13,7 +13,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ErrorCode, LoginStart, LoginState, LoginStatus } from "@squad/contract";
-import type { AccountRow } from "../accounts/store.ts";
+import { ACCOUNT_NAME, accountId, getAccount, type AccountRow } from "../accounts/store.ts";
 import { dockerKillArgv, dockerStopArgv, stopGraceS } from "../docker.ts";
 import type { HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
@@ -121,10 +121,17 @@ export interface DeviceLoginDeps extends LoginRunner {
   readonly timers?: LoginTimers;
 }
 
+/** What a login is for: an account row, or the id and name of one that does not exist yet. */
+type Target = Pick<AccountRow, "id" | "name" | "loginEmail">;
+
 interface Entry {
   readonly id: string;
   readonly owner: string;
-  readonly account: AccountRow;
+  /** The email as the person signed in with it; a new account stores it. */
+  readonly ownerAs: string;
+  readonly account: Target;
+  /** A new account from the web: it does not exist until the login ends well. */
+  readonly add: boolean;
   readonly name: string;
   readonly staging: string;
   readonly cwd: string;
@@ -157,14 +164,30 @@ export class DeviceLogins {
     for (const [id, e] of this.entries) if (e.finishedAt !== undefined && now - e.finishedAt > KEEP_MS) this.entries.delete(id);
   }
 
-  async start(email: string, a: AccountRow): Promise<LoginStart> {
+  /** A re-login of a dead account. */
+  start(email: string, a: AccountRow): Promise<LoginStart> {
+    return this.begin(email, a, false);
+  }
+
+  /** A login for a NEW codex account. The person owns it; the seat's email comes from the login. */
+  startAdd(email: string, name: string): Promise<LoginStart> {
+    if (!ACCOUNT_NAME.test(name)) return Promise.reject(new LoginRefused(400, "bad-request", "the name must be lower-case letters, digits, dot, dash or underscore, and start with a letter or digit"));
+    const id = accountId("codex", name);
+    if (getAccount(this.d.store.db, id) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
+    return this.begin(email, { id, name, loginEmail: null }, true);
+  }
+
+  private async begin(email: string, a: Target, add: boolean): Promise<LoginStart> {
     const { env, home, log } = this.d;
     if (envOn(SQUAD_NO_WEB_LOGIN_ENV, env)) throw new LoginRefused(501, "disabled", "web login is off (SQUAD_NO_WEB_LOGIN=1)");
     // A dry run starts nothing, and a login with no container cannot show a code.
     if (envOn(SQUAD_DRY_RUN_ENV, env)) throw new LoginRefused(501, "disabled", "web login starts no container while SQUAD_DRY_RUN=1");
-    if (a.runner !== "codex" || a.kind !== "login") throw new LoginRefused(400, "bad-request", `web login is for codex login accounts only: run \`squad login ${a.name}\` on the host`);
-    // Like `squad login`: a login that works is only for a dead account. A live one has a pass or a refresh using it.
-    if (a.state !== "dead") throw new LoginRefused(409, "conflict", `the account is ${a.state}: a login is for a dead account`);
+    if (!add) {
+      const row = a as AccountRow;
+      if (row.runner !== "codex" || row.kind !== "login") throw new LoginRefused(400, "bad-request", `web login is for codex login accounts only: run \`squad login ${a.name}\` on the host`);
+      // Like `squad login`: a login that works is only for a dead account. A live one has a pass or a refresh using it.
+      if (row.state !== "dead") throw new LoginRefused(409, "conflict", `the account is ${row.state}: a login is for a dead account`);
+    }
     if (this.closed) throw new LoginRefused(501, "disabled", "the server is stopping");
     this.sweep();
     const running = [...this.entries.values()].filter((e) => this.live(e));
@@ -177,7 +200,7 @@ export class DeviceLogins {
     const cwd = join(tmpdir(), `squad-login-${passId}`);
     const argv = loginArgv("codex", { cwd, passId, project: "squad-web", user: this.d.user, home: home.root, staging, name: a.name, tty: false });
     const name = argv[argv.indexOf("--name") + 1]!;
-    const e: Entry = { id, owner: email.toLowerCase(), account: a, name, staging, cwd, state: "starting" };
+    const e: Entry = { id, owner: email.toLowerCase(), ownerAs: email, account: a, add, name, staging, cwd, state: "starting" };
     this.entries.set(id, e);
     mkdirSync(staging, { recursive: true, mode: 0o700 });
     mkdirSync(cwd, { mode: 0o700 });
@@ -262,7 +285,9 @@ export class DeviceLogins {
         return this.end(e, "failed", "login-failed");
       }
       try {
-        const r = await finishLogin({ store: this.d.store, home: this.d.home, runner: "codex", name: e.account.name, staging: e.staging, owner: e.owner, now: this.d.now() });
+        // A row with a known seat is checked by seat; a legacy row with none keeps the owner check.
+        const check = e.add ? { addFor: e.ownerAs } : e.account.loginEmail === null ? { owner: e.owner } : {};
+        const r = await finishLogin({ store: this.d.store, home: this.d.home, runner: "codex", name: e.account.name, staging: e.staging, ...check, now: this.d.now() });
         if (r.ok) this.end(e, "done");
         else this.end(e, "failed", r.reason === "empty" ? "login-failed" : r.reason);
       } catch {

@@ -95,6 +95,20 @@ export const MIGRATIONS: readonly string[] = [
      PRIMARY KEY (runner, id)
    ) STRICT`,
   `ALTER TABLE accounts ADD COLUMN consent_at TEXT`,
+  // The seat's own email. Before this, squad set the owner from the login's identity, so for a codex
+  // or claude login row the two are the same. pi has no identity: its owner came from --owner.
+  `ALTER TABLE accounts ADD COLUMN login_email TEXT`,
+  `UPDATE accounts SET login_email = owner_email WHERE kind = 'login' AND runner IN ('codex', 'claude')`,
+  // The history of room left, for a chart: the latest value alone is in `health`.
+  `CREATE TABLE room_reads (
+     id INTEGER PRIMARY KEY,
+     account TEXT NOT NULL,
+     at TEXT NOT NULL,
+     left_5h REAL,
+     left_week REAL,
+     source TEXT NOT NULL
+   ) STRICT`,
+  `CREATE INDEX room_reads_account ON room_reads (account, at)`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

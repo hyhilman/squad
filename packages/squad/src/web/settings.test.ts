@@ -15,7 +15,7 @@ const ENV = { SQUAD_WEB_URL: "https://squad.example.test", SQUAD_OIDC_ISSUER: "h
 const secretPath = (h: ReturnType<typeof home>): string => join(h.root, "squad.secret.toml");
 
 test("every web setting has a one-line why, and the list is pinned", () => {
-  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP"]);
+  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP", "SQUAD_OIDC_ADMIN_GROUP"]);
   for (const s of WEB_SETTINGS) assert.ok(s.why.length > 0 && !s.why.includes("\n"), s.key);
 });
 
@@ -24,6 +24,7 @@ test("the defaults: port 20140, bind 127.0.0.1, no group, https means Secure coo
   assert.equal(c.port, 20140);
   assert.equal(c.bind, "127.0.0.1");
   assert.equal(c.group, undefined);
+  assert.equal(c.adminGroup, undefined, "unset = nobody is admin");
   assert.equal(c.secure, true);
   assert.equal(c.origin, "https://squad.example.test");
   assert.equal(c.url, "https://squad.example.test");
@@ -87,4 +88,9 @@ test("missing or bad settings refuse the start", () => {
 test("SQUAD_NO_WEB_LOGIN=1 refuses the start (fail safe)", () => {
   assert.throws(() => loadWebConfig({ ...ENV, SQUAD_NO_WEB_LOGIN: "1" }, home()), /SQUAD_NO_WEB_LOGIN/);
   assert.ok(loadWebConfig({ ...ENV, SQUAD_NO_WEB_LOGIN: "0" }, home()));
+});
+
+test("SQUAD_OIDC_ADMIN_GROUP is read as is; an empty value is unset", () => {
+  assert.equal(loadWebConfig({ ...ENV, SQUAD_OIDC_ADMIN_GROUP: "squad-admins" }, home()).adminGroup, "squad-admins");
+  assert.equal(loadWebConfig({ ...ENV, SQUAD_OIDC_ADMIN_GROUP: "" }, home()).adminGroup, undefined);
 });
