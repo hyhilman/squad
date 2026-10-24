@@ -264,3 +264,21 @@ export function catalogCost(db: DatabaseSync, prices: Prices, runner: string, mo
   const p = priceAt(db, key, at) ?? prices.get(key);
   return p === undefined ? null : costOf(usage, p);
 }
+
+/**
+ * Prices the finished passes that have no catalog cost yet, such as those from before the cost was
+ * stored. A pass from before the price history uses the saved copy. Returns how many it priced.
+ */
+export function backfillCatalogCosts(db: DatabaseSync, prices: Prices, limit = 5000): number {
+  const rows = db.prepare(
+    "SELECT id, started_at, runner, model, input, output, cache_read, cache_write, reasoning FROM passes WHERE catalog_cost_usd IS NULL AND ended_at IS NOT NULL AND (input + output + cache_read + cache_write) > 0 ORDER BY started_at LIMIT ?",
+  ).all(limit) as unknown as { id: string; started_at: string; runner: string; model: string; input: number; output: number; cache_read: number; cache_write: number; reasoning: number }[];
+  const set = db.prepare("UPDATE passes SET catalog_cost_usd = ? WHERE id = ? AND catalog_cost_usd IS NULL");
+  let n = 0;
+  for (const r of rows) {
+    const usage = { input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning };
+    const c = catalogCost(db, prices, r.runner, r.model, usage, new Date(r.started_at));
+    if (c !== null) n += Number(set.run(c, r.id).changes);
+  }
+  return n;
+}

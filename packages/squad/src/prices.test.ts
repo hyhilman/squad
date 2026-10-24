@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ensureHome, layoutOf } from "./home.ts";
 import { DatabaseSync } from "node:sqlite";
 import { migrate } from "./store/db.ts";
-import { PRICES_FILE, PRICES_TTL_MS, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, catalogCost, catalogKey, costOf, loadPrices, loadProviders, parseCatalog, parseProviders, passCost, priceAt, recordPriceHistory, refreshPrices } from "./prices.ts";
+import { PRICES_FILE, PRICES_TTL_MS, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, backfillCatalogCosts, catalogCost, catalogKey, costOf, loadPrices, loadProviders, parseCatalog, parseProviders, passCost, priceAt, recordPriceHistory, refreshPrices } from "./prices.ts";
 
 const near = (a: number, b: number): void => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -263,4 +263,22 @@ test("catalogCost uses the price at the pass time, falls back to the saved copy,
   near(catalogCost(db, cur, "codex", "x", u, new Date("2026-10-11T00:00:00Z"))!, 3); // from the saved copy: no history row
   assert.equal(catalogCost(db, cur, "codex", "nope", u, new Date()), null);
   assert.equal(catalogCost(db, cur, "pi", "bare", u, new Date()), null);
+});
+
+test("backfillCatalogCosts prices old passes that have none, and leaves set ones and unknown models alone", () => {
+  const db = history();
+  const add = (id: string, runner: string, model: string, cost: number | null) => {
+    db.prepare("INSERT INTO passes (id, started_at, ended_at, project, flow, action, runner, model, outcome, input, output, catalog_cost_usd) VALUES (?, ?, ?, 'p', 'f', 'a', ?, ?, 'ok', 1000000, 1000000, ?)")
+      .run(id, "2026-10-01T00:00:00.000Z", "2026-10-01T00:01:00.000Z", runner, model, cost);
+  };
+  add("A", "codex", "x", null);
+  add("B", "codex", "x", 99);
+  add("C", "codex", "unknown-model", null);
+  const cur = new Map([["openai/x", { input: 3, output: 1 }]]);
+  assert.equal(backfillCatalogCosts(db, cur), 1);
+  const cost = (id: string) => (db.prepare("SELECT catalog_cost_usd c FROM passes WHERE id = ?").get(id) as { c: number | null }).c;
+  near(cost("A")!, 4);
+  assert.equal(cost("B"), 99, "a cost already set is kept");
+  assert.equal(cost("C"), null, "no price, no cost");
+  assert.equal(backfillCatalogCosts(db, cur), 0, "nothing left to do");
 });

@@ -194,6 +194,14 @@ test("prices: after a refreshed copy the step writes the price history and rewri
   assert.ok(r.lines.some((l) => l.includes("models-json-updated")));
 });
 
+test("prices: the first tick prices old passes from the saved copy, even when the copy is fresh", async () => {
+  const r = rig();
+  writeFileSync(join(r.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog: { openai: { models: { x: { cost: { input: 3, output: 1 } } } } } }));
+  r.store.db.prepare("INSERT INTO passes (id, started_at, ended_at, project, flow, action, runner, model, outcome, input, output) VALUES ('P', ?, ?, 'p', 'f', 'a', 'codex', 'x', 'ok', 1000000, 1000000)").run(NOW.toISOString(), NOW.toISOString());
+  await tickSteps({ ...r.deps, refreshPrices: async () => "fresh" })[2]!.run();
+  assert.equal((r.store.db.prepare("SELECT catalog_cost_usd c FROM passes WHERE id = 'P'").get() as { c: number }).c, 4);
+});
+
 // ---- startTicker ----
 
 test("startTicker: not under dry run, not in api-only mode; otherwise it uses SQUAD_TICK_S", () => {

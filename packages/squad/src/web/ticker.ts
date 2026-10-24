@@ -8,7 +8,7 @@ import { dueReads, readIntervalMs, refreshUsage } from "../accounts/usage-read.t
 import type { HomeLayout } from "../home.ts";
 import type { Log } from "../log.ts";
 import { syncModelsFiles } from "../accounts/models-sync.ts";
-import { loadPrices, loadProviders, recordPriceHistory, refreshPrices as realRefreshPrices, type RefreshPrices } from "../prices.ts";
+import { backfillCatalogCosts, loadPrices, loadProviders, recordPriceHistory, refreshPrices as realRefreshPrices, type RefreshPrices } from "../prices.ts";
 import {
   SQUAD_DRY_RUN_ENV, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV,
   SQUAD_TICK_S_ENV, envNum, envOn, type EnvSpec,
@@ -98,6 +98,8 @@ export function tickSteps(d: StepDeps): TickStep[] {
   // A failed probe leaves the account suspect and may leave `last_used_at` as it was, so `dueProbes`
   // would name it every tick. This map keeps a real pass to one per account per hour.
   const probedAt = new Map<string, number>();
+  // Old passes are priced once after a start, then after each new copy of the catalog.
+  let backfilled = false;
   return [
     {
       name: "usage-read",
@@ -142,6 +144,15 @@ export function tickSteps(d: StepDeps): TickStep[] {
         const url = d.env[SQUAD_PRICES_URL_ENV.key] ?? SQUAD_PRICES_URL_ENV.default ?? "";
         const refresh = d.refreshPrices ?? realRefreshPrices;
         const result = await refresh({ home: d.home, url, now: d.now().getTime(), fetch: d.fetch, env: d.env });
+        if (result === "refreshed" || !backfilled) {
+          backfilled = true;
+          try {
+            const n = backfillCatalogCosts(d.store.db, loadPrices(d.home));
+            if (n > 0) d.log.info("catalog-costs-backfilled", { passes: n });
+          } catch (e) {
+            d.log.warn("catalog-backfill-failed", { error: e instanceof Error ? e.name : "unknown" });
+          }
+        }
         // Only a new copy can hold a new price or a new model.
         if (result !== "refreshed") return;
         try {
