@@ -62,3 +62,12 @@ export const useUsageByModel = (since: string) =>
 
 /** Only while the Add account dialog is open. */
 export const useProviders = (enabled: boolean) => useQuery({ queryKey: ["providers"], queryFn: () => api("listProviders", {}), enabled, staleTime: 60_000 });
+
+// The catalog changes slowly (squad renews its copy every few hours).
+export const useCatalogProviders = () => useQuery({ queryKey: ["catalog", "providers"], queryFn: () => api("catalogProviders", {}), staleTime: 60_000 });
+
+export const useCatalogProvider = (provider: string) =>
+  useQuery({ queryKey: ["catalog", "provider", provider], queryFn: () => api("catalogProvider", { params: { provider } }), staleTime: 60_000 });
+
+export const useCatalogModel = (modelId: string) =>
+  useQuery({ queryKey: ["catalog", "model", modelId], queryFn: () => api("catalogModel", { params: { modelId } }), staleTime: 60_000, enabled: modelId !== "" });

@@ -12,6 +12,7 @@ import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
 import { ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
+import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProviderList, isModelIdParam, isProviderIdParam, priceHistory } from "../catalog.ts";
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
 import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
@@ -111,7 +112,7 @@ const INPUTS: Inputs = {
       return { code: b.code };
     },
   },
-  listProviders: {},
+  listProviders: {}, catalogProviders: {}, catalogProvider: {}, catalogModel: {},
   addAccount: {
     // The messages are fixed text: a refused body may hold a key, so nothing from it is echoed.
     body: (b) => {
@@ -259,6 +260,23 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     }
   };
 
+  /** How many accounts of each provider the person sees: codex and claude by runner, pi by the providers in auth.json. */
+  const usedProviders = (s: Session): Map<string, number> => {
+    const used = new Map<string, number>();
+    const bump = (id: string): void => void used.set(id, (used.get(id) ?? 0) + 1);
+    for (const a of visible(s)) {
+      if (a.runner === "pi") for (const id of piProvidersOf(a)) bump(id);
+      else bump(a.runner);
+    }
+    return used;
+  };
+  const piProvidersOf = (a: AccountRow): string[] => piProvidersIn(join(o.home.accounts, "pi", a.name, "auth.json"));
+  const catalogOf = (s: Session) => {
+    const catalog = loadProviders(o.home);
+    return { catalog, ctx: catalogCtx(providerEntries(catalog, allowedProviders(o.env)), usedProviders(s)) };
+  };
+  const HISTORY_DAYS = 90;
+
   const real: Handlers = {
     me: ({ session }) => ({ email: session.email, name: session.name, admin: isAdmin(session) }),
     listAccounts: ({ session }) => visible(session).map(view),
@@ -337,15 +355,29 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       return passDetail(o.home, row);
     },
     listProviders: ({ session }) => {
-      const used = new Map<string, number>();
-      const bump = (id: string): void => void used.set(id, (used.get(id) ?? 0) + 1);
-      for (const a of visible(session)) {
-        if (a.runner === "pi") for (const id of piProvidersIn(join(o.home.accounts, "pi", a.name, "auth.json"))) bump(id);
-        else bump(a.runner);
-      }
+      const used = usedProviders(session);
       return providerEntries(loadProviders(o.home), allowedProviders(o.env)).map((e): ProviderView => ({
         id: e.id, name: e.name, runner: e.runner, kind: e.kind, ...(e.builtin === true ? { builtin: true as const } : {}), models: e.models, accounts: used.get(e.id) ?? 0,
       }));
+    },
+    catalogProviders: ({ session }) => {
+      const { catalog, ctx } = catalogOf(session);
+      return catalogProviderList(catalog, ctx);
+    },
+    catalogProvider: ({ session, params }) => {
+      if (!isProviderIdParam(params.provider)) throw bad("a provider id is a letter or digit, then up to 63 letters, digits, dots, dashes or underscores");
+      const { catalog, ctx } = catalogOf(session);
+      const d = catalogProviderDetail(catalog, params.provider, ctx);
+      if (d === undefined) throw new HttpError(404, "not-found", "no such provider in the catalog");
+      return d;
+    },
+    catalogModel: ({ session, params }) => {
+      if (!isModelIdParam(params.modelId)) throw bad("a model id is 1 to 200 visible characters");
+      const { catalog, ctx } = catalogOf(session);
+      const first = catalogModelCompare(catalog, params.modelId, ctx, []);
+      if (first === undefined) throw new HttpError(404, "not-found", "no such model in the catalog");
+      const since = new Date(now().getTime() - HISTORY_DAYS * 86_400_000);
+      return { ...first, history: priceHistory(db, params.modelId, first.offers.map((x) => x.provider), since) };
     },
     addAccount: ({ session, body }) => {
       // The setting is enforced here, not only in the list the page shows.
@@ -427,8 +459,9 @@ function fileFor(root: string, pathname: string): string | undefined {
     const idx = real(join(found, "index.html"));
     if (idx !== undefined && idx.startsWith(base + sep)) return idx;
   }
-  // A path with no file extension is a route of the client router.
-  if (extname(parts.at(-1) ?? "") !== "") return undefined;
+  // A path with no known file type is a route of the client router: a model id such as qwen3.8-max
+  // looks like it has an extension.
+  if (TYPES[extname(parts.at(-1) ?? "").toLowerCase()] !== undefined) return undefined;
   const index = real(join(base, "index.html"));
   return index !== undefined && index.startsWith(base + sep) ? index : undefined;
 }

@@ -13,7 +13,9 @@ export type SignInPlan = { kind: "redirect"; url: string } | { kind: "popup"; ur
  * cannot work (the identity server refuses to be framed), so the plain sign-in page opens in a popup;
  * the framed page waits for the session, then closes the popup.
  */
+import { inFrame } from "./embed.ts";
+
 export function signInPlan(w: { readonly top: unknown; readonly self: unknown }, pathname: string, search: string): SignInPlan {
-  if (w.top !== null && w.top === w.self) return { kind: "redirect", url: signInUrl(pathname, search) };
+  if (!inFrame(w)) return { kind: "redirect", url: signInUrl(pathname, search) };
   return { kind: "popup", url: "/auth/login" };
 }

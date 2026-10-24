@@ -1,4 +1,4 @@
-import { Box, Button, Flex, HStack, Input, InputGroup, Link, Skeleton, Stack, Table, Text } from "@chakra-ui/react";
+import { Box, Flex, HStack, Input, InputGroup, Link, Skeleton, Stack, Table, Text } from "@chakra-ui/react";
 import type { AccountView, Health } from "@squad/contract";
 import { Search, Users } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -9,29 +9,9 @@ import { lastPassByAccount } from "../lib/passFilter.ts";
 import { useAccounts, useMe, usePasses } from "../queries.ts";
 import { AccountMenu } from "../ui/actions.tsx";
 import { AddAccount } from "../ui/AddAccount.tsx";
-import { EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
+import { Chip, EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
 
 type HealthFilter = "" | "attention" | Health;
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <Button
-      size="xs"
-      rounded="full"
-      px="3"
-      variant="outline"
-      bg={active ? "fg" : "surface"}
-      color={active ? "bg" : "fg.muted"}
-      borderColor={active ? "fg" : "border"}
-      _hover={{ bg: active ? "fg" : "bg.muted" }}
-      onClick={onClick}
-      aria-pressed={active}
-      fontWeight="500"
-    >
-      {children}
-    </Button>
-  );
-}
 
 function NameCell({ a }: { a: AccountView }) {
   return (

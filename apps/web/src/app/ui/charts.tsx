@@ -1,10 +1,11 @@
 // The charts. Colours: one per account, from the checked categorical palette, the same on every chart
 // (lib/colors.ts). Text uses the ink colours, never the series colour.
 import { Box, Flex, HStack, Stack, Text } from "@chakra-ui/react";
-import type { RoomPoint, UsageSeriesPoint } from "@squad/contract";
+import type { CatalogPricePoint, RoomPoint, UsageSeriesPoint } from "@squad/contract";
 import { useMemo } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { bucketTick, bucketTitle, dayTicks, timeTick } from "../lib/chartText.ts";
+import { historyRows, perMillionText } from "../lib/catalog.ts";
 import { colorMap, SERIES_DARK, SERIES_LIGHT } from "../lib/colors.ts";
 import { compactNumber, tokensText } from "../lib/format.ts";
 import { pivotTokens, roomRows } from "../lib/series.ts";
@@ -165,6 +166,39 @@ export function RoomChart({ points, floor5h, floorWeek, height = 240 }: { points
           { name: `Week floor ${floorWeek}%`, color: cw, dashed: true },
         ]}
       />
+    </Stack>
+  );
+}
+
+/** The input price per 1M of each provider over time, one step line per provider. */
+export function PriceHistoryChart({ history, names, height = 220 }: { history: readonly CatalogPricePoint[]; names: Readonly<Record<string, string>>; height?: number }) {
+  const ink = useChartInk();
+  const { providers, rows } = useMemo(() => historyRows(history), [history]);
+  const colors = useMemo(() => colorMap(providers, ink.series), [providers, ink.series]);
+  const data = rows.map((r) => ({ ...r, t: Date.parse(String(r.at)) }));
+  const day = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return (
+    <Stack gap="3">
+      <Box h={`${height}px`} mx="-2" css={chartCss}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={(t: number) => day.format(t)} tick={tickStyle(ink.tick)} axisLine={{ stroke: ink.axis }} tickLine={false} minTickGap={24} tickMargin={8} />
+            <YAxis tickFormatter={(v: number) => (v === 0 ? "$0" : perMillionText(v))} tick={tickStyle(ink.tick)} axisLine={false} tickLine={false} width={56} />
+            <Tooltip
+              cursor={{ stroke: ink.axis }}
+              content={({ active, payload, label }) => {
+                if (active !== true || payload === undefined || payload.length === 0) return null;
+                return <TipBox title={day.format(Number(label))} rows={payload.map((p) => ({ name: names[String(p.dataKey)] ?? String(p.dataKey), color: colors[String(p.dataKey)] ?? ink.tick, value: perMillionText(Number(p.value)) }))} />;
+              }}
+            />
+            {providers.map((p) => (
+              <Line key={p} dataKey={p} type="stepAfter" stroke={colors[p]} strokeWidth={2} dot={{ r: 3, strokeWidth: 0, fill: colors[p] }} activeDot={{ r: 4, strokeWidth: 2, stroke: ink.surface }} connectNulls isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </Box>
+      <Legend items={providers.map((p) => ({ name: names[p] ?? p, color: colors[p] ?? ink.tick }))} />
     </Stack>
   );
 }

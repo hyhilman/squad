@@ -291,3 +291,42 @@ export function Fact({ label, children }: { label: string; children: ReactNode }
     </Flex>
   );
 }
+
+/** A filter chip: dark when on. */
+export function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <Button
+      size="xs"
+      rounded="full"
+      px="3"
+      variant="outline"
+      bg={active ? "fg" : "surface"}
+      color={active ? "bg" : "fg.muted"}
+      borderColor={active ? "fg" : "border"}
+      _hover={{ bg: active ? "fg" : "bg.muted" }}
+      onClick={onClick}
+      aria-pressed={active}
+      fontWeight="500"
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** The runner that serves a catalog provider. */
+export function RunnerBadge({ runner }: { runner: string }) {
+  return (
+    <Badge size="sm" variant="outline" fontFamily="mono" fontWeight="500" color="fg.muted" flexShrink={0}>
+      {runner}
+    </Badge>
+  );
+}
+
+/** The person has accounts of this provider. */
+export function InUseBadge({ n }: { n: number }) {
+  return (
+    <Badge size="sm" colorPalette="green" variant="subtle" flexShrink={0} fontVariantNumeric="tabular-nums">
+      In use · {n}
+    </Badge>
+  );
+}

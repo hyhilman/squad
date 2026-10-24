@@ -183,6 +183,92 @@ export interface ProviderView {
   readonly accounts: number;
 }
 
+/** Dollars per million tokens, as the catalog gives them. A cache price is unset when the catalog has none. */
+export interface CatalogPrice {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead?: number;
+  readonly cacheWrite?: number;
+}
+
+/** One provider of squad's saved copy of the catalog. */
+export interface CatalogProviderView {
+  /** The catalog id, such as `opencode-go`, `openai` or `anthropic`. */
+  readonly id: string;
+  readonly name: string;
+  /** The runner that serves it: `openai` runs on codex, `anthropic` on claude, the rest on pi. */
+  readonly runner: Runner;
+  /** A person may add an account of it now. */
+  readonly offered: boolean;
+  /** The ProviderView id to pick in Add account (`codex` for `openai`). Set only when it is offered. */
+  readonly addAs?: string;
+  /** Its models, embedding models left out. */
+  readonly models: number;
+  /** How many accounts that use it the person who asks can see, counted as listProviders counts them. */
+  readonly accounts: number;
+  /** The price of its model with the lowest input price (then the lowest output price). Unset when it has no model. */
+  readonly cheapest?: { readonly input: number; readonly output: number };
+}
+
+/** One model of one catalog provider. Embedding models are left out. */
+export interface CatalogModelView {
+  readonly id: string;
+  /** The catalog name, or the id when it has none. */
+  readonly name: string;
+  readonly reasoning: boolean;
+  /** The context window and the most output tokens, when the catalog gives them. */
+  readonly context?: number;
+  readonly maxOutput?: number;
+  /** What it takes in, such as `["text", "image"]`. */
+  readonly inputs: readonly string[];
+  /** null when the catalog has no price (the saved copy keeps only priced models, so it is rare). */
+  readonly price: CatalogPrice | null;
+  /** How many other catalog providers list a model with exactly this id. */
+  readonly otherProviders: number;
+}
+
+export interface CatalogProviderDetail {
+  readonly provider: CatalogProviderView;
+  /** Sorted by name, then id. */
+  readonly models: readonly CatalogModelView[];
+}
+
+/** One provider that lists a model, for the compare page. */
+export interface CatalogOffer {
+  readonly provider: string;
+  readonly providerName: string;
+  readonly runner: Runner;
+  readonly offered: boolean;
+  readonly addAs?: string;
+  readonly accounts: number;
+  readonly price: CatalogPrice | null;
+  readonly context?: number;
+  readonly maxOutput?: number;
+  /** The lowest input price of all offers (then the lowest output price). Ties are all cheapest. */
+  readonly cheapest: boolean;
+}
+
+/** One price_history row: the price a provider asked from this time on. */
+export interface CatalogPricePoint {
+  readonly provider: string;
+  readonly at: string;
+  readonly input: number;
+  readonly output: number;
+}
+
+/**
+ * One model id across the catalog. Providers match by the exact model id: the saved copy keeps no
+ * canonical id, so the same model under another id (such as `muse-wonder-1-0`) is not in the list.
+ */
+export interface CatalogModelCompare {
+  readonly modelId: string;
+  readonly name: string;
+  /** Sorted by input price, then output price, then provider id. */
+  readonly offers: readonly CatalogOffer[];
+  /** The last 90 days, oldest first. */
+  readonly history: readonly CatalogPricePoint[];
+}
+
 /** What a person sends to add an account. The token and the key are shape-checked, never echoed. */
 export type AddAccountBody =
   | { readonly runner: "codex"; readonly name: string }
@@ -214,6 +300,9 @@ export const ROUTES = {
   getPass: { method: "GET", path: "/api/passes/:passId" },
   addAccount: { method: "POST", path: "/api/accounts" },
   listProviders: { method: "GET", path: "/api/providers" },
+  catalogProviders: { method: "GET", path: "/api/catalog/providers" },
+  catalogProvider: { method: "GET", path: "/api/catalog/providers/:provider" },
+  catalogModel: { method: "GET", path: "/api/catalog/models/:modelId" },
 } as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
 
 export type RouteName = keyof typeof ROUTES;
@@ -245,6 +334,11 @@ export interface Api {
    */
   addAccount: { params: void; query: void; body: AddAccountBody; res: LoginStart | AccountView };
   listProviders: { params: void; query: void; body: void; res: readonly ProviderView[] };
+  /** Every provider of the saved catalog, sorted by name. Empty when squad has no saved copy. */
+  catalogProviders: { params: void; query: void; body: void; res: readonly CatalogProviderView[] };
+  catalogProvider: { params: { readonly provider: string }; query: void; body: void; res: CatalogProviderDetail };
+  /** `modelId`: 1 to 200 visible characters; it may hold dots, colons and slashes (pathOf encodes them). */
+  catalogModel: { params: { readonly modelId: string }; query: void; body: void; res: CatalogModelCompare };
 }
 
 // Every route has a type entry, and every type entry a route.

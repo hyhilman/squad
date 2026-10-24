@@ -29,3 +29,14 @@ test("the code route sits under its login and does not shadow the status route",
   assert.equal(matchPath(ROUTES.loginStatus.path, "/api/logins/abc/code"), undefined);
   assert.equal(matchPath(ROUTES.submitLoginCode.path, "/api/logins/abc"), undefined);
 });
+
+test("the catalog routes: a model id with dots, colons, slashes and an @ survives pathOf then matchPath", () => {
+  for (const modelId of ["qwen3.8-max", "solar-mini4:free", "@cf/meta/llama-4.1", "a b/c%d"]) {
+    const p = pathOf(ROUTES.catalogModel.path, { modelId });
+    assert.equal(p.split("/").length, 5, "the id stays one path part");
+    assert.deepEqual(matchPath(ROUTES.catalogModel.path, p), { modelId });
+  }
+  assert.deepEqual(matchPath(ROUTES.catalogProvider.path, "/api/catalog/providers/opencode-go"), { provider: "opencode-go" });
+  assert.deepEqual(matchPath(ROUTES.catalogProviders.path, "/api/catalog/providers"), {});
+  assert.equal(matchPath(ROUTES.catalogProvider.path, "/api/catalog/providers"), undefined);
+});

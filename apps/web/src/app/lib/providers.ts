@@ -67,6 +67,8 @@ export interface PickerItem {
   /** The small line under the name. */
   readonly sub: string;
   readonly accounts: number;
+  /** The catalog page to link (/catalog/<catalogId>); unset when the catalog lists no model for it, so there is no page. */
+  readonly catalogId?: string;
 }
 export interface PickerGroup {
   readonly label: string;
@@ -90,7 +92,8 @@ export function providerSub(p: Pick<ProviderView, "runner" | "models">): string 
   return `API key · ${p.models} model${p.models === 1 ? "" : "s"}`;
 }
 
-const itemOf = (p: ProviderView): PickerItem => ({ id: p.id, name: p.name, logoId: logoIdOf(p), sub: providerSub(p), accounts: p.accounts });
+// The catalog names the seats' providers openai and anthropic, as it names their logos.
+const itemOf = (p: ProviderView): PickerItem => ({ id: p.id, name: p.name, logoId: logoIdOf(p), sub: providerSub(p), accounts: p.accounts, ...(p.models > 0 ? { catalogId: logoIdOf(p) } : {}) });
 
 /**
  * The picker's groups: Seats, In use (pi providers the person already has an account for, most first),

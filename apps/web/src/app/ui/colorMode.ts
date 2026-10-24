@@ -1,12 +1,15 @@
 // Light or dark. The default follows the system; a choice is kept in this browser. Not next-themes:
 // it adds an inline script, which the CSP blocks.
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { inFrame } from "../lib/embed.ts";
 
 export type ThemeChoice = "system" | "light" | "dark";
 const KEY = "squad-theme";
 const QUERY = "(prefers-color-scheme: dark)";
 
 function readChoice(): ThemeChoice {
+  // In a frame the parent page owns the look, and the bar has no theme menu: follow the system.
+  if (typeof window !== "undefined" && inFrame(window)) return "system";
   try {
     const v = localStorage.getItem(KEY);
     return v === "light" || v === "dark" ? v : "system";

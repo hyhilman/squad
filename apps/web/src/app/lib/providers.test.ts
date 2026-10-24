@@ -98,3 +98,12 @@ test("addBody for claude with no token starts the server-side sign-in", () => {
   assert.deepEqual(addBody(L[1]!, "n", ""), { runner: "claude", name: "n" });
   assert.deepEqual(addBody(L[1]!, "n"), { runner: "claude", name: "n" });
 });
+
+test("pickerGroups: an item has a catalog page only when the catalog lists models for it, so a seat with no catalog gets no details link", () => {
+  const items = pickerGroups([
+    { id: "codex", name: "Codex (device login)", runner: "codex", kind: "login", models: 0, accounts: 0 },
+    { id: "claude", name: "Claude (setup-token)", runner: "claude", kind: "token", models: 3, accounts: 0 },
+    { id: "engy", name: "engy", runner: "pi", kind: "key", models: 7, accounts: 0 },
+  ]).flatMap((g) => g.items);
+  assert.deepEqual(items.map((i) => [i.id, i.catalogId]), [["codex", undefined], ["claude", "anthropic"], ["engy", "engy"]]);
+});

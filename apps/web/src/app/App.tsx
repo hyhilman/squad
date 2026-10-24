@@ -9,6 +9,9 @@ import { SignInCard } from "./ui/SignInCard.tsx";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Account } from "./pages/Account.tsx";
 import { Accounts } from "./pages/Accounts.tsx";
+import { Catalog } from "./pages/Catalog.tsx";
+import { CatalogModel } from "./pages/CatalogModel.tsx";
+import { CatalogProvider } from "./pages/CatalogProvider.tsx";
 import { Overview } from "./pages/Overview.tsx";
 import { Passes } from "./pages/Passes.tsx";
 import { Usage } from "./pages/Usage.tsx";
@@ -49,6 +52,9 @@ function Gate() {
         <Route path="/accounts/:runner/:name" element={<Account />} />
         <Route path="/passes" element={<Passes />} />
         <Route path="/usage" element={<Usage />} />
+        <Route path="/catalog" element={<Catalog />} />
+        <Route path="/catalog/models/*" element={<CatalogModel />} />
+        <Route path="/catalog/:provider" element={<CatalogProvider />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>
