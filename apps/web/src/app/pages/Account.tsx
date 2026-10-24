@@ -3,7 +3,9 @@ import type { AccountView, Runner } from "@squad/contract";
 import { ChevronRight } from "lucide-react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router";
 import { agoText } from "../lib/format.ts";
+import { UNKNOWN_USER_HINT } from "../lib/accountUser.ts";
 import { isOwnerOf } from "../lib/login.ts";
+import { FillAccountUser } from "../ui/AccountUser.tsx";
 import { useAccount, useMe, useRoomSeries } from "../queries.ts";
 import { AccountButtons, FloorsForm, useAccountActions } from "../ui/actions.tsx";
 import { RoomChart } from "../ui/charts.tsx";
@@ -54,8 +56,19 @@ function OverviewTab({ a }: { a: AccountView }) {
           <Fact label="Pools">{a.pools.length === 0 ? "-" : a.pools.join(", ")}</Fact>
         </Panel>
         <Panel title="Owner">
+          <Fact label="Account user">
+            {a.loginEmail === undefined ? (
+              <Stack gap="0.5" align="flex-end">
+                <Text as="span" color="fg.subtle" fontStyle="italic" title={UNKNOWN_USER_HINT}>
+                  unknown
+                </Text>
+                <FillAccountUser a={a} />
+              </Stack>
+            ) : (
+              a.loginEmail
+            )}
+          </Fact>
           <Fact label="Owner">{a.ownerEmail === "" ? "-" : a.ownerEmail}</Fact>
-          {a.loginEmail === undefined ? null : <Fact label="Seat email">{a.loginEmail}</Fact>}
           <Fact label="Shared">{a.sharing ? `Since ${at(a.consentAt)}${a.consentBy === undefined ? "" : ` (by ${a.consentBy})`}` : "No: squad refuses every pass"}</Fact>
           <Fact label="Floors">{`${a.floor5h}% · ${a.floorWeek}% (${a.floorSource === "owner" ? "set by the owner" : "the default"})`}</Fact>
         </Panel>
@@ -170,7 +183,10 @@ export function Account() {
               )}
             </HStack>
             <Text fontSize="sm" color="fg.muted" mt="0.5">
-              {a.runner} · {a.kind} · {isOwnerOf(a, me) ? "yours" : `owned by ${a.ownerEmail === "" ? "nobody" : a.ownerEmail}`}
+              <Text as="span" color={a.loginEmail === undefined ? "fg.subtle" : "fg"} title={a.loginEmail === undefined ? UNKNOWN_USER_HINT : undefined}>
+                {a.loginEmail ?? "unknown account user"}
+              </Text>
+              {` · owned by ${a.ownerEmail === "" ? "nobody" : a.ownerEmail}${isOwnerOf(a, me) ? " (you)" : ""} · ${a.runner} ${a.kind}`}
             </Text>
           </Box>
         </HStack>

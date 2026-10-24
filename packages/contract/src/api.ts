@@ -28,7 +28,11 @@ export interface AccountView {
   readonly name: string;
   readonly kind: AccountKind;
   readonly ownerEmail: string;
-  /** The email of the seat that is logged in (the ID token's); it can differ from the owner. Unset for a key or token account. */
+  /**
+   * The account user: the email of the provider account this is (a codex ID token's, or what claude's
+   * setup-token left in its config). It can differ from the owner. Unset when squad could not read it:
+   * a pi key, a pasted claude token.
+   */
   readonly loginEmail?: string;
   readonly pools: readonly string[];
   readonly health: Health;
@@ -435,6 +439,9 @@ export type RouteName = keyof typeof ROUTES;
  * Routes that take no session and no CSRF proof: `squad connect` runs outside any browser, and its pair
  * code is the proof. The server never sets CORS headers on them, and never logs their path.
  */
+/** An email squad shows as an account user: one "@", no space, at most 254 characters. */
+export const isAccountUserEmail = (v: unknown): v is string => typeof v === "string" && v.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(v);
+
 export const NO_SESSION_ROUTES = ["connectToken"] as const satisfies readonly RouteName[];
 
 type AccountParams = { readonly runner: Runner; readonly name: string };
@@ -474,8 +481,9 @@ export interface Api {
   /**
    * The helper sends the token once. No session: the pair code in the path is the proof. A wrong,
    * used or expired code is a 404 with no detail. The token is checked by shape, never echoed.
+   * `email`: the account user, when the helper's claude wrote one (isAccountUserEmail); never required.
    */
-  connectToken: { params: { readonly pairCode: string }; query: void; body: { readonly token: string }; res: { readonly account: string } };
+  connectToken: { params: { readonly pairCode: string }; query: void; body: { readonly token: string; readonly email?: string }; res: { readonly account: string } };
   // ---- account care ----
   /** The models a test may use: what the account serves, and the probe default. Owner or admin. */
   accountModels: { params: AccountParams; query: void; body: void; res: AccountModels };

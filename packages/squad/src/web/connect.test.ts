@@ -92,6 +92,17 @@ test("start refuses a bad name, an existing account, a second start for a name, 
   r.store.close();
 });
 
+test("the helper may send the account user's email with the token; it is kept as the account user; none stays unknown", () => {
+  const r = rig();
+  const s = r.pairs.start("alice@example.test", "c1");
+  r.pairs.redeem("10.0.0.1", s.pairCode, TOKEN, "alice.personal@example.test");
+  assert.equal(getAccount(r.store.db, "claude/c1")!.loginEmail, "alice.personal@example.test");
+  const t = r.pairs.start("alice@example.test", "c2");
+  r.pairs.redeem("10.0.0.1", t.pairCode, TOKEN);
+  assert.equal(getAccount(r.store.db, "claude/c2")!.loginEmail, null);
+  r.store.close();
+});
+
 test("the token with the right code makes the owner's token account (file 0600), once; the token shows nowhere", () => {
   const r = rig();
   const s = r.pairs.start("Alice@Example.test", "c1");

@@ -9,6 +9,7 @@ import { lastPassByAccount } from "../lib/passFilter.ts";
 import { useAccounts, useMe, usePasses } from "../queries.ts";
 import { AccountMenu } from "../ui/actions.tsx";
 import { AddAccount } from "../ui/AddAccount.tsx";
+import { AccountUserText } from "../ui/AccountUser.tsx";
 import { Chip, EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
 
 type HealthFilter = "" | "attention" | Health;
@@ -50,11 +51,10 @@ export function Accounts() {
   const needle = q.trim().toLowerCase();
   const shown = list.filter(
     (a) =>
-      (needle === "" || a.account.toLowerCase().includes(needle) || a.ownerEmail.toLowerCase().includes(needle)) &&
+      (needle === "" || a.account.toLowerCase().includes(needle) || a.ownerEmail.toLowerCase().includes(needle) || (a.loginEmail ?? "").toLowerCase().includes(needle)) &&
       (runner === "" || a.runner === runner) &&
       (health === "" || (health === "attention" ? attentionOf(a) !== undefined : a.health === health)),
   );
-  const admin = me?.admin === true;
 
   return (
     <>
@@ -121,8 +121,9 @@ export function Accounts() {
                   <Stack gap="3" mt="3" pl="11">
                     <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour" />
                     <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
+                    <AccountUserText a={a} fontSize="xs" color="fg.muted" />
                     <Text fontSize="xs" color="fg.subtle">
-                      {admin ? `${a.ownerEmail} · ` : ""}last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
+                      last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
                     </Text>
                   </Stack>
                 </Box>
@@ -134,7 +135,7 @@ export function Accounts() {
                 <Table.Header>
                   <Table.Row bg="bg.subtle">
                     <Table.ColumnHeader ps="5">Account</Table.ColumnHeader>
-                    {admin ? <Table.ColumnHeader hideBelow="xl">Owner</Table.ColumnHeader> : null}
+                    <Table.ColumnHeader hideBelow="xl">Account user / Owner</Table.ColumnHeader>
                     <Table.ColumnHeader>Health</Table.ColumnHeader>
                     <Table.ColumnHeader w="190px">5-hour room</Table.ColumnHeader>
                     <Table.ColumnHeader w="190px">Week room</Table.ColumnHeader>
@@ -150,11 +151,9 @@ export function Accounts() {
                       <Table.Cell ps="5" py="3.5">
                         <NameCell a={a} />
                       </Table.Cell>
-                      {admin ? (
-                        <Table.Cell hideBelow="xl" color="fg.muted" fontSize="sm" maxW="56" truncate>
-                          {a.ownerEmail}
-                        </Table.Cell>
-                      ) : null}
+                      <Table.Cell hideBelow="xl" maxW="64">
+                        <AccountUserText a={a} fontSize="sm" color="fg.muted" />
+                      </Table.Cell>
                       <Table.Cell>
                         <HealthBadge health={a.health} />
                       </Table.Cell>

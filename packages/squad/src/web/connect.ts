@@ -189,7 +189,8 @@ export class ConnectPairs {
    * The helper's token for the pair code. The limit is checked before the code, so a held address
    * learns nothing about it. The code is used up by any answer but 404 and 429.
    */
-  redeem(ip: string, pairCode: string, token: unknown): { account: string } {
+  /** `email`: the account user, already shape-checked by the route; unset = unknown. */
+  redeem(ip: string, pairCode: string, token: unknown, email?: string): { account: string } {
     const off = this.off();
     if (off !== undefined) throw off;
     this.sweep();
@@ -209,8 +210,8 @@ export class ConnectPairs {
       if (hit.replace) {
         const row = liveAccount(this.d.store.db, hit.accountId);
         if (row === undefined || row.kind !== "token" || row.ownerEmail?.toLowerCase() !== hit.owner) throw new AccountExists("the account is gone");
-        replaceToken(this.d.store, this.d.home, row, token, hit.owner, this.d.now());
-      } else createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: hit.name, kind: "token", ownerEmail: hit.owner, consent: { by: hit.owner } }, [{ name: "token", body: token }], this.d.now());
+        replaceToken(this.d.store, this.d.home, row, token, hit.owner, this.d.now(), email ?? null);
+      } else createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: hit.name, kind: "token", ownerEmail: hit.owner, ...(email === undefined ? {} : { loginEmail: email }), consent: { by: hit.owner } }, [{ name: "token", body: token }], this.d.now());
     } catch (err) {
       if (err instanceof AccountExists) {
         this.end(hit, "failed", "exists");

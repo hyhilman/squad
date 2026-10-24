@@ -43,13 +43,13 @@ test("the url must be an https origin; plain http only for this computer", () =>
 });
 
 /** A fake `claude` on PATH. It notes its config dir and terminal size, prints the token, then lingers (squad must stop it). */
-function fakeClaude(kind: "token" | "none" | "absent") {
+function fakeClaude(kind: "token" | "none" | "absent", email?: string, onExit = false) {
   const dir = mkdtempSync(join(tmpdir(), "fake-claude-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
   if (kind !== "absent") {
     const body = kind === "token"
-      ? `printf '\\033[1mOpening\\033[1Cbrowser\\033[22m\\r\\n'\nsleep 0.2\nprintf 'Your OAuth token (valid for 1 year):\\r\\n\\r\\n%s\\r\\n\\r\\nStore this token securely.\\r\\n' "$FAKE_TOKEN"\nsleep 20\n`
+      ? `${email === undefined ? "" : onExit ? `trap 'printf "%s" "{\\"oauthAccount\\":{\\"emailAddress\\":\\"${email}\\"}}" > "$CLAUDE_CONFIG_DIR/.claude.json"; exit 0' TERM HUP INT\n` : `printf '%s' '{"oauthAccount":{"emailAddress":"${email}"}}' > "$CLAUDE_CONFIG_DIR/.claude.json"\n`}printf '\\033[1mOpening\\033[1Cbrowser\\033[22m\\r\\n'\nsleep 0.2\nprintf 'Your OAuth token (valid for 1 year):\\r\\n\\r\\n%s\\r\\n\\r\\nStore this token securely.\\r\\n' "$FAKE_TOKEN"\nsleep 20 & wait\n`
       : `printf 'Error: sign-in failed\\r\\n'\nexit 1\n`;
     writeFileSync(join(bin, "claude"), `#!/bin/sh\ncase "$1" in --version) echo "2.1.310 (Claude Code)"; exit 0;; setup-token) ;; *) exit 64;; esac\necho "$CLAUDE_CONFIG_DIR" > "${dir}/config-dir"\nstty size > "${dir}/size"\n[ -d "$CLAUDE_CONFIG_DIR" ] || exit 65\n${body}`);
     chmodSync(join(bin, "claude"), 0o755);
@@ -110,6 +110,25 @@ test("squad connect runs the local claude under a terminal, sends the token once
   assert.equal(again.code, 1);
   assert.equal(again.err, "squad connect: the pair code is wrong, used or expired. Start again from the web page.\n");
   assert.ok(!again.out.includes("oat01") && !again.err.includes("oat01"));
+  await r.close();
+});
+
+test("squad connect sends the account user's email that claude wrote in its throwaway config, and none when it wrote none", async () => {
+  const r = await rig();
+  await (await import("../prices.ts")).refreshPrices({ home: r.home, url: "https://catalog.test/api.json", now: NOW.getTime(), fetch: async () => ({ ok: true, status: 200, text: async () => readFileSync(new URL("../../test/fixtures/captures/prices/local-models-dev-excerpt.json", import.meta.url), "utf8") }), env: {} });
+  const s = await r.startConnect("laptop");
+  const f = fakeClaude("token", "alice.personal@example.test");
+  const res = await connect(["--url", r.base, "--pair", s.pairCode], f.env);
+  assert.equal(res.code, 0, res.err);
+  assert.equal(getAccount(r.store.db, "claude/laptop")?.loginEmail, "alice.personal@example.test");
+  assert.ok(!res.out.includes("alice.personal"), "the email is not printed");
+  const t = await r.startConnect("laptop2");
+  assert.equal((await connect(["--url", r.base, "--pair", t.pairCode], fakeClaude("token", "a@b@c").env)).code, 0);
+  assert.equal(getAccount(r.store.db, "claude/laptop2")?.loginEmail, null, "not one @: not sent");
+  // The CLI may write its config only as it exits: connect waits for it to end, then reads.
+  const u = await r.startConnect("laptop3");
+  assert.equal((await connect(["--url", r.base, "--pair", u.pairCode], fakeClaude("token", "on.exit@example.test", true).env)).code, 0);
+  assert.equal(getAccount(r.store.db, "claude/laptop3")?.loginEmail, "on.exit@example.test");
   await r.close();
 });
 

@@ -78,7 +78,7 @@ test("replaceToken: a new token file (0600, tmp + rename), health and a dead sta
   putHealth(r.store.db, { ...emptyHealth("claude/t"), suspectSince: NOW.toISOString(), authFails: 2, lastFailCode: "401", lastFailKind: "auth" });
   setSharing(r.store.db, "claude/t", null, NOW);
   const later = new Date(NOW.getTime() + 5000);
-  replaceToken(r.store, r.home, getAccount(r.store.db, "claude/t")!, FAKE_TOKEN, "o@x.test", later);
+  replaceToken(r.store, r.home, getAccount(r.store.db, "claude/t")!, FAKE_TOKEN, "o@x.test", later, null);
   const file = join(r.home.accounts, "claude", "t", "token");
   assert.equal(readFileSync(file, "utf8"), FAKE_TOKEN);
   assert.equal(statSync(file).mode & 0o777, 0o600);

@@ -11,13 +11,14 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LoginStart, LoginState, LoginStatus } from "@squad/contract";
+import { isAccountUserEmail, type LoginStart, type LoginState, type LoginStatus } from "@squad/contract";
+import { identityOf } from "../accounts/identity.ts";
 import { AccountExists, createFileAccount } from "../accounts/add.ts";
 import { replaceToken } from "../accounts/care.ts";
-import { ACCOUNT_NAME, accountId, getAccount, liveAccount, type AccountRow } from "../accounts/store.ts";
+import { ACCOUNT_NAME, accountId, getAccount, liveAccount, setLoginEmail, type AccountRow } from "../accounts/store.ts";
 import { MAX_OPENED, codeShapeError, findToken, linkFromOpened, maskedTrace, parseSetupOutput } from "../claude-token.ts";
 import type { HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
@@ -321,7 +322,14 @@ export class SetupTokenLogins {
     this.d.log.info(`web_login_${state}`, { account: e.accountId, login: e.id, ...(reason === undefined ? {} : { reason }) });
   }
 
+  /** Runs once the CLI has ended or was stopped. */
   private clean(e: Entry): void {
+    // The CLI may write its config as it exits, so the account user is read again here, before the
+    // folder goes.
+    if (e.state === "done" && existsSync(e.staging)) {
+      const seat = this.seatOf(e);
+      if (seat !== undefined) setLoginEmail(this.d.store.db, e.accountId, seat);
+    }
     rmSync(e.staging, { recursive: true, force: true });
     rmSync(e.cwd, { recursive: true, force: true });
   }
@@ -333,6 +341,12 @@ export class SetupTokenLogins {
     this.clean(e);
   }
 
+  /** The seat's email from the CLI's throwaway config (CLAUDE_CONFIG_DIR=/claude, the staging folder). No call to the provider. */
+  private seatOf(e: Entry): string | undefined {
+    const seat = identityOf("claude", "login", e.staging)?.email;
+    return isAccountUserEmail(seat) ? seat : undefined;
+  }
+
   /** The token came: write the account, then stop the container. The token is not kept. */
   private succeed(e: Entry, token: string): void {
     if (e.state !== "pending" || e.finishing !== undefined) return;
@@ -341,8 +355,9 @@ export class SetupTokenLogins {
     try {
       const row = e.replace ? getAccount(this.d.store.db, e.accountId) : undefined;
       if (e.replace && (row === undefined || row.state === "removed" || row.ownerEmail?.toLowerCase() !== e.owner)) throw new AccountExists("the account is gone");
-      if (row !== undefined) replaceToken(this.d.store, this.d.home, row, token, e.owner, this.d.now());
-      else createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: e.name, kind: "token", ownerEmail: e.ownerAs.toLowerCase(), consent: { by: e.ownerAs.toLowerCase() } }, [{ name: "token", body: token }], this.d.now());
+      const loginEmail = this.seatOf(e);
+      if (row !== undefined) replaceToken(this.d.store, this.d.home, row, token, e.owner, this.d.now(), loginEmail ?? null);
+      else createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: e.name, kind: "token", ownerEmail: e.ownerAs.toLowerCase(), ...(loginEmail === undefined ? {} : { loginEmail }), consent: { by: e.ownerAs.toLowerCase() } }, [{ name: "token", body: token }], this.d.now());
       this.end(e, "done");
     } catch (err) {
       this.end(e, "failed", "login-failed");

@@ -11,7 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { AUTH_PATHS, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY, type LogoutEverywhere, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { AUTH_PATHS, isAccountUserEmail, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY, type LogoutEverywhere, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
 import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProviderList, isModelIdParam, isProviderIdParam, priceHistory } from "../catalog.ts";
 import { getLogo } from "../logos.ts";
@@ -132,8 +132,8 @@ const INPUTS: Inputs = {
   connectToken: {
     // The token is secret: the message is fixed, nothing from the body is echoed.
     body: (b) => {
-      if (!isObj(b) || !onlyKeys(b, ["token"]) || typeof b.token !== "string") throw bad("body must be {token}");
-      return { token: b.token };
+      if (!isObj(b) || !onlyKeys(b, ["token", "email"]) || typeof b.token !== "string" || (b.email !== undefined && !isAccountUserEmail(b.email))) throw bad("body must be {token[, email]}");
+      return { token: b.token, ...(b.email === undefined ? {} : { email: b.email as string }) };
     },
   },
   submitLoginCode: {
@@ -452,7 +452,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       return refuse(() => connects.start(session.email, body.name, body.replace === true));
     },
     connectStatus: ({ session, params }) => refuse(() => connects.status(session.email, params.connectId)),
-    connectToken: ({ ip, params, body }) => refuse(() => connects.redeem(ip, params.pairCode, body.token)),
+    connectToken: ({ ip, params, body }) => refuse(() => connects.redeem(ip, params.pairCode, body.token, body.email)),
     catalogProviders: ({ session }) => {
       const { catalog, ctx } = catalogOf(session);
       return catalogProviderList(catalog, ctx);
@@ -541,7 +541,8 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       const by = session.email.toLowerCase();
       if (a.runner === "claude" && a.kind === "token") {
         if (!TOKEN_EXACT.test(body.secret)) throw bad("a claude token is the sk-ant-oat01- token that `claude setup-token` prints");
-        replaceToken(o.store, o.home, a, body.secret, by, now());
+        // A pasted token says nothing about whose seat it is.
+        replaceToken(o.store, o.home, a, body.secret, by, now(), null);
       } else if (a.runner === "pi" && a.kind === "key") {
         const r = replacePiKey(o.store, o.home, a, body.provider, body.secret, by, now());
         if (r === "pick-provider") throw bad("this account has keys for several providers: say which one");

@@ -318,6 +318,34 @@ test("a code cannot be sent before the link is shown or after the login ended", 
   r.store.close();
 });
 
+test("the account user: the email setup-token left in its throwaway config (.claude.json oauthAccount) is kept, read before the folder goes", async () => {
+  const r = rig();
+  const s = await begin(r);
+  r.logins.submitCode("alice@example.test", s.loginId, "CODE-FROM-PAGE");
+  writeFileSync(join(s.proc.staging, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "alice.personal@example.test", accountUuid: "00000000-0000-0000-0000-000000000000" } }));
+  s.proc.say(AFTER_CODE);
+  await r.settle();
+  assert.equal(getAccount(r.store.db, "claude/claude1")!.loginEmail, "alice.personal@example.test");
+  assert.ok(!existsSync(s.proc.staging));
+  // Not exactly one "@": not an address to show. No file: unknown.
+  const two = await begin(r, "alice@example.test", "claude2");
+  r.logins.submitCode("alice@example.test", two.loginId, "CODE-FROM-PAGE");
+  writeFileSync(join(two.proc.staging, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "a@b@example.test" } }));
+  two.proc.say(AFTER_CODE);
+  await r.settle();
+  assert.equal(getAccount(r.store.db, "claude/claude2")!.loginEmail, null);
+  // The CLI may write its config as it exits: squad reads it again once the container stopped.
+  const late = await begin(r, "alice@example.test", "claude3");
+  r.logins.submitCode("alice@example.test", late.loginId, "CODE-FROM-PAGE");
+  late.proc.say(AFTER_CODE);
+  writeFileSync(join(late.proc.staging, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "late@example.test" } }));
+  await r.settle();
+  assert.equal(getAccount(r.store.db, "claude/claude3")!.loginEmail, "late@example.test");
+  assert.ok(!existsSync(late.proc.staging));
+  await r.logins.close();
+  r.store.close();
+});
+
 test("the token after the code makes the account (token file 0600), stops the container, and shows nowhere", async () => {
   const r = rig();
   const s = await begin(r);

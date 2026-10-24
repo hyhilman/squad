@@ -8,7 +8,7 @@ import type { HomeLayout } from "../home.ts";
 import { withHostLock } from "../lock.ts";
 import { lockPathOf } from "../run.ts";
 import type { Store } from "../store/db.ts";
-import { clearAfterLogin, markRemoved, setSharing, type AccountRow } from "./store.ts";
+import { clearAfterLogin, markRemoved, setLoginEmail, setSharing, type AccountRow } from "./store.ts";
 
 const dirOf = (home: HomeLayout, a: AccountRow): string => join(home.accounts, a.runner, a.name);
 
@@ -44,9 +44,11 @@ function writeAtomic(dir: string, name: string, body: string): void {
 }
 
 /** The owner's new token, from any sign-in way: alive and shared again, health cleared. */
-export function replaceToken(store: Store, home: HomeLayout, a: AccountRow, token: string, by: string, now: Date): void {
+/** `loginEmail`: the account user of the new token, or null when unknown: a new token may be another seat's. */
+export function replaceToken(store: Store, home: HomeLayout, a: AccountRow, token: string, by: string, now: Date, loginEmail: string | null): void {
   if (a.runner !== "claude" || a.kind !== "token") throw new Error("only a claude token account takes a new token");
   writeAtomic(dirOf(home, a), "token", token);
+  setLoginEmail(store.db, a.id, loginEmail);
   clearAfterLogin(store.db, a.id);
   setSharing(store.db, a.id, by, now);
   store.event({ at: now.toISOString(), kind: "login", account: a.id, code: "token-replaced" });

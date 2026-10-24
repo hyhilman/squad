@@ -1530,6 +1530,23 @@ test("startConnect gives the owner a code and the command; connectStatus is the 
   await r.close();
 });
 
+test("the token route takes an optional email of the account user, shape-checked; a bad one is a 400 and the code stays good", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const s = await api<ConnectStart>(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" });
+  for (const email of ["", "no-at", "a@b@c", "a b@c.d", 5, "x".repeat(250) + "@a.bc"]) {
+    const res = await postToken(r, s.body.pairCode, { token: CONNECT_TOKEN, email });
+    assert.equal(res.status, 400, JSON.stringify(email));
+  }
+  const ok = await postToken(r, s.body.pairCode, { token: CONNECT_TOKEN, email: "alice.personal@example.test" });
+  assert.equal(ok.status, 200);
+  assert.equal(getAccount(r.store.db, "claude/c1")!.loginEmail, "alice.personal@example.test");
+  const view = await api<AccountView>(r, alice, "GET", "/api/accounts/claude/c1");
+  assert.equal(view.body.loginEmail, "alice.personal@example.test");
+  await r.close();
+});
+
 test("the token route: no session or csrf needed, no CORS ever, 8 KB cap; it makes the owner's account once and the token and code show nowhere", async () => {
   const APP = "https://app.example.test";
   const r = await rig({}, { SQUAD_WEB_API_ORIGINS: APP });

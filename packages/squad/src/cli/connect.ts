@@ -11,7 +11,8 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ApiFailure, call } from "@squad/contract";
+import { ApiFailure, call, isAccountUserEmail } from "@squad/contract";
+import { identityOf } from "../accounts/identity.ts";
 import { codeShapeError, findToken, parseSetupOutput } from "../claude-token.ts";
 
 /** The person signs in within this time, or the helper stops. */
@@ -82,6 +83,9 @@ function parseArgs(args: readonly string[]): { origin: string; pair: string } {
   return { origin, pair };
 }
 
+/** How long connect waits for the CLI to end after the token came. */
+const EXIT_WAIT_MS = 5000;
+
 /** Runs the CLI until it prints a token. Resolves with it, or throws a Stop. The child is stopped either way. */
 function captureToken(io: ConnectIo, argv: string[], configDir: string, running: { child?: ChildProcess }): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -111,9 +115,18 @@ function captureToken(io: ConnectIo, argv: string[], configDir: string, running:
       buf = "";
       input?.removeListener("data", onInput);
       input?.pause();
-      if (child.exitCode === null) child.kill("SIGTERM");
-      if (err !== undefined) reject(err);
-      else resolve(token!);
+      if (err !== undefined) {
+        if (child.exitCode === null) child.kill("SIGTERM");
+        return reject(err);
+      }
+      // The CLI may write its config (the seat's email) as it exits: wait for the end, a short time at most.
+      if (child.exitCode !== null || child.signalCode !== null) return resolve(token!);
+      const cap = setTimeout(() => resolve(token!), EXIT_WAIT_MS);
+      child.once("close", () => {
+        clearTimeout(cap);
+        resolve(token!);
+      });
+      child.kill("SIGTERM");
     };
     const timer = setTimeout(() => finish(new Stop(1, "no sign-in in time. Start again from the web page.")), io.waitMs ?? CONNECT_WAIT_MS);
     child.stdin!.on("error", () => {});
@@ -143,11 +156,11 @@ function captureToken(io: ConnectIo, argv: string[], configDir: string, running:
   });
 }
 
-async function send(io: ConnectIo, origin: string, pair: string, token: string): Promise<string> {
+async function send(io: ConnectIo, origin: string, pair: string, token: string, email: string | undefined): Promise<string> {
   const f = io.fetch ?? globalThis.fetch;
   try {
     // A redirect would send the body, the token, again to wherever it points.
-    const res = await call((u, init) => f(u, { ...init, redirect: "error" }), origin, "connectToken", { params: { pairCode: pair }, body: { token } });
+    const res = await call((u, init) => f(u, { ...init, redirect: "error" }), origin, "connectToken", { params: { pairCode: pair }, body: { token, ...(email === undefined ? {} : { email }) } });
     if (!ACCOUNT.test(res.account)) throw new Stop(1, `squad at ${origin} gave an odd answer.`);
     return res.account;
   } catch (e) {
@@ -185,7 +198,9 @@ export async function runConnect(args: readonly string[], io: ConnectIo): Promis
     configDir.path = mkdtempSync(join(tmpdir(), "squad-connect-"));
     io.stdout("A browser window opens on this computer. Sign in with Claude there.\n");
     const token = await captureToken(io, argv, configDir.path, running);
-    const account = await send(io, origin, pair, token);
+    // The CLI may name the seat in its throwaway config; read it before the folder goes.
+    const seat = identityOf("claude", "login", configDir.path)?.email;
+    const account = await send(io, origin, pair, token, isAccountUserEmail(seat) ? seat : undefined);
     io.stdout(`Signed in. ${account} is ready in squad.\n`);
     return 0;
   } catch (e) {
