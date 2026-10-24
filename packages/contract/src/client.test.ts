@@ -38,3 +38,16 @@ test("call sends x-squad-csrf on every non-GET request and on no GET", async () 
     { method: "POST", csrf: "1" },
   ]);
 });
+
+test("credentials default to same-origin; the caller may ask for include", async () => {
+  const seen: string[] = [];
+  const fetchFn: FetchLike = async (_url, init) => {
+    seen.push(init.credentials);
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  await call(fetchFn, "", "me", {});
+  await call(fetchFn, "https://squad.example.test", "me", {}, { credentials: "include" });
+  await call(fetchFn, "https://squad.example.test", "me", {}, {});
+  await call(fetchFn, "https://squad.example.test", "setEnabled", { params: { runner: "codex", name: "a" }, body: { enabled: true } }, { credentials: "include" });
+  assert.deepEqual(seen, ["same-origin", "include", "same-origin", "include"]);
+});

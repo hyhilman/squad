@@ -462,6 +462,13 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
+  // /api writes may also come from a listed origin. /auth/logout keeps the strict check.
+  const apiOrigin = (req: IncomingMessage): string | undefined => {
+    const o = req.headers.origin;
+    return o !== undefined && cfg.apiOrigins.includes(o) ? o : undefined;
+  };
+  const apiCsrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && (req.headers.origin === cfg.origin || apiOrigin(req) !== undefined);
+  const CORS_METHODS = [...new Set(Object.values(ROUTES).map((r) => r.method))].join(", ");
 
   function sendJson(res: ServerResponse, route: string, status: number, body: unknown): void {
     if (findForbidden(body) !== undefined) {
@@ -512,7 +519,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const name = hit.name;
     setRoute(name);
     const write = req.method !== "GET";
-    if (write && !csrfOk(req)) return apiError(res, name, new HttpError(403, "forbidden", "missing or wrong csrf proof"));
+    if (write && !apiCsrfOk(req)) return apiError(res, name, new HttpError(403, "forbidden", "missing or wrong csrf proof"));
     const session = oidc.readSession(req.headers.cookie);
     if (session === undefined) return apiError(res, name, new HttpError(401, "unauthenticated", "sign in first"));
     try {
@@ -635,6 +642,20 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const isApi = pathname === "/api" || pathname.startsWith("/api/");
     const isAuth = pathname === "/auth" || pathname.startsWith("/auth/");
     if (isApi || isAuth) res.setHeader("cache-control", "no-store");
+    if (isApi) {
+      const allowed = apiOrigin(req);
+      if (allowed !== undefined) {
+        // The reply depends on Origin, so a shared cache must key on it.
+        res.setHeader("vary", "origin");
+        res.setHeader("access-control-allow-origin", allowed);
+        res.setHeader("access-control-allow-credentials", "true");
+        if (req.method === "OPTIONS") {
+          route = "api-preflight";
+          res.writeHead(204, { "access-control-allow-methods": CORS_METHODS, "access-control-allow-headers": "content-type, x-squad-csrf", "access-control-max-age": "600" });
+          return void res.end();
+        }
+      }
+    }
     const isLogo = pathname.startsWith("/logos/");
     if (isLogo) route = "logo";
     const run = isApi ? api(req, res, pathname, url, (r) => (route = r)) : isLogo ? serveLogo(req, res, pathname) : isAuth ? auth(req, res, pathname, url, (r) => (route = r)) : Promise.resolve(opts.apiOnly === true ? sendText(res, 404, "not found\n") : serveStatic(req, res, pathname));

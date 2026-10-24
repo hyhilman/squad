@@ -320,6 +320,55 @@ test("security headers are on api, auth, static and error answers; api and auth 
   await r.close();
 });
 
+test("CORS: a listed origin gets credentialed access on /api only; others get nothing", async () => {
+  const APP = "https://app.example.test";
+  const r = await rig({}, { SQUAD_WEB_API_ORIGINS: APP });
+  seed(r);
+  const c = await signIn(r, "alice@example.test");
+  const get = await fetch(`${r.base}/api/me`, { headers: { cookie: c, origin: APP } });
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get("access-control-allow-origin"), APP);
+  assert.equal(get.headers.get("access-control-allow-credentials"), "true");
+  assert.match(get.headers.get("vary") ?? "", /origin/i);
+  const pre = await fetch(`${r.base}/api/accounts/pi/alice-key/enabled`, { method: "OPTIONS", headers: { origin: APP, "access-control-request-method": "PUT" } });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get("access-control-allow-origin"), APP);
+  assert.equal(pre.headers.get("access-control-allow-credentials"), "true");
+  assert.equal(pre.headers.get("access-control-allow-headers"), "content-type, x-squad-csrf");
+  assert.equal(pre.headers.get("access-control-max-age"), "600");
+  const methods = (pre.headers.get("access-control-allow-methods") ?? "").split(", ").sort();
+  assert.deepEqual(methods, [...new Set(Object.values(ROUTES).map((x) => x.method))].sort());
+  const put = (origin: string): Promise<Response> => fetch(`${r.base}/api/accounts/pi/alice-key/enabled`, { method: "PUT", headers: { cookie: c, "content-type": "application/json", "x-squad-csrf": "1", origin }, body: '{"enabled":false}' });
+  const ok = await put(APP);
+  assert.equal(ok.status, 200, "a write from a listed origin passes csrf");
+  assert.equal(ok.headers.get("access-control-allow-origin"), APP);
+  const evil = "https://evil.example.test";
+  const no = await put(evil);
+  assert.equal(no.status, 403);
+  assert.equal(no.headers.get("access-control-allow-origin"), null);
+  const noGet = await fetch(`${r.base}/api/me`, { headers: { cookie: c, origin: evil } });
+  assert.equal(noGet.headers.get("access-control-allow-origin"), null);
+  assert.equal(noGet.headers.get("access-control-allow-credentials"), null);
+  const noPre = await fetch(`${r.base}/api/me`, { method: "OPTIONS", headers: { origin: evil } });
+  assert.equal(noPre.status, 405);
+  assert.equal(noPre.headers.get("access-control-allow-origin"), null);
+  for (const path of ["/auth/login", "/auth/callback", "/"]) {
+    const x = await fetch(`${r.base}${path}`, { redirect: "manual", headers: { origin: APP } });
+    assert.equal(x.headers.get("access-control-allow-origin"), null, path);
+  }
+  const lo = await fetch(`${r.base}/auth/logout`, { method: "POST", headers: { cookie: c, origin: APP, "x-squad-csrf": "1" } });
+  assert.equal(lo.status, 403, "logout is not for other origins");
+  await r.close();
+});
+
+test("CORS: with no setting, nobody gets headers and a preflight is refused", async () => {
+  const r = await rig();
+  const x = await fetch(`${r.base}/api/me`, { method: "OPTIONS", headers: { origin: "https://app.example.test" } });
+  assert.equal(x.status, 405);
+  assert.equal(x.headers.get("access-control-allow-origin"), null);
+  await r.close();
+});
+
 test("/auth/logout is POST only, needs the csrf proof, and clears the session", async () => {
   const r = await rig();
   const c = await signIn(r, "alice@example.test");

@@ -29,7 +29,12 @@ export const SQUAD_WEB_FRAME_ANCESTORS_ENV: EnvSpec = {
   why: "the sites that may show the web app in an iframe, as a comma list of https origins (a host may start with `*.`); unset = no site may frame it",
 };
 
-export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV, SQUAD_WEB_FRAME_ANCESTORS_ENV];
+export const SQUAD_WEB_API_ORIGINS_ENV: EnvSpec = {
+  key: "SQUAD_WEB_API_ORIGINS",
+  why: "the https origins of other apps on the same site that may call /api with the session cookie (CORS), as a comma list, exact match, no wildcards; unset = none",
+};
+
+export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV, SQUAD_WEB_FRAME_ANCESTORS_ENV, SQUAD_WEB_API_ORIGINS_ENV];
 
 // An https origin, its host optionally starting with "*." (as CSP allows), with an optional port and
 // nothing else: the value goes into a CSP header, so nothing may close the directive or add another.
@@ -42,6 +47,16 @@ function frameAncestorsOf(raw: string | undefined): string {
   if (list.length === 0) return "'none'";
   for (const o of list) if (!FRAME_ORIGIN.test(o)) throw new Error(`SQUAD_WEB_FRAME_ANCESTORS: each entry must be an https origin such as https://app.example.com`);
   return list.join(" ");
+}
+
+// An exact https origin, no wildcard, no path: the server compares it to the Origin header as text.
+const API_ORIGIN = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+(:[0-9]{1,5})?$/;
+
+function apiOriginsOf(raw: string | undefined): readonly string[] {
+  if (raw === undefined) return [];
+  const list = raw.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s !== "");
+  for (const o of list) if (!API_ORIGIN.test(o)) throw new Error("SQUAD_WEB_API_ORIGINS: each entry must be an exact https origin such as https://app.example.com");
+  return list;
 }
 
 /** The ids the setting allows; undefined = all. */
@@ -64,6 +79,8 @@ export interface WebConfig {
   readonly adminGroup?: string;
   /** The CSP frame-ancestors value for pages: 'none', or the sites that may frame the app. */
   readonly frameAncestors: string;
+  /** Origins that may call /api with the session cookie, besides the app's own. */
+  readonly apiOrigins: readonly string[];
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
   /** Cookies get `Secure` when the public URL is https. */
@@ -157,6 +174,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
     ...(group === undefined ? {} : { group }),
     ...(adminGroup === undefined ? {} : { adminGroup }),
     frameAncestors: frameAncestorsOf(envOptional(SQUAD_WEB_FRAME_ANCESTORS_ENV, env)),
+    apiOrigins: apiOriginsOf(envOptional(SQUAD_WEB_API_ORIGINS_ENV, env)),
     ...(secrets.clientSecret === undefined ? {} : { clientSecret: secrets.clientSecret }),
     sessionKey: secrets.sessionKey,
     secure: web.protocol === "https:",

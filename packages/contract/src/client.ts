@@ -5,7 +5,7 @@ import { ROUTES, pathOf, type Api, type ApiError, type RouteName } from "./api.t
 /** The part of `fetch` this needs, so the package needs neither DOM nor Node types. */
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: string; credentials: "same-origin" },
+  init: { method: string; headers: Record<string, string>; body?: string; credentials: "same-origin" | "include" },
 ) => Promise<{ readonly ok: boolean; readonly status: number; json(): Promise<unknown> }>;
 
 export class ApiFailure extends Error {
@@ -25,8 +25,13 @@ type Input<N extends RouteName> = (Api[N]["params"] extends void ? {} : { params
 const isApiError = (v: unknown): v is ApiError =>
   typeof v === "object" && v !== null && typeof (v as ApiError).error === "string" && typeof (v as ApiError).message === "string";
 
-/** Calls one route. The session is the same-origin cookie; the app never holds a token. */
-export async function call<N extends RouteName>(fetchFn: FetchLike, base: string, name: N, input: Input<N>): Promise<Api[N]["res"]> {
+export interface CallOptions {
+  /** "include" sends the session cookie to another origin of the same site; it needs SQUAD_WEB_API_ORIGINS on the server. */
+  readonly credentials?: "same-origin" | "include";
+}
+
+/** Calls one route. The session is a cookie; the app never holds a token. */
+export async function call<N extends RouteName>(fetchFn: FetchLike, base: string, name: N, input: Input<N>, opts: CallOptions = {}): Promise<Api[N]["res"]> {
   const route = ROUTES[name];
   const i = input as { params?: Record<string, string>; query?: Record<string, string | undefined>; body?: unknown };
   let url = base + pathOf(route.path, i.params);
@@ -46,7 +51,7 @@ export async function call<N extends RouteName>(fetchFn: FetchLike, base: string
       ...(route.method === "GET" ? {} : { "x-squad-csrf": "1" }),
     },
     ...(i.body === undefined ? {} : { body: JSON.stringify(i.body) }),
-    credentials: "same-origin",
+    credentials: opts.credentials ?? "same-origin",
   });
   const json = await res.json();
   if (!res.ok) throw new ApiFailure(res.status, isApiError(json) ? json : { error: "internal", message: `HTTP ${res.status}` });
