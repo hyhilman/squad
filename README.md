@@ -129,6 +129,33 @@ that CLI's own flags:
 A bad value is a thrown error before any account or container is touched. `openHome(dir?, env?)`
 returns `{ home, store }` for the `deps`.
 
+### Conversations and providers
+
+A conversation is many turns on one account (pi only for now; codex and claude refuse). The
+history stays in a folder under the squad home. The caller picks the account.
+
+```ts
+import { open, send, close, listAccountsWithServes } from "squad";
+
+const conv = open({ runner: "pi", account: "pi/alice", model: "provider/model", cwd, caller }, deps);
+const turn = await send(conv, "first message", { onOutput }, deps);
+await send(conv, "follow-up", {}, deps);
+close(conv, deps);
+```
+
+- `open` writes a row and starts no container. It takes the same standard fields as a pass and fixes
+  them for every turn. It refuses an unknown, dead or disabled account.
+- `send` is one pass on that account, always. If another pass holds the account's lock, it answers
+  at once with failure kind `busy`; ask again later. Each turn has a pass row with the conversation
+  id.
+- If the first turn is refused (`quota`, `rate-limit` or `auth`) with zero tokens, the tie is dropped:
+  `turn.closed` is `"first-turn-refused"` and the caller can `open` again on another account.
+- `close` deletes the history and is safe to call twice. `squad gc` closes a conversation that
+  was idle for `SQUAD_CONVERSATION_IDLE_D` days, never one with a running turn.
+- `listAccountsWithServes({ home, store }, runner?)` lists each account with its health, `busy`, room
+  left in both windows with their reset times, and `serves`: the providers (and, when pi's
+  `models.json` lists them, the model ids) it can run. It never returns a key or token.
+
 ## Web view
 
 `squad web` serves the API and the built web app from one origin. Sign-in is OIDC (the code flow

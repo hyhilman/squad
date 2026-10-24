@@ -12,7 +12,8 @@ import { dockerPsArgv, dockerRmArgv, dockerStopArgv, stopGraceS } from "./docker
 import type { HomeLayout } from "./home.ts";
 import type { Log } from "./log.ts";
 import { DEFAULT_DEADLINE_MS } from "./run.ts";
-import { SQUAD_KEEP_LOGS_D_ENV, SQUAD_KEEP_PASSES_D_ENV, SQUAD_SESSION_TTL_D_ENV, envNum } from "./settings.ts";
+import { SQUAD_CONVERSATION_IDLE_D_ENV, SQUAD_KEEP_LOGS_D_ENV, SQUAD_KEEP_PASSES_D_ENV, SQUAD_SESSION_TTL_D_ENV, envNum } from "./settings.ts";
+import { closeIdle, listOpenConversations, type OpenConversation } from "./conversations.ts";
 import { listSessions, deleteSession, sessionDir } from "./sessions.ts";
 import { NO_TOKENS, type Store } from "./store/db.ts";
 
@@ -30,6 +31,8 @@ export interface GcPass {
   readonly id: string;
   readonly startedAt: string;
   readonly endedAt: string | null;
+  /** The conversation or session the pass belongs to. */
+  readonly sessionId?: string | null;
 }
 export interface GcFile {
   readonly path: string;
@@ -53,12 +56,15 @@ export interface GcState {
   readonly sessions: readonly GcSession[];
   /** Every `sessions/<runner>/<account name>/<id>` folder on disk, with or without a row. */
   readonly sessionDirs: readonly GcFile[];
+  /** The open conversations. A conversation also has a row in `sessions`; this list is what tells them apart. */
+  readonly conversations?: readonly OpenConversation[];
 }
 export interface GcSettings {
   readonly graceS: number;
   readonly keepPassesD: number;
   readonly keepLogsD: number;
   readonly sessionTtlD: number;
+  readonly conversationIdleD?: number;
   readonly deadlineMs: number;
 }
 
@@ -68,7 +74,8 @@ export type GcAction =
   | { readonly kind: "end-pass"; readonly id: string }
   | { readonly kind: "delete-pass"; readonly id: string }
   | { readonly kind: "remove-path"; readonly path: string }
-  | { readonly kind: "delete-session"; readonly runner: string; readonly id: string };
+  | { readonly kind: "delete-session"; readonly runner: string; readonly id: string }
+  | { readonly kind: "close-conversation"; readonly id: string };
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -81,6 +88,7 @@ export function gcSettings(env?: Readonly<Record<string, string | undefined>>): 
     keepPassesD: envNum(SQUAD_KEEP_PASSES_D_ENV, env),
     keepLogsD: envNum(SQUAD_KEEP_LOGS_D_ENV, env),
     sessionTtlD: envNum(SQUAD_SESSION_TTL_D_ENV, env),
+    conversationIdleD: envNum(SQUAD_CONVERSATION_IDLE_D_ENV, env),
     deadlineMs: DEFAULT_DEADLINE_MS,
   };
 }
@@ -155,7 +163,17 @@ export function planGc(state: GcState, now: Date, s: GcSettings): GcAction[] {
 
   for (const p of state.passes) if (doomed.has(p.id)) acts.push({ kind: "delete-pass", id: p.id });
   for (const f of state.logs) if (olderThan(f.mtime, s.keepLogsD * DAY_MS)) acts.push({ kind: "remove-path", path: f.path });
+  // Only with a live view of the containers: a turn that runs now must not lose its history.
+  const openConvs = new Set((state.conversations ?? []).map((x) => x.id));
+  if (state.containers !== null && s.conversationIdleD !== undefined) {
+    for (const x of state.conversations ?? []) {
+      const running = state.passes.some((q) => q.sessionId === x.id && q.endedAt === null && liveIds.has(q.id));
+      if (!running && olderThan(x.lastUsedAt, s.conversationIdleD * DAY_MS)) acts.push({ kind: "close-conversation", id: x.id });
+    }
+  }
   for (const x of state.sessions) {
+    // An open conversation's history is closed by its own rule above.
+    if (openConvs.has(x.id)) continue;
     if (!olderThan(x.lastUsedAt, s.sessionTtlD * DAY_MS)) continue;
     const dir = sessionDir(state.home, x.runner, x.account, x.id);
     // A row whose folder would fall outside sessions/ is not touched: it is not ours to judge.
@@ -174,6 +192,7 @@ export function describeAction(a: GcAction, home: HomeLayout, dry: boolean): str
     case "delete-pass": return `${dry ? "would delete" : "deleted"} pass ${a.id}`;
     case "remove-path": return `${dry ? "would remove" : "removed"} ${rel(a.path)}`;
     case "delete-session": return `${dry ? "would delete" : "deleted"} session ${a.runner}/${a.id}`;
+    case "close-conversation": return `${dry ? "would close" : "closed"} idle conversation ${a.id}`;
   }
 }
 
@@ -239,7 +258,7 @@ export function gatherGcState(deps: GcDeps): GcState {
   } catch {
     containers = null;
   }
-  const passes = (store.db.prepare("SELECT id, started_at, ended_at FROM passes").all() as { id: string; started_at: string; ended_at: string | null }[]).map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at }));
+  const passes = (store.db.prepare("SELECT id, started_at, ended_at, session_id FROM passes").all() as { id: string; started_at: string; ended_at: string | null; session_id: string | null }[]).map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at, sessionId: r.session_id }));
   let staging: GcFile[] = [];
   try {
     staging = readdirSync(home.staging).map((n) => ({ path: join(home.staging, n), mtime: lstatSync(join(home.staging, n)).mtime }));
@@ -256,7 +275,7 @@ export function gatherGcState(deps: GcDeps): GcState {
     }
   }
   const sessions = listSessions(store.db).map((x) => ({ runner: x.runner, id: x.id, account: x.account, lastUsedAt: x.lastUsedAt }));
-  return { home, containers, passes, staging, logs: [...filesIn(home.passLogs), ...filesIn(home.usageExport)], sessions, sessionDirs };
+  return { home, containers, passes, staging, logs: [...filesIn(home.passLogs), ...filesIn(home.usageExport)], sessions, sessionDirs, conversations: listOpenConversations(store.db) };
 }
 
 export interface GcResult {
@@ -301,6 +320,9 @@ export function executeGc(actions: readonly GcAction[], deps: GcDeps): GcResult 
         }
         case "delete-session":
           deleteSession(store.db, a.runner, a.id);
+          break;
+        case "close-conversation":
+          closeIdle(store.db, home, a.id, deps.now());
           break;
       }
       done.push(a);

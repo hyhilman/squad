@@ -11,7 +11,7 @@ echo "== tarball: $tgz"; tar -tzf "$work/$tgz" | sed 's/^/   /' | awk 'NR<=12 ||
 mkdir "$work/app"; cd "$work/app"
 echo '{"name":"app","private":true,"type":"module"}' > package.json
 npm install --no-audit --no-fund "$work/$tgz" >/dev/null
-echo "== exports"; node -e 'import("squad").then(m=>console.log(Object.keys(m).sort().join(",")))'
+echo "== exports"; node -e 'import("squad").then(m=>{const want=["runPass","open","send","close","listAccounts","listAccountsWithServes","servesOf","openHome"];const miss=want.filter(k=>typeof m[k]!=="function");console.log(Object.keys(m).sort().join(","));if(miss.length){console.error("missing exports: "+miss);process.exit(1)}})'
 echo "== squad --help"; npx squad --help 2>&1 | head -5 || true
 echo "== squad list"; SQUAD_HOME="$home" npx squad list; echo "exit $?"
 echo "== image build pi (dry run)"; SQUAD_DRY_RUN=1 SQUAD_HOME="$home" npx squad image build pi
@@ -21,7 +21,7 @@ SQUAD_DOCKER="$work/fake-docker" SQUAD_HOME="$home" npx squad image build pi 2>&
 echo "== bundled paths from the installed dist"
 node -e 'import("./node_modules/squad/dist/paths.js").then(m=>{for (const r of ["webapp","images","assets/codex-config.toml"]) console.log(r, "->", m.bundledPath(r))})'
 echo "== files exist"; ls node_modules/squad/dist/webapp/index.html node_modules/squad/dist/images/entry.sh node_modules/squad/dist/assets/codex-config.toml
-echo "== types"; echo 'import type { PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions } from "squad"; export const x: [PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions] | undefined = undefined;' > t.ts
+echo "== types"; echo 'import type { PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider } from "squad"; export const x: [PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider] | undefined = undefined;' > t.ts
 "$repo/node_modules/.bin/tsc" --noEmit --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node --typeRoots "$repo/node_modules/@types" t.ts && echo "types ok"
 echo "== webapp holds the built app only"
 test -f node_modules/squad/dist/webapp/index.html

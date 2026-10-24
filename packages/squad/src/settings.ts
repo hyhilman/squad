@@ -67,6 +67,11 @@ export const SQUAD_SESSION_TTL_D_ENV: EnvSpec = {
   default: "7",
   why: "days an unused session folder is kept before the cleanup job removes it",
 };
+export const SQUAD_CONVERSATION_IDLE_D_ENV: EnvSpec = {
+  key: "SQUAD_CONVERSATION_IDLE_D",
+  default: "7",
+  why: "days an open conversation may sit without a turn before the cleanup job closes it and deletes its history; one with a running turn is never closed",
+};
 export const SQUAD_KEEP_PASSES_D_ENV: EnvSpec = {
   key: "SQUAD_KEEP_PASSES_D",
   default: "400",
@@ -143,6 +148,7 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_NO_USAGE_EXPORT_ENV,
   SQUAD_STOP_GRACE_S_ENV,
   SQUAD_SESSION_TTL_D_ENV,
+  SQUAD_CONVERSATION_IDLE_D_ENV,
   SQUAD_KEEP_PASSES_D_ENV,
   SQUAD_KEEP_LOGS_D_ENV,
   SQUAD_FLOOR_DEFAULT_ENV,

@@ -19,6 +19,9 @@ export interface HealthRow {
   readonly left5h: number | null;
   readonly leftWeek: number | null;
   readonly readAt: string | null;
+  /** When each window resets, from the same read as left5h and leftWeek. */
+  readonly resets5h: string | null;
+  readonly resetsWeek: string | null;
 }
 
 export const emptyHealth = (account: string): HealthRow => ({
@@ -35,6 +38,8 @@ export const emptyHealth = (account: string): HealthRow => ({
   left5h: null,
   leftWeek: null,
   readAt: null,
+  resets5h: null,
+  resetsWeek: null,
 });
 
 export interface HealthChange {
@@ -72,7 +77,7 @@ export function applyOutcome(
   const at = now.toISOString();
   let h: HealthRow = { ...prev, lastUsedAt: at };
   if (room !== undefined && (room.left5h !== undefined || room.leftWeek !== undefined)) {
-    h = { ...h, left5h: room.left5h ?? h.left5h, leftWeek: room.leftWeek ?? h.leftWeek, readAt: at };
+    h = { ...h, left5h: room.left5h ?? h.left5h, leftWeek: room.leftWeek ?? h.leftWeek, readAt: at, resets5h: room.resets5h ?? h.resets5h, resetsWeek: room.resetsWeek ?? h.resetsWeek };
   }
 
   if (failure === undefined) {
@@ -116,7 +121,7 @@ export function applyRead(prev: HealthRow, read: UsageReadResult, now: Date): Re
   const at = now.toISOString();
   if ("ok" in read) {
     const { room } = read.ok;
-    return { health: { ...prev, left5h: room.left5h ?? prev.left5h, leftWeek: room.leftWeek ?? prev.leftWeek, readAt: at } };
+    return { health: { ...prev, left5h: room.left5h ?? prev.left5h, leftWeek: room.leftWeek ?? prev.leftWeek, readAt: at, resets5h: room.resets5h ?? prev.resets5h, resetsWeek: room.resetsWeek ?? prev.resetsWeek } };
   }
   if ("suspect" in read) {
     if (prev.suspectSince !== null) return { health: prev };

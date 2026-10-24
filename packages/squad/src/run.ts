@@ -44,6 +44,8 @@ export interface PassRequest extends TurnOptions {
   readonly caller: { readonly flow: string; readonly action: string };
   readonly task?: { readonly kind: string; readonly id: string };
   readonly session?: string;
+  /** Set by `send` only. A busy account then answers `busy`, not `no-account`, so the caller can wait and ask again. */
+  readonly conversation?: boolean;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
   /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
@@ -276,6 +278,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
   }
   const picked = pick(pinned === undefined ? list : list.filter((c) => c.account === pinned.account), nowFn().getTime());
   if (picked.order.length === 0) {
+    if (pinned !== undefined && req.conversation === true && picked.skipped[pinned.account] === "busy") return noAccount(store, req, deps, nowFn(), { kind: "busy", code: "", message: `${pinned.account} is busy` });
     if (pinned !== undefined) return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: `session ${req.session} is pinned to ${pinned.account}, which cannot run: ${picked.skipped[pinned.account] ?? "not in the pool"}` });
     if (named !== undefined && picked.skipped[named] === "busy") return noAccount(store, req, deps, nowFn(), { kind: "busy", code: "", message: `${named} is busy` });
     return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: reasonOf(picked, named) });
@@ -400,6 +403,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
       logPath,
     };
   }
+  if (req.conversation === true) return noAccount(store, req, deps, nowFn(), { kind: "busy", code: "", message: "the account is busy" });
   return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: "every account was busy" });
 }
 

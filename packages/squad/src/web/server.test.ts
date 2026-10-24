@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, test } from "node:test";
+import { after, afterEach, before, test } from "node:test";
 import { ROUTES, findForbidden, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
 import { CLIENT_ID, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
 import { emptyHealth } from "../accounts/health.ts";
@@ -21,6 +21,10 @@ let p: FakeOidc;
 before(async () => { p = await startFakeOidc("ES256"); });
 after(async () => { await p.close(); });
 
+/** Rigs not closed yet. A test that fails before its own `r.close()` would leave a server listening, and node would wait for it forever. */
+const openRigs = new Set<Rig>();
+afterEach(async () => { for (const r of [...openRigs]) await r.close(); });
+
 interface Rig { web: WebHandle; base: string; store: Store; home: HomeLayout; logs: string[]; close: () => Promise<void> }
 
 async function rig(extra: Partial<WebOpts> = {}, env: Record<string, string> = {}): Promise<Rig> {
@@ -32,7 +36,9 @@ async function rig(extra: Partial<WebOpts> = {}, env: Record<string, string> = {
     env: { SQUAD_WEB_URL: PUBLIC, SQUAD_WEB_PORT: "0", SQUAD_OIDC_ISSUER: p.issuer, SQUAD_OIDC_CLIENT_ID: CLIENT_ID, ...env },
     home, store, now: () => NOW, busy: () => false, log: makeLog((l) => logs.push(l)), ...extra,
   });
-  return { web, base: `http://127.0.0.1:${web.port}`, store, home, logs, close: async () => { await web.close(); store.close(); } };
+  const rg: Rig = { web, base: `http://127.0.0.1:${web.port}`, store, home, logs, close: async () => { if (!openRigs.delete(rg)) return; await web.close(); store.close(); } };
+  openRigs.add(rg);
+  return rg;
 }
 
 /** Signs in through the real /auth routes against the fake provider. Returns the Cookie header. */
@@ -903,9 +909,9 @@ test("addAccount twice with two names: both end up owned by the person, with the
   }
   assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", { runner: "codex", name: "seat-one" })).status, 409, "the same name while its login runs");
   // Read the folders once: the first login moves its folder away as soon as it exits.
-  const stagings = (await import("node:fs")).readdirSync(r.home.staging).sort();
+  // The staging folder is the pass id, which is also the container name: two ids from one millisecond do not sort in start order.
   for (const [i, proc] of f.procs.entries()) {
-    const staging = stagings[i]!;
+    const staging = proc.name.replace(/^squad-login-/, "").toUpperCase();
     writeFileSync(join(r.home.staging, staging, "auth.json"), JSON.stringify({ tokens: { id_token: fakeIdToken({ email: seats[i]! }) } }));
     proc.exit(0);
   }

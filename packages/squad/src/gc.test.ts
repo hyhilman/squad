@@ -126,8 +126,8 @@ test("the planner drops any path under accounts/ or locks/, or outside the folde
 });
 
 test("gcSettings reads the keep and TTL settings with their defaults", () => {
-  assert.deepEqual(gcSettings({}), { graceS: 20, keepPassesD: 400, keepLogsD: 400, sessionTtlD: 7, deadlineMs: 2 * H });
-  assert.deepEqual(gcSettings({ SQUAD_KEEP_PASSES_D: "9", SQUAD_KEEP_LOGS_D: "3", SQUAD_SESSION_TTL_D: "1", SQUAD_STOP_GRACE_S: "5" }), { graceS: 5, keepPassesD: 9, keepLogsD: 3, sessionTtlD: 1, deadlineMs: 2 * H });
+  assert.deepEqual(gcSettings({}), { graceS: 20, keepPassesD: 400, keepLogsD: 400, sessionTtlD: 7, conversationIdleD: 7, deadlineMs: 2 * H });
+  assert.deepEqual(gcSettings({ SQUAD_KEEP_PASSES_D: "9", SQUAD_KEEP_LOGS_D: "3", SQUAD_SESSION_TTL_D: "1", SQUAD_STOP_GRACE_S: "5" }), { graceS: 5, keepPassesD: 9, keepLogsD: 3, sessionTtlD: 1, conversationIdleD: 7, deadlineMs: 2 * H });
 });
 
 // --- on a real (throwaway) home with the fake docker ---
@@ -320,4 +320,45 @@ test("gather lists session folders three levels down, and gc removes an orphan b
   assert.ok(!existsSync(orphan));
   assert.ok(existsSync(join(r.h.sessions, "pi", "k1", "live", "t.jsonl")));
   assert.ok(existsSync(join(r.h.sessions, "pi", "k1")), "only the id folder goes");
+});
+
+// --- conversations ---
+
+const SC: GcSettings = { ...S, conversationIdleD: 7 };
+const conv = (id: string, idleMs: number) => ({ id, lastUsedAt: ago(idleMs).toISOString() });
+const sess = (id: string, idleMs: number) => ({ runner: "pi", id, account: "pi/k1", lastUsedAt: ago(idleMs).toISOString() });
+
+test("an idle conversation is closed; a fresh one is not; the session TTL never deletes an open conversation's history", () => {
+  const st = state({ conversations: [conv("c1", 8 * D), conv("c2", 6 * D)], sessions: [sess("c1", 8 * D), sess("c2", 8 * D), sess("plain", 8 * D)] });
+  const acts = planGc(st, NOW, SC);
+  assert.deepEqual(acts.filter((a) => a.kind === "close-conversation"), [{ kind: "close-conversation", id: "c1" }]);
+  const deleted = acts.filter((a) => a.kind === "delete-session").map((a) => (a as { id: string }).id);
+  assert.deepEqual(deleted, ["plain"], "c1 and c2 are the conversation code's to close");
+});
+
+test("a conversation with a running turn is never closed; docker down closes nothing", () => {
+  const live = state({ conversations: [conv("c1", 30 * D)], containers: [c("squad-a", "A", "running")], passes: [{ ...p("A", 5 * 60_000, false), sessionId: "c1" }] });
+  assert.deepEqual(planGc(live, NOW, SC).filter((a) => a.kind === "close-conversation"), []);
+  const down = state({ conversations: [conv("c1", 30 * D)], containers: null });
+  assert.deepEqual(planGc(down, NOW, SC).filter((a) => a.kind === "close-conversation"), []);
+});
+
+test("gc closes an idle conversation for real: folder gone, row closed", () => {
+  const root = mkdtempSync(join(tmpdir(), "gc-conv-"));
+  const h = layoutOf(join(root, "home"), {});
+  ensureHome(h);
+  const store = openStore({ dbPath: h.db, spoolDir: h.spool });
+  addAccount(store.db, { runner: "pi", name: "k1", kind: "key" }, NOW);
+  const fake = makeFakeDocker(join(root, "bin"));
+  store.db.prepare("INSERT INTO conversations (id, runner, account, model, cwd, caller_flow, caller_action, spec, created_at, last_used_at) VALUES ('c1', 'pi', 'pi/k1', 'm', '/w', 'f', 'a', '{}', ?, ?)").run(ago(9 * D).toISOString(), ago(9 * D).toISOString());
+  pinSession(store.db, "pi", "c1", "pi/k1", ago(9 * D));
+  const dir = sessionDir(h, "pi", "pi/k1", "c1");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "t.jsonl"), "{}");
+  const deps = { docker: fake.path, store, home: h, now: () => NOW };
+  const acts = planGc(gatherGcState(deps), NOW, gcSettings({}));
+  executeGc(acts, deps);
+  assert.ok(!existsSync(dir));
+  assert.equal((store.db.prepare("SELECT closed_reason FROM conversations WHERE id = 'c1'").get() as { closed_reason: string }).closed_reason, "idle");
+  assert.deepEqual(planGc(gatherGcState(deps), NOW, gcSettings({})), [], "a second gc plans nothing");
 });

@@ -70,11 +70,11 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 14);
+  assert.equal(MIGRATIONS.length, 18);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(tables, ["accounts", "events", "health", "passes", "room_reads", "schema_version", "sessions"]);
+  assert.deepEqual(tables, ["accounts", "conversations", "events", "health", "passes", "room_reads", "schema_version", "sessions"]);
 });
 
 test("migration 11: login_email is set from owner_email for codex and claude login rows only; room_reads exists", () => {

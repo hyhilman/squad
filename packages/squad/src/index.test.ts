@@ -6,7 +6,7 @@ import { test } from "node:test";
 import * as lib from "./index.ts";
 
 test("the library entry exports runPass, roomOf, listAccounts and usageBy", () => {
-  for (const name of ["runPass", "roomOf", "listAccounts", "usageBy"]) assert.equal(typeof (lib as Record<string, unknown>)[name], "function", name);
+  for (const name of ["runPass", "roomOf", "listAccounts", "usageBy", "open", "send", "close", "servesOf", "listAccountsWithServes"]) assert.equal(typeof (lib as Record<string, unknown>)[name], "function", name);
 });
 
 test("the library entry exports the home helpers", () => {
@@ -22,6 +22,6 @@ test("openHome makes the home and opens its store", () => {
 });
 
 test("the standard-field types are exported", () => {
-  const t: [lib.PassRequest["effort"], lib.Effort, lib.SkillRef, lib.ExtraMount, lib.TurnOptions, lib.Failure, lib.FailureKind, lib.Usage, lib.AccountRow, lib.Log, lib.PassResult, lib.RunDeps] | undefined = undefined;
+  const t: [lib.PassRequest["effort"], lib.Effort, lib.SkillRef, lib.ExtraMount, lib.TurnOptions, lib.Failure, lib.FailureKind, lib.Usage, lib.AccountRow, lib.Log, lib.PassResult, lib.RunDeps, lib.Conversation, lib.OpenRequest, lib.TurnResult, lib.AccountInfo, lib.ServedProvider] | undefined = undefined;
   assert.equal(t, undefined);
 });

@@ -109,6 +109,29 @@ export const MIGRATIONS: readonly string[] = [
      source TEXT NOT NULL
    ) STRICT`,
   `CREATE INDEX room_reads_account ON room_reads (account, at)`,
+  // A conversation is a session with a fixed setup (system, skill, effort, mounts...) and a close
+  // reason. It has its own table because \`sessions\` is only a pin, keyed by runner and id; the pin row
+  // stays too, so the pass code finds the history folder the same way for both.
+  `CREATE TABLE conversations (
+     id TEXT PRIMARY KEY,
+     runner TEXT NOT NULL,
+     account TEXT NOT NULL,
+     model TEXT NOT NULL,
+     cwd TEXT NOT NULL,
+     caller_flow TEXT NOT NULL,
+     caller_action TEXT NOT NULL,
+     task_kind TEXT,
+     task_id TEXT,
+     spec TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     last_used_at TEXT NOT NULL,
+     closed_at TEXT,
+     closed_reason TEXT
+   ) STRICT`,
+  `CREATE INDEX conversations_open ON conversations (closed_at, last_used_at)`,
+  // The times the windows reset, with the room left (see room_reads).
+  `ALTER TABLE health ADD COLUMN resets_5h TEXT`,
+  `ALTER TABLE health ADD COLUMN resets_week TEXT`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

@@ -105,3 +105,11 @@ test("busy and no-account never feed health", () => {
     assert.deepEqual(r, { health: prev });
   }
 });
+
+test("a pass that reads room also keeps the reset times; a later read without them keeps the old ones", () => {
+  const room = { left5h: 40, leftWeek: 70, resets5h: "2026-10-24T15:00:00.000Z", resetsWeek: "2026-10-30T00:00:00.000Z" };
+  const a = applyOutcome(emptyHealth("pi/a"), { room }, new Date("2026-10-24T12:00:00.000Z")).health;
+  assert.deepEqual([a.resets5h, a.resetsWeek], [room.resets5h, room.resetsWeek]);
+  const b = applyOutcome(a, { room: { left5h: 30 } }, new Date("2026-10-24T12:05:00.000Z")).health;
+  assert.deepEqual([b.left5h, b.resets5h], [30, room.resets5h]);
+});

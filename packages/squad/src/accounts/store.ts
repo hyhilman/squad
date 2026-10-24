@@ -126,13 +126,13 @@ export function roomSince(db: DatabaseSync, account: string, since: Date): RoomR
 interface RawHealth {
   account: string; cool_until: string | null; cool_kind: string | null; suspect_since: string | null; auth_fails: number;
   last_ok_at: string | null; last_fail_at: string | null; last_fail_kind: string | null; last_fail_code: string | null;
-  last_used_at: string | null; left_5h: number | null; left_week: number | null; read_at: string | null;
+  last_used_at: string | null; left_5h: number | null; left_week: number | null; read_at: string | null; resets_5h: string | null; resets_week: string | null;
 }
 
 const toHealth = (r: RawHealth): HealthRow => ({
   account: r.account, coolUntil: r.cool_until, coolKind: r.cool_kind, suspectSince: r.suspect_since, authFails: r.auth_fails,
   lastOkAt: r.last_ok_at, lastFailAt: r.last_fail_at, lastFailKind: r.last_fail_kind, lastFailCode: r.last_fail_code,
-  lastUsedAt: r.last_used_at, left5h: r.left_5h, leftWeek: r.left_week, readAt: r.read_at,
+  lastUsedAt: r.last_used_at, left5h: r.left_5h, leftWeek: r.left_week, readAt: r.read_at, resets5h: r.resets_5h, resetsWeek: r.resets_week,
 });
 
 export function getHealth(db: DatabaseSync, account: string): HealthRow {
@@ -142,9 +142,9 @@ export function getHealth(db: DatabaseSync, account: string): HealthRow {
 
 export function putHealth(db: DatabaseSync, h: HealthRow): void {
   db.prepare(
-    `INSERT OR REPLACE INTO health (account, cool_until, cool_kind, suspect_since, auth_fails, last_ok_at, last_fail_at, last_fail_kind, last_fail_code, last_used_at, left_5h, left_week, read_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(h.account, h.coolUntil, h.coolKind, h.suspectSince, h.authFails, h.lastOkAt, h.lastFailAt, h.lastFailKind, h.lastFailCode, h.lastUsedAt, h.left5h, h.leftWeek, h.readAt);
+    `INSERT OR REPLACE INTO health (account, cool_until, cool_kind, suspect_since, auth_fails, last_ok_at, last_fail_at, last_fail_kind, last_fail_code, last_used_at, left_5h, left_week, read_at, resets_5h, resets_week)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(h.account, h.coolUntil, h.coolKind, h.suspectSince, h.authFails, h.lastOkAt, h.lastFailAt, h.lastFailKind, h.lastFailCode, h.lastUsedAt, h.left5h, h.leftWeek, h.readAt, h.resets5h, h.resetsWeek);
 }
 
 const orUndef = <T>(v: T | null): T | undefined => (v === null ? undefined : v);
