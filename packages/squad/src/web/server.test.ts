@@ -481,6 +481,21 @@ test("SQUAD_WEB_BRAND_DIR: the four brand names come from that folder; anything 
   await r3.close();
 });
 
+test("a page loaded in a frame (Sec-Fetch-Dest: iframe) is marked on <html>, so its loader stays see-through before any script", async () => {
+  const root = mkdtempSync(join(tmpdir(), "static-"));
+  writeFileSync(join(root, "index.html"), '<!doctype html><html lang="en"><head><title>x</title></head><body></body></html>');
+  const r = await rig({ staticDir: root });
+  const framed = await fetch(`${r.base}/accounts`, { headers: { "sec-fetch-dest": "iframe" } });
+  assert.match(await framed.text(), /<html data-framed="" lang="en">/);
+  assert.match(framed.headers.get("vary") ?? "", /sec-fetch-dest/i);
+  for (const dest of [undefined, "document", "iframe2"]) {
+    const res = await fetch(`${r.base}/`, { headers: dest === undefined ? {} : { "sec-fetch-dest": dest } });
+    assert.doesNotMatch(await res.text(), /data-framed/, String(dest));
+    assert.match(res.headers.get("vary") ?? "", /sec-fetch-dest/i, "the answer depends on the header either way");
+  }
+  await r.close();
+});
+
 test("each page answer has a fresh style nonce, in the CSP and in a meta tag for Ant Design", async () => {
   const root = mkdtempSync(join(tmpdir(), "static-"));
   writeFileSync(join(root, "index.html"), "<html><head><title>x</title></head><body></body></html>");

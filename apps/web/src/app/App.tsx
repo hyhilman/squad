@@ -1,7 +1,8 @@
 // The web app: Chakra UI on React Router, server data through TanStack Query and the contract's `call`.
 import "@fontsource-variable/inter/wght.css";
 import { CacheProvider } from "@emotion/react";
-import { Center, ChakraProvider, Spinner } from "@chakra-ui/react";
+import { Center, ChakraProvider } from "@chakra-ui/react";
+import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ApiFailure } from "@squad/contract";
 import { signInPlan } from "./lib/signin.ts";
@@ -17,6 +18,7 @@ import { Passes } from "./pages/Passes.tsx";
 import { Usage } from "./pages/Usage.tsx";
 import { queryClient, useMe } from "./queries.ts";
 import { emotionCache } from "./ui/emotion.ts";
+import { LogoLoader, hidePageLoader } from "./ui/Loader.tsx";
 import { ErrorBlock } from "./ui/parts.tsx";
 import { Shell } from "./ui/Shell.tsx";
 import { system } from "./ui/system.ts";
@@ -30,13 +32,8 @@ function Gate() {
     // A top-level page is already on its way to /auth/login (queries.ts).
     if (plan.kind === "popup") return <SignInCard url={plan.url} />;
   }
-  if (me.isPending || me.isError && me.error instanceof ApiFailure && me.error.status === 401) {
-    return (
-      <Center py="24">
-        <Spinner color="fg.subtle" />
-      </Center>
-    );
-  }
+  if (me.isPending) return <LogoLoader />;
+  if (me.isError && me.error instanceof ApiFailure && me.error.status === 401) return <LogoLoader text="Signing in…" />;
   if (me.isError) {
     return (
       <Center py="24" px="4">
@@ -62,6 +59,7 @@ function Gate() {
 }
 
 export default function App() {
+  useEffect(hidePageLoader, []);
   return (
     <CacheProvider value={emotionCache}>
       <ChakraProvider value={system}>

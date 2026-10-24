@@ -5,6 +5,7 @@ import { Box, Button, Flex, Link, Stack, Text } from "@chakra-ui/react";
 import { Boxes, LogIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.ts";
+import { LogoLoader } from "./Loader.tsx";
 
 const POLL_MS = 2000;
 
@@ -12,6 +13,7 @@ export function SignInCard({ url }: { url: string }) {
   const popup = useRef<Window | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [done, setDone] = useState(false);
 
   useEffect(() => {
     if (!waiting) return;
@@ -23,6 +25,7 @@ export function SignInCard({ url }: { url: string }) {
         () => {
           if (stop) return;
           popup.current?.close();
+          setDone(true);
           window.location.reload();
         },
         () => {},
@@ -40,6 +43,7 @@ export function SignInCard({ url }: { url: string }) {
     setWaiting(true);
   };
 
+  if (done) return <LogoLoader text="Finishing sign-in…" />;
   return (
     <Flex justify="center" px="4" py="16">
       <Box w="full" maxW="sm" bg="surface" borderWidth="1px" borderColor="border" rounded="xl" shadow="sm" p="8" textAlign="center">

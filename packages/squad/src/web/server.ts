@@ -840,7 +840,12 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
       const nonce = randomBytes(16).toString("base64");
       const page = data.toString("utf8");
       res.setHeader("content-security-policy", pageCsp(page, nonce, cfg.frameAncestors));
-      data = Buffer.from(page.replace("<head>", `<head><meta name="csp-nonce" content="${nonce}">`), "utf8");
+      // The loader shows before any script runs, so only the request can say it is in a frame. A
+      // framed loader is see-through, so the parent page shows behind it.
+      const framed = req.headers["sec-fetch-dest"] === "iframe";
+      res.setHeader("vary", "sec-fetch-dest");
+      const marked = framed ? page.replace(/<html(?=[\s>])/, '<html data-framed=""') : page;
+      data = Buffer.from(marked.replace("<head>", `<head><meta name="csp-nonce" content="${nonce}">`), "utf8");
     }
     res.writeHead(200, {
       "content-type": type, "content-length": data.length,

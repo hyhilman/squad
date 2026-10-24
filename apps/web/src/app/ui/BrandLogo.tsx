@@ -3,11 +3,12 @@
 // fetch. The files sit at /brand/, so an operator's SQUAD_WEB_BRAND_DIR replaces them with no new build.
 import { Image } from "@chakra-ui/react";
 
-export function BrandLogo({ size }: { size: number | string }) {
+export function BrandLogo({ size, className }: { size: number | string; className?: string }) {
+  const extra = className === undefined ? {} : { className };
   return (
     <>
-      <Image src="/brand/logo-light.png" alt="" boxSize={size} flexShrink={0} draggable={false} _dark={{ display: "none" }} />
-      <Image src="/brand/logo-dark.png" alt="" boxSize={size} flexShrink={0} draggable={false} display="none" _dark={{ display: "block" }} />
+      <Image src="/brand/logo-light.png" alt="" boxSize={size} flexShrink={0} draggable={false} _dark={{ display: "none" }} {...extra} />
+      <Image src="/brand/logo-dark.png" alt="" boxSize={size} flexShrink={0} draggable={false} display="none" _dark={{ display: "block" }} {...extra} />
     </>
   );
 }

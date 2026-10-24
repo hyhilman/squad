@@ -1,7 +1,9 @@
 ---
 // The one page. The whole app is a single React island that renders on the client only: it needs the
-// browser (router, query cache, the CSP nonce in the meta tag the server adds to <head>).
+// browser (router, query cache, the CSP nonce in the meta tag the server adds to <head>). The loader
+// is plain HTML, so it shows before any script; the app removes it (ui/Loader.tsx).
 import App from "../app/App.tsx";
+import "../styles/loader.css";
 ---
 <!doctype html>
 <html lang="en">
@@ -13,6 +15,13 @@ import App from "../app/App.tsx";
     <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   </head>
   <body>
+    <div id="squad-loader" class="squad-loader" role="status" aria-live="polite">
+      <picture>
+        <source srcset="/brand/logo-dark.png" media="(prefers-color-scheme: dark)" />
+        <img class="squad-loader-logo" src="/brand/logo-light.png" alt="" width="96" height="96" />
+      </picture>
+      <p class="squad-loader-text">Loading squad…</p>
+    </div>
     <App client:only="react" />
   </body>
 </html>

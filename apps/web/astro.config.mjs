@@ -7,6 +7,8 @@ import react from "@astrojs/react";
 export default defineConfig({
   output: "static",
   integrations: [react()],
+  // Every stylesheet as a file: the server allows an inline style only by its hash.
+  build: { inlineStylesheets: "never" },
   server: { host: "127.0.0.1" },
   vite: {
     // The CSP allows only files from the same origin, so no asset may be inlined as a data: URI.

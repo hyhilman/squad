@@ -1,0 +1,69 @@
+/*
+ * The first paint, before any script: the logo for the system theme and one line. React fades it out
+ * when the app is ready (ui/Loader.tsx). Classes only: the CSP allows no inline script or style
+ * attribute. The app's theme choice lives in localStorage, which CSS cannot read, so this follows the
+ * system.
+ *
+ * :where() keeps these page colours at zero weight, so the app's own colours win once they load. A
+ * framed page (the server marks <html data-framed>) gets none, so the parent page shows through.
+ */
+:where(html:not([data-framed])) {
+  background: #fafafa;
+}
+@media (prefers-color-scheme: dark) {
+  :where(html:not([data-framed])) {
+    background: #09090b;
+  }
+}
+
+.squad-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: transparent;
+  font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  transition: opacity 0.25s ease;
+}
+.squad-loader-out {
+  opacity: 0;
+  pointer-events: none;
+}
+.squad-loader-logo {
+  width: 96px;
+  height: 96px;
+  animation: squad-loader-pulse 1.6s ease-in-out infinite;
+}
+.squad-loader-text {
+  margin: 0;
+  font-size: 14px;
+  color: #71717a;
+}
+@media (prefers-color-scheme: dark) {
+  .squad-loader-text {
+    color: #a1a1aa;
+  }
+}
+@keyframes squad-loader-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .squad-loader-logo {
+    animation: none;
+  }
+  .squad-loader {
+    transition: none;
+  }
+}
