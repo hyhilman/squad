@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { roomState } from "./room.ts";
 
-test("room is held at or under the floor, near within 10 points above it, ok above that", () => {
-  assert.equal(roomState(88, 30), "ok");
-  assert.equal(roomState(40, 30), "near");
-  assert.equal(roomState(31, 30), "near");
-  assert.equal(roomState(30, 30), "held", "the pool skips an account at its floor");
-  assert.equal(roomState(5, 30), "held");
-  assert.equal(roomState(0, 0), "held", "nothing left is held even with no floor");
-  assert.equal(roomState(8, 0), "near");
+test("the colour follows the room left after the floor: >50 blue, >25 yellow, >5 orange, else red", () => {
+  assert.equal(roomState(100, 10), "blue");
+  assert.equal(roomState(61, 10), "blue");
+  assert.equal(roomState(60, 10), "yellow", "50 after the floor is not over 50");
+  assert.equal(roomState(36, 10), "yellow");
+  assert.equal(roomState(35, 10), "orange");
+  assert.equal(roomState(16, 10), "orange");
+  assert.equal(roomState(15, 10), "red");
+  assert.equal(roomState(10, 10), "red", "at the floor the pool skips it");
+  assert.equal(roomState(3, 10), "red");
+  assert.equal(roomState(80, 0), "blue");
 });

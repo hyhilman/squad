@@ -11,9 +11,10 @@ export function Room({ value, floor }: { value: number | undefined; floor?: numb
   if (value === undefined) return <Typography.Text type="secondary">unknown</Typography.Text>;
   const f = floor ?? 0;
   const state = roomState(value, f);
-  const color = state === "held" ? token.colorError : state === "near" ? token.colorWarning : token.colorPrimary;
+  const color = { blue: token.colorPrimary, yellow: token.yellow6, orange: token.orange6, red: token.colorError }[state];
   const label = floor === undefined ? pctText(value) : `${pctText(value)} · floor ${pctText(f)}`;
-  const tip = state === "held" ? "At or under the floor: no pass will use this window." : state === "near" ? "Close to the floor." : "Room above the floor.";
+  const usable = Math.max(0, value - f);
+  const tip = value <= f ? "At or under the floor: no pass will use this window." : `${pctText(usable)} left above the floor.`;
   return (
     <Tooltip title={tip}>
       <Flex align="center" gap={8} style={{ minWidth: 170 }} aria-label={`${value}% left, floor ${f}%`}>
@@ -21,12 +22,13 @@ export function Room({ value, floor }: { value: number | undefined; floor?: numb
           <div style={{ position: "absolute", inset: 0, width: `${Math.min(100, Math.max(0, value))}%`, background: color, borderRadius: 4 }} />
           {f > 0 ? (
             <>
-              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${f}%`, background: token.colorBgMask, opacity: 0.35 }} />
+              {/* The part kept for the owner is grey: a pass never takes it. */}
+              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${Math.min(f, value)}%`, background: token.colorTextQuaternary }} />
               <div style={{ position: "absolute", left: `calc(${f}% - 1px)`, top: -2, bottom: -2, width: 2, background: token.colorText }} />
             </>
           ) : null}
         </div>
-        <Typography.Text style={{ whiteSpace: "nowrap", fontSize: 12, color: state === "held" ? token.colorError : undefined }}>{label}</Typography.Text>
+        <Typography.Text style={{ whiteSpace: "nowrap", fontSize: 12, color: state === "red" ? token.colorError : undefined }}>{label}</Typography.Text>
       </Flex>
     </Tooltip>
   );
