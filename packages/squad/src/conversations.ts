@@ -141,6 +141,9 @@ export async function send(conv: Conversation | string, message: string, opts: S
   // A lost pin row must not let a pass start a fresh, empty history: put it back on the same account.
   if (getSession(db, row.runner, id) === undefined) pinSession(db, row.runner, id, row.account, now());
 
+  // A turn that spent tokens put the opened skill into the history; later turns must not open it again.
+  const skillInHistory = db.prepare("SELECT 1 FROM passes WHERE session_id = ? AND (input + output + cache_read + cache_write + reasoning) > 0 LIMIT 1").get(id) !== undefined;
+
   const res = await runPass({
     runner: row.runner as PassRequest["runner"],
     model: row.model,
@@ -153,6 +156,7 @@ export async function send(conv: Conversation | string, message: string, opts: S
     conversation: true,
     ...(spec.system === undefined ? {} : { system: spec.system }),
     ...(spec.skill === undefined ? {} : { skill: spec.skill }),
+    ...(skillInHistory ? { openSkill: false } : {}),
     ...(spec.effort === undefined ? {} : { effort: spec.effort as PassRequest["effort"] }),
     ...(spec.mounts === undefined ? {} : { mounts: spec.mounts }),
     ...(spec.image === undefined ? {} : { image: spec.image }),

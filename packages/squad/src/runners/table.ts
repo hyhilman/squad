@@ -29,6 +29,11 @@ export interface CliRequest {
   readonly system?: string;
   readonly effort?: string;
   readonly skill?: { readonly name: string; readonly dir: string; readonly text: string };
+  /**
+   * False on a later turn of a conversation: the skill is already in the history, so the message goes
+   * as written. The skill stays loaded (same flags every turn) so the prompt cache still matches.
+   */
+  readonly openSkill?: boolean;
 }
 
 export interface RunnerSpec {
@@ -45,18 +50,18 @@ const need = (v: string | undefined, what: string): string => {
 
 export const RUNNER_SPECS = {
   pi: {
-    cli: (r) => piArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined ? r.prompt : `/skill:${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, sessionId: r.sessionId ?? null, guidance: r.system ?? null }),
+    cli: (r) => piArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined || r.openSkill === false ? r.prompt : `/skill:${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, sessionId: r.sessionId ?? null, guidance: r.system ?? null }),
     stream: () => new PiStream(),
     exportOf: (raw, _o, meta) => piExport(raw, meta),
   },
   claude: {
-    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined ? r.prompt : `/${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, system: r.system ?? null }),
+    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined || r.openSkill === false ? r.prompt : `/${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, system: r.system ?? null }),
     stream: () => new ClaudeStream(),
     exportOf: (_raw, o, meta) => claudeExport(o, meta),
   },
   codex: {
     // codex has no system or skill flag: both go into the prompt, in this order.
-    cli: (r) => codexArgs({ model: r.model, effort: r.effort ?? null, prompt: [r.system, r.skill === undefined ? undefined : skillBody(r.skill.text), r.prompt].filter((x) => x !== undefined && x !== "").join("\n\n"), skill: null, cwd: need(r.cwd, "cwd"), outDir: need(r.outDir, "outDir") }),
+    cli: (r) => codexArgs({ model: r.model, effort: r.effort ?? null, prompt: [r.system, r.skill === undefined || r.openSkill === false ? undefined : skillBody(r.skill.text), r.prompt].filter((x) => x !== undefined && x !== "").join("\n\n"), skill: null, cwd: need(r.cwd, "cwd"), outDir: need(r.outDir, "outDir") }),
     stream: () => new CodexStream(),
     exportOf: (_raw, o, meta) => codexExport(o, meta),
   },

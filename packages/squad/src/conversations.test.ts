@@ -82,6 +82,19 @@ test("two sends reuse the session folder and the same args; the pass rows carry 
   assert.deepEqual([a.passId, b.passId].sort(), rows(r).map((p) => p.id).sort());
 });
 
+test("the skill is opened on the first turn only; later turns keep --skill and the system prompt but send the message as written", async () => {
+  const r = rig();
+  const dir = mkdtempSync(join(tmpdir(), "skill-"));
+  writeFileSync(join(dir, "SKILL.md"), "---\nname: todo-exec\n---\nDo the task.\n");
+  const c = open(r.req({ system: "be brief", skill: { name: "todo-exec", dir } }), r.deps);
+  await send(c, "issue=o/r#1", {}, r.deps);
+  await send(c, "Reply with the comment.", {}, r.deps);
+  const [x, y] = r.fake.callsOf("run");
+  assert.equal(x!.at(-1), "/skill:todo-exec issue=o/r#1");
+  assert.equal(y!.at(-1), "Reply with the comment.");
+  for (const argv of [x!, y!]) assert.ok(argv.includes("--skill") && argv.includes("--append-system-prompt"), "the same flags every turn, for the prompt cache");
+});
+
 test("every turn gets --session-id <conversation id>: pi opens it if it exists, else creates it (no other history flag exists)", async () => {
   const r = rig();
   const c = open(r.req(), r.deps);

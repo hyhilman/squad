@@ -46,6 +46,8 @@ export interface PassRequest extends TurnOptions {
   readonly session?: string;
   /** Set by `send` only. A busy account then answers `busy`, not `no-account`, so the caller can wait and ask again. */
   readonly conversation?: boolean;
+  /** Internal: false when a conversation's skill is already in its history (see runners/table.ts). */
+  readonly openSkill?: boolean;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
   /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
@@ -304,7 +306,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
         mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
         chmodSync(sessionPath, 0o700);
       }
-      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(req.system === undefined ? {} : { system: req.system }), ...(req.effort === undefined ? {} : { effort: req.effort }), ...(skill === undefined ? {} : { skill }), ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }) });
+      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(req.system === undefined ? {} : { system: req.system }), ...(req.effort === undefined ? {} : { effort: req.effort }), ...(skill === undefined ? {} : { skill }), ...(req.openSkill === false ? { openSkill: false } : {}), ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }) });
       // docker makes a missing mount target as an empty root-owned file inside the login folder.
       // An empty user file in its place is what codex would see anyway under the read-only guard.
       if (req.runner === "codex") ensureEmptyFile(join(dir, "config.toml"));
