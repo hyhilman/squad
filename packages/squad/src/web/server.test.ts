@@ -469,3 +469,22 @@ test("signin_unavailable logs a fixed reason, never a URL or the error text", as
   assert.match(r.logs.find((l) => /signin_unavailable/.test(l))!, /status=503/);
   await r.close();
 });
+
+test("startWeb starts the ticker only with a probe runner, not api-only; close stops it", async () => {
+  const mk = () => {
+    const t = { set: 0, cleared: 0 };
+    return { t, timers: { every: () => { t.set++; return 1; }, clear: () => { t.cleared++; } } };
+  };
+  const probe = async () => {};
+  const none = mk();
+  await (await rig({ ticker: { timers: none.timers } })).close();
+  assert.equal(none.t.set, 0, "no probe runner: no ticker");
+  const api = mk();
+  await (await rig({ probe, apiOnly: true, ticker: { timers: api.timers } })).close();
+  assert.equal(api.t.set, 0);
+  const on = mk();
+  const r = await rig({ probe, ticker: { timers: on.timers } });
+  assert.equal(on.t.set, 1);
+  await r.close();
+  assert.equal(on.t.cleared, 1);
+});

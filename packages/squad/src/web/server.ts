@@ -19,6 +19,7 @@ import type { Store } from "../store/db.ts";
 import { USAGE_BYS, usageBy, type UsageBy } from "../usage/report.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { loadWebConfig } from "./settings.ts";
+import { startTicker, type Timers } from "./ticker.ts";
 
 export interface Ctx<N extends RouteName> {
   readonly params: Api[N]["params"];
@@ -41,6 +42,13 @@ export interface WebOpts {
   readonly log?: Log;
   /** Whether a pass holds the account now. Default: a login account whose lock is held. */
   readonly busy?: (a: AccountRow) => boolean;
+  /**
+   * Runs one probe pass on an account (the same code as `squad probe`). The background loop starts only
+   * when this is given, so a caller that does not want real passes never gets them.
+   */
+  readonly probe?: (account: AccountRow, model: string) => Promise<void>;
+  /** Replaces the loop's timers. For tests only. */
+  readonly ticker?: { readonly timers?: Timers };
   /** Replaces handlers. For tests only. */
   readonly handlers?: Partial<Handlers>;
 }
@@ -434,9 +442,15 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   });
   const addr = server.address();
   const port = typeof addr === "object" && addr !== null ? addr.port : cfg.port;
+  const probe = opts.probe;
+  const ticker = probe === undefined ? undefined : startTicker({
+    env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), fetch: opts.fetch ?? globalThis.fetch, probe,
+    ...(opts.apiOnly === undefined ? {} : { apiOnly: opts.apiOnly }), ...(opts.ticker?.timers === undefined ? {} : { timers: opts.ticker.timers }),
+  });
   return {
     port, bind: cfg.bind, url: cfg.url,
     close: () => new Promise((resolve) => {
+      ticker?.stop();
       server.close(() => resolve());
       server.closeAllConnections();
     }),

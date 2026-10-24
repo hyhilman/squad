@@ -103,6 +103,33 @@ export const SQUAD_KEY_PARALLEL_ENV: EnvSpec = {
   default: "4",
   why: "passes one key or token account can run at once; a login account always runs one",
 };
+export const SQUAD_PRICES_URL_ENV: EnvSpec = {
+  key: "SQUAD_PRICES_URL",
+  default: "https://models.dev/api.json",
+  why: "the address of a models.dev style price catalog, kept in state/prices.json for 6 hours; no key in the address; empty = no fetch",
+};
+export const SQUAD_NO_PRICES_ENV: EnvSpec = {
+  key: "SQUAD_NO_PRICES",
+  default: "0",
+  why: "1 = the price catalog is never fetched; the saved copy is still read",
+};
+export const SQUAD_TICK_S_ENV: EnvSpec = {
+  key: "SQUAD_TICK_S",
+  default: "60",
+  why: "seconds between two ticks of the `squad web` background loop (usage reads, auto probes, price refresh)",
+};
+export const SQUAD_PROBE_MODEL_CODEX_ENV: EnvSpec = {
+  key: "SQUAD_PROBE_MODEL_CODEX",
+  why: "the model an auto probe uses on a codex account; unset = no auto probe on codex, because there is no safe default",
+};
+export const SQUAD_PROBE_MODEL_CLAUDE_ENV: EnvSpec = {
+  key: "SQUAD_PROBE_MODEL_CLAUDE",
+  why: "the model an auto probe uses on a claude account; unset = no auto probe on claude, because there is no safe default",
+};
+export const SQUAD_PROBE_MODEL_PI_ENV: EnvSpec = {
+  key: "SQUAD_PROBE_MODEL_PI",
+  why: "the model an auto probe uses on a pi account; unset = no auto probe on pi, because there is no safe default",
+};
 
 export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_HOME_ENV,
@@ -123,6 +150,12 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_COOL_QUOTA_S_ENV,
   SQUAD_USAGE_READ_S_ENV,
   SQUAD_KEY_PARALLEL_ENV,
+  SQUAD_PRICES_URL_ENV,
+  SQUAD_NO_PRICES_ENV,
+  SQUAD_TICK_S_ENV,
+  SQUAD_PROBE_MODEL_CODEX_ENV,
+  SQUAD_PROBE_MODEL_CLAUDE_ENV,
+  SQUAD_PROBE_MODEL_PI_ENV,
 ];
 
 type Env = Readonly<Record<string, string | undefined>>;

@@ -66,6 +66,7 @@ const USAGE = `usage: squad <verb>
   shell <account>                          a bash session in a container on one account
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
+                                           (not --api-only) it also runs a background loop: usage reads, auto probes, prices
 `;
 
 /** A usage mistake: exit 2 with the text on stderr. Anything else that fails is exit 1. */
@@ -539,6 +540,8 @@ function logCmd(_store: Store, io: Io, args: readonly string[]): number {
 async function web(store: Store, io: Io, args: readonly string[]): Promise<number> {
   if (args.some((a) => a !== "--api-only")) throw new UsageError("web takes only --api-only");
   const handle = await startWeb({
+    // The loop's probes run the verb above, so there is one way to start a probe pass.
+    probe: async (a, model) => { await probe(store, { ...io, stdout: () => {}, stderr: () => {} }, [a.id, "--model", model]); },
     env: io.env, home: layoutOf(homeRoot(io.cwd, io.env), io.env), store, apiOnly: args.length > 0,
     ...(io.fetch === undefined ? {} : { fetch: io.fetch }), ...(io.now === undefined ? {} : { now: io.now }),
   });

@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AccountKind } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
-import { SQUAD_DRY_RUN_ENV, envOn, type EnvSpec } from "./settings.ts";
+import { SQUAD_DRY_RUN_ENV, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, envOn } from "./settings.ts";
 import { isObj } from "./streams/lines.ts";
 import type { Usage } from "./types.ts";
 
@@ -49,16 +49,7 @@ export function parseCatalog(json: unknown): Prices {
   return out;
 }
 
-export const SQUAD_PRICES_URL_ENV: EnvSpec = {
-  key: "SQUAD_PRICES_URL",
-  default: "https://models.dev/api.json",
-  why: "the address of a models.dev style price catalog, kept in state/prices.json for 6 hours; no key in the address; empty = no fetch",
-};
-export const SQUAD_NO_PRICES_ENV: EnvSpec = {
-  key: "SQUAD_NO_PRICES",
-  default: "0",
-  why: "1 = the price catalog is never fetched; the saved copy is still read",
-};
+export { SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV };
 
 /** How long a copy is fresh. The catalog changes slowly. */
 export const PRICES_TTL_MS = 6 * 60 * 60 * 1000;
