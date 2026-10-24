@@ -3,6 +3,7 @@
 //
 // Nothing here prints a key, an auth file or a path inside an account folder.
 
+import "./quiet.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
