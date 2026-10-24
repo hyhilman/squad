@@ -1,13 +1,14 @@
 // What a pass cost in money, for `key` accounts only. A login or a token account is a seat: it has
 // room left (a percent of a window), not a bill.
 //
-// Prices come from a models.dev style catalog kept at `<home.state>/prices.json`. This file only
-// reads it; a later step fetches it.
+// Prices come from a models.dev style catalog kept at `<home.state>/prices.json`. `refreshPrices`
+// fetches it; `loadPrices` reads it. A catalog that cannot be reached keeps the old copy.
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AccountKind } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
+import { SQUAD_DRY_RUN_ENV, envOn, type EnvSpec } from "./settings.ts";
 import { isObj } from "./streams/lines.ts";
 import type { Usage } from "./types.ts";
 
@@ -48,12 +49,88 @@ export function parseCatalog(json: unknown): Prices {
   return out;
 }
 
+export const SQUAD_PRICES_URL_ENV: EnvSpec = {
+  key: "SQUAD_PRICES_URL",
+  default: "https://models.dev/api.json",
+  why: "the address of a models.dev style price catalog, kept in state/prices.json for 6 hours; no key in the address; empty = no fetch",
+};
+export const SQUAD_NO_PRICES_ENV: EnvSpec = {
+  key: "SQUAD_NO_PRICES",
+  default: "0",
+  why: "1 = the price catalog is never fetched; the saved copy is still read",
+};
+
+/** How long a copy is fresh. The catalog changes slowly. */
+export const PRICES_TTL_MS = 6 * 60 * 60 * 1000;
+/** The most the refresh reads. The real catalog is about 5 MB. */
+const MAX_BYTES = 32 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 20_000;
+/** A file of another version is read as no copy, so the next refresh renews it. */
+const SAVED_VERSION = 1;
+
+type Catalog = Record<string, { models: Record<string, { cost: Record<string, number> }> }>;
+
+/** The saved file, or undefined when it is missing, broken or of another shape. Never throws. */
+function readSaved(home: HomeLayout): { readonly fetchedAt: number; readonly catalog: unknown } | undefined {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8"));
+    if (!isObj(raw) || raw.v !== SAVED_VERSION || typeof raw.fetchedAt !== "number" || !isObj(raw.catalog)) return undefined;
+    return { fetchedAt: raw.fetchedAt, catalog: raw.catalog };
+  } catch {
+    return undefined;
+  }
+}
+
 /** The saved catalog, or no prices when the file is missing or broken: a bad catalog must not stop a pass. */
 export function loadPrices(home: HomeLayout): Prices {
+  return parseCatalog(readSaved(home)?.catalog);
+}
+
+export interface RefreshPrices {
+  readonly home: HomeLayout;
+  /** The catalog address; empty = nothing is fetched. */
+  readonly url: string;
+  readonly now: number;
+  readonly fetch: (url: string, init: RequestInit) => Promise<{ readonly ok: boolean; readonly status: number; readonly text: () => Promise<string> }>;
+  /** The settings source; the process env when left out. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
+export type RefreshResult = "off" | "fresh" | "refreshed" | `kept: ${string}`;
+
+/** Renews the saved catalog when it is old. On any failure the old copy stays, so a catalog that is down never stops a pass. */
+export async function refreshPrices(r: RefreshPrices): Promise<RefreshResult> {
+  const env = r.env ?? process.env;
+  if (r.url === "" || envOn(SQUAD_NO_PRICES_ENV, env) || envOn(SQUAD_DRY_RUN_ENV, env)) return "off";
+  const saved = readSaved(r.home);
+  // A copy stamped in the future means the clock moved back; renew it.
+  if (saved !== undefined && r.now >= saved.fetchedAt && r.now - saved.fetchedAt < PRICES_TTL_MS) return "fresh";
   try {
-    return parseCatalog(JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8")));
-  } catch {
-    return new Map();
+    const res = await r.fetch(r.url, { redirect: "error", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) return `kept: the catalog answered ${res.status}`;
+    const text = await res.text();
+    if (text.length > MAX_BYTES) return "kept: the catalog is too big";
+    const prices = parseCatalog(JSON.parse(text));
+    // A catalog with no usable model is the wrong file; it must not replace a good copy.
+    if (prices.size === 0) return "kept: the catalog has no model with a price";
+    // Keep only what parseCatalog reads, so the file stays small.
+    const catalog: Catalog = {};
+    for (const [key, p] of prices) {
+      const i = key.indexOf("/");
+      const provider = key.slice(0, i);
+      const cost: Record<string, number> = { input: p.input, output: p.output };
+      if (p.cacheRead !== undefined) cost.cache_read = p.cacheRead;
+      if (p.cacheWrite !== undefined) cost.cache_write = p.cacheWrite;
+      (catalog[provider] ??= { models: {} }).models[key.slice(i + 1)] = { cost };
+    }
+    mkdirSync(r.home.state, { recursive: true });
+    const file = join(r.home.state, PRICES_FILE);
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ v: SAVED_VERSION, fetchedAt: r.now, catalog }));
+    renameSync(tmp, file);
+    return "refreshed";
+  } catch (e) {
+    return `kept: ${e instanceof Error ? (e.message.split("\n")[0] ?? "error") : "error"}`;
   }
 }
 

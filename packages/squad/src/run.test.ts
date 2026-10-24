@@ -301,7 +301,7 @@ const CATALOG = { "opencode-go": { models: { "hy4-preview": { cost: { input: 0.1
 
 test("a key pass with a price has cost_usd and price_src", async () => {
   const r = rig();
-  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify(CATALOG));
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ v: 1, fetchedAt: NOW.getTime(), catalog: CATALOG }));
   await runPass(req(r), r.deps);
   const p = passes(r)[0]!;
   assert.ok(Math.abs((p.cost_usd as number) - (1493 * 0.15 + 71 * 0.5 + 64 * 0.03) / 1e6) < 1e-12);
@@ -310,7 +310,7 @@ test("a key pass with a price has cost_usd and price_src", async () => {
 
 test("a key pass with an unknown model has no cost and no price_src", async () => {
   const r = rig();
-  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ other: CATALOG["opencode-go"] }));
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ v: 1, fetchedAt: NOW.getTime(), catalog: { other: CATALOG["opencode-go"] } }));
   await runPass(req(r), r.deps);
   const p = passes(r)[0]!;
   assert.deepEqual([p.cost_usd, p.price_src], [null, null]);
@@ -318,7 +318,7 @@ test("a key pass with an unknown model has no cost and no price_src", async () =
 
 test("a login pass has no cost, even with a price", async () => {
   const r = rig([], { busy: () => false });
-  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify(CATALOG));
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ v: 1, fetchedAt: NOW.getTime(), catalog: CATALOG }));
   addAccount(r.store.db, { runner: "pi", name: "l1", kind: "login" }, NOW);
   mkdirSync(join(r.home.accounts, "pi", "l1"), { recursive: true });
   await runPass(req(r), r.deps);

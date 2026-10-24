@@ -14,3 +14,4 @@ Scrubbed: session ids, message, request and event ids (fixed fakes), and every p
 | `codex/ok-gpt-6-1-sol.jsonl` | codex 0.162.1, `codex exec --json ... -m gpt-6.1-sol -`, a ChatGPT device login, a one-word reply |
 | `codex/model-not-found.jsonl` | the same with `-m no-such-model`: an `error` event whose message is JSON with status 400 and code `model_not_found`, then `turn.failed`; exit 1 |
 | `codex/usage.json` | GET chatgpt.com/backend-api/wham/usage with the codex login's access token (read only, no refresh); user id and account id replaced, email set to `EMAIL` |
+| `prices/models-dev-excerpt.json` | GET https://models.dev/api.json on 2026-10-24 (230 providers, 5.9 MB); kept: providers `opencode`, `opencode-go` and `anthropic`, their first four models, plus `opencode-go/beam-free`. Nothing scrubbed: the catalog is public |
