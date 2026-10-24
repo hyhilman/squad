@@ -3,6 +3,7 @@ import type { AccountView, Me } from "@squad/contract";
 import { Alert, Empty, Flex, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { Link } from "react-router";
+import { AccountActions } from "../components/AccountActions.tsx";
 import { AddAccount } from "../components/AddAccount.tsx";
 import { ErrorNote } from "../components/ErrorNote.tsx";
 import { Room } from "../components/Room.tsx";
@@ -48,6 +49,7 @@ export function Accounts() {
     { title: "5-hour left", dataIndex: "left5h", sorter: (a, b) => cmp(a.left5h, b.left5h), render: (v: number | undefined) => <Room value={v} /> },
     { title: "Week left", dataIndex: "leftWeek", sorter: (a, b) => cmp(a.leftWeek, b.leftWeek), render: (v: number | undefined) => <Room value={v} /> },
     { title: "Last read", dataIndex: "readAt", sorter: (a, b) => Date.parse(a.readAt ?? "") - Date.parse(b.readAt ?? "") || 0, render: (v: string | undefined) => agoText(v, now) },
+    { title: "Actions", key: "actions", fixed: "right", render: (_: unknown, a) => <AccountActions a={a} compact /> },
   ];
   const rooms = roomByRunner(rows);
   return (

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canLogInAgain, isFinalLogin, loginStateText, POLL_MS } from "./login.ts";
+import { canLogInAgain, isOwnerOf, isFinalLogin, loginStateText, POLL_MS } from "./login.ts";
 
 test("pending is the only state that keeps polling", () => {
   assert.equal(isFinalLogin("pending"), false);
@@ -28,4 +28,11 @@ test("Log in again shows only for a dead codex login account, as the server allo
 
 test("a no-login failure has its own text", () => {
   assert.match(loginStateText({ loginId: "x", state: "failed", reason: "no-login" }), /no login/i);
+});
+
+test("only the owner may give consent or log in again; case does not matter", () => {
+  assert.equal(isOwnerOf({ ownerEmail: "Alice@x.test" }, { email: "alice@x.test" }), true);
+  assert.equal(isOwnerOf({ ownerEmail: "bob@x.test" }, { email: "alice@x.test" }), false);
+  assert.equal(isOwnerOf({ ownerEmail: "" }, { email: "" }), false);
+  assert.equal(isOwnerOf({ ownerEmail: "alice@x.test" }, undefined), false);
 });

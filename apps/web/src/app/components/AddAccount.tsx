@@ -1,9 +1,10 @@
 import { PlusOutlined } from "@ant-design/icons";
-import type { LoginStart } from "@squad/contract";
+import { useGetIdentity } from "@refinedev/core";
+import type { LoginStart, Me } from "@squad/contract";
 import { App, Button, Form, Input, Modal } from "antd";
 import { useState } from "react";
 import { api } from "../api.ts";
-import { accountNameError } from "../lib/accountName.ts";
+import { accountNameError, suggestName } from "../lib/accountName.ts";
 import { failureText } from "../lib/errors.ts";
 import { LoginProgress } from "./LoginProgress.tsx";
 
@@ -14,6 +15,8 @@ export function AddAccount() {
   const [busy, setBusy] = useState(false);
   const [start, setStart] = useState<LoginStart>();
   const [form] = Form.useForm<{ name: string }>();
+  const { data: me } = useGetIdentity<Me>();
+  const suggested = suggestName(me?.email);
 
   const close = () => {
     setOpen(false);
@@ -21,7 +24,9 @@ export function AddAccount() {
     form.resetFields();
   };
 
-  const submit = async ({ name }: { name: string }) => {
+  // An empty box takes the suggested name shown as the placeholder.
+  const submit = async ({ name: typed }: { name?: string }) => {
+    const name = typed === undefined || typed === "" ? suggested : typed;
     setBusy(true);
     try {
       setStart(await api("addAccount", { body: { runner: "codex", name } }));
@@ -44,9 +49,9 @@ export function AddAccount() {
               name="name"
               label="Account name"
               extra="Lower-case letters, digits, dot, dash or underscore. The account will be codex/<name>."
-              rules={[{ validator: (_, v: string | undefined) => (accountNameError(v ?? "") === undefined ? Promise.resolve() : Promise.reject(new Error(accountNameError(v ?? "")))) }]}
+              rules={[{ validator: (_, v: string | undefined) => { const err = accountNameError(v === undefined || v === "" ? suggested : v); return err === undefined ? Promise.resolve() : Promise.reject(new Error(err)); } }]}
             >
-              <Input autoFocus placeholder="alice" autoComplete="off" />
+              <Input autoFocus placeholder={suggested === "" ? "name" : suggested} autoComplete="off" />
             </Form.Item>
           </Form>
         ) : (

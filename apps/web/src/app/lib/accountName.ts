@@ -7,3 +7,9 @@ export function accountNameError(name: string): string | undefined {
   if (!ACCOUNT_NAME.test(name)) return "The name needs lower-case letters, digits, dot, dash or underscore, and must start with a letter or digit.";
   return undefined;
 }
+
+/** A name from the signed-in email: the part before @, lower case, other characters as dashes. */
+export function suggestName(email: string | undefined): string {
+  const local = (email ?? "").split("@")[0] ?? "";
+  return local.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[._-]+/, "").replace(/-+$/, "");
+}

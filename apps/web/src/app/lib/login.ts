@@ -8,6 +8,11 @@ export const POLL_MS = 3000;
 export const canLogInAgain = (a: Pick<AccountView, "runner" | "kind" | "health">): boolean =>
   a.runner === "codex" && a.kind === "login" && a.health === "dead";
 
+// Consent and a new login are the owner's own acts; the server refuses them for anyone else, an
+// admin included, so the page offers them only to the owner.
+export const isOwnerOf = (a: Pick<AccountView, "ownerEmail">, me: { readonly email: string } | undefined): boolean =>
+  me !== undefined && a.ownerEmail !== "" && a.ownerEmail.toLowerCase() === me.email.toLowerCase();
+
 export const isFinalLogin = (s: LoginState): boolean => s !== "pending";
 
 const REASONS: Readonly<Record<string, string>> = {
