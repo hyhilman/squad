@@ -340,7 +340,8 @@ test("static files: index.html for client routes, assets by type, nothing outsid
   const index = await get("/");
   assert.equal(index.status, 200);
   assert.match(index.type ?? "", /text\/html/);
-  assert.equal((await get("/accounts/codex/alice")).text, index.text, "a client route gets index.html");
+  const noNonce = (t: string): string => t.replace(/<meta name="csp-nonce" content="[^"]*">/, "");
+  assert.equal(noNonce((await get("/accounts/codex/alice")).text), noNonce(index.text), "a client route gets index.html");
   assert.match(index.csp ?? "", /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/, "the one inline script is allowed by hash, nothing else");
   assert.equal((await get("/_astro/a.js")).type?.startsWith("text/javascript"), true);
   assert.equal((await get("/missing.js")).status, 404);
@@ -351,6 +352,30 @@ test("static files: index.html for client routes, assets by type, nothing outsid
   }
   assert.equal((await fetch(`${r.base}/`, { method: "POST", headers: { "x-squad-csrf": "1", origin: PUBLIC } })).status, 405);
   await r.close();
+});
+
+test("each page answer has a fresh style nonce, in the CSP and in a meta tag for Ant Design", async () => {
+  const root = mkdtempSync(join(tmpdir(), "static-"));
+  writeFileSync(join(root, "index.html"), "<html><head><title>x</title></head><body></body></html>");
+  const r = await rig({ staticDir: root });
+  try {
+    const one = async (): Promise<{ meta: string; csp: string }> => {
+      const res = await fetch(`${r.base}/`);
+      const text = await res.text();
+      const meta = /<head><meta name="csp-nonce" content="([A-Za-z0-9+/=]{22,})">/.exec(text)?.[1] ?? "";
+      return { meta, csp: res.headers.get("content-security-policy") ?? "" };
+    };
+    const a = await one();
+    const b = await one();
+    assert.ok(a.meta !== "", "the nonce is the first thing in head");
+    assert.ok(a.csp.includes(`style-src 'self' 'nonce-${a.meta}'`), a.csp);
+    assert.ok(!a.csp.includes("unsafe-inline"));
+    assert.notEqual(a.meta, b.meta, "never reused");
+    const asset = await fetch(`${r.base}/_astro/none.js`);
+    assert.ok(!(asset.headers.get("content-security-policy") ?? "").includes("nonce-"), "only a page gets a nonce");
+  } finally {
+    await r.close();
+  }
 });
 
 test("the real source layout never serves the server's own code", async () => {
@@ -877,8 +902,10 @@ test("addAccount twice with two names: both end up owned by the person, with the
     started.push(res.body);
   }
   assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", { runner: "codex", name: "seat-one" })).status, 409, "the same name while its login runs");
+  // Read the folders once: the first login moves its folder away as soon as it exits.
+  const stagings = (await import("node:fs")).readdirSync(r.home.staging).sort();
   for (const [i, proc] of f.procs.entries()) {
-    const staging = (await import("node:fs")).readdirSync(r.home.staging)[i]!;
+    const staging = stagings[i]!;
     writeFileSync(join(r.home.staging, staging, "auth.json"), JSON.stringify({ tokens: { id_token: fakeIdToken({ email: seats[i]! }) } }));
     proc.exit(0);
   }

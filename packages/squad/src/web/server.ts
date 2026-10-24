@@ -6,7 +6,7 @@
 // floors and enable or disable any of them; consent and login stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
@@ -319,15 +319,19 @@ const TYPES: Record<string, string> = {
 
 const BASE_CSP = "default-src 'self'; frame-ancestors 'none'";
 
-/** The CSP of a page: the base, plus the hash of each inline script and style the build made. */
-function pageCsp(html: string): string {
+/**
+ * The CSP of a page: the base, plus the hash of each inline script and style the build made, plus
+ * this answer's style nonce. Ant Design writes its styles at run time, so no hash can cover them;
+ * it puts the nonce from the page's meta tag on each one.
+ */
+function pageCsp(html: string, nonce: string): string {
   const hashes = (tag: "script" | "style"): string[] => {
     const re = new RegExp(`<${tag}(?![^>]*\\bsrc=)[^>]*>([\\s\\S]*?)</${tag}>`, "g");
     return [...html.matchAll(re)].filter((m) => m[1] !== "").map((m) => `'sha256-${createHash("sha256").update(m[1]!).digest("base64")}'`);
   };
   const s = hashes("script");
   const c = hashes("style");
-  return `default-src 'self'${s.length > 0 ? `; script-src 'self' ${s.join(" ")}` : ""}${c.length > 0 ? `; style-src 'self' ${c.join(" ")}` : ""}; frame-ancestors 'none'`;
+  return `default-src 'self'${s.length > 0 ? `; script-src 'self' ${s.join(" ")}` : ""}; style-src 'self' 'nonce-${nonce}'${c.length > 0 ? ` ${c.join(" ")}` : ""}; frame-ancestors 'none'`;
 }
 
 /** The file for a request path, or undefined. It never leaves the root, also through a symlink. */
@@ -504,10 +508,16 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "method not allowed\n", { allow: "GET, HEAD" });
     const file = fileFor(staticRoot, pathname);
     if (file === undefined) return sendText(res, 404, "not found\n");
-    const data = readFileSync(file);
     const type = TYPES[extname(file)] ?? "application/octet-stream";
     const html = extname(file) === ".html";
-    if (html) res.setHeader("content-security-policy", pageCsp(data.toString("utf8")));
+    let data = readFileSync(file);
+    if (html) {
+      // A fresh nonce per answer: one that repeats would let an injected style reuse it.
+      const nonce = randomBytes(16).toString("base64");
+      const page = data.toString("utf8");
+      res.setHeader("content-security-policy", pageCsp(page, nonce));
+      data = Buffer.from(page.replace("<head>", `<head><meta name="csp-nonce" content="${nonce}">`), "utf8");
+    }
     res.writeHead(200, {
       "content-type": type, "content-length": data.length,
       "cache-control": html ? "no-cache" : pathname.startsWith("/_astro/") ? "public, max-age=31536000, immutable" : "no-cache",
