@@ -4,6 +4,7 @@
 // Two tables decide it, both here: which runner serves a provider (PROVIDER_RUNNER), and which API-key
 // providers pi has built in (PI_BUILTIN_KEY).
 
+import { readFileSync } from "node:fs";
 import type { AccountKind, Runner } from "./docker.ts";
 import type { CatalogModel, CatalogProvider } from "./prices.ts";
 
@@ -104,3 +105,13 @@ export function modelsJsonFor(p: CatalogProvider): string {
 
 /** The auth.json pi reads for an API key. */
 export const authJsonFor = (provider: string, key: string): string => `${JSON.stringify({ [provider]: { type: "api_key", key } }, null, 2)}\n`;
+
+/** The provider ids in a pi account's auth.json (the keys only, never a value). Unreadable or odd = none. */
+export function piProvidersIn(authFile: string): string[] {
+  try {
+    const j: unknown = JSON.parse(readFileSync(authFile, "utf8"));
+    return typeof j === "object" && j !== null && !Array.isArray(j) ? Object.keys(j) : [];
+  } catch {
+    return [];
+  }
+}

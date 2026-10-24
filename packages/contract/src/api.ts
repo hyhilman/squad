@@ -147,12 +147,15 @@ export interface SetFloorBody {
   readonly floorWeek: number | null;
 }
 
-/** A login the owner started from the web app. The page shows only the user code, never a token. */
+/** A login the owner started from the web app. The page shows only a code or a link, never a token. */
 export interface LoginStart {
   readonly loginId: string;
-  readonly userCode: string;
+  /** The code the person types at the link (codex device login). Unset when `needsCode` is. */
+  readonly userCode?: string;
   readonly verifyUrl: string;
   readonly expiresAt: string;
+  /** The person signs in at the link, then pastes the code that page shows (claude setup-token). */
+  readonly needsCode?: true;
 }
 
 export type LoginState = "pending" | "done" | "failed" | "expired";
@@ -176,12 +179,14 @@ export interface ProviderView {
   readonly builtin?: true;
   /** How many models the catalog lists for it. */
   readonly models: number;
+  /** How many accounts of this provider the person who asks can see. Codex and claude count by runner; a pi account by the providers in its auth.json. */
+  readonly accounts: number;
 }
 
 /** What a person sends to add an account. The token and the key are shape-checked, never echoed. */
 export type AddAccountBody =
   | { readonly runner: "codex"; readonly name: string }
-  | { readonly runner: "claude"; readonly name: string; readonly token: string }
+  | { readonly runner: "claude"; readonly name: string; readonly token?: string }
   | { readonly runner: "pi"; readonly name: string; readonly provider: string; readonly key: string };
 
 export type ErrorCode = "unauthenticated" | "forbidden" | "not-found" | "bad-request" | "conflict" | "disabled" | "internal";
@@ -201,6 +206,7 @@ export const ROUTES = {
   consent: { method: "POST", path: "/api/accounts/:runner/:name/consent" },
   startLogin: { method: "POST", path: "/api/accounts/:runner/:name/login" },
   loginStatus: { method: "GET", path: "/api/logins/:loginId" },
+  submitLoginCode: { method: "POST", path: "/api/logins/:loginId/code" },
   usage: { method: "GET", path: "/api/usage" },
   usageSeries: { method: "GET", path: "/api/usage/series" },
   roomSeries: { method: "GET", path: "/api/accounts/:runner/:name/room" },
@@ -224,6 +230,8 @@ export interface Api {
   consent: { params: AccountParams; query: void; body: { readonly agree: true }; res: AccountView };
   startLogin: { params: AccountParams; query: void; body: void; res: LoginStart };
   loginStatus: { params: { readonly loginId: string }; query: void; body: void; res: LoginStatus };
+  /** Gives a claude setup-token login the code the sign-in page showed. One try. The code is never echoed or logged. */
+  submitLoginCode: { params: { readonly loginId: string }; query: void; body: { readonly code: string }; res: LoginStatus };
   usage: { params: void; query: { readonly by: UsageBy; readonly since?: string; readonly account?: string }; body: void; res: readonly UsageRow[] };
   usageSeries: { params: void; query: { readonly by: "day" | "hour"; readonly since?: string; readonly account?: string }; body: void; res: readonly UsageSeriesPoint[] };
   roomSeries: { params: AccountParams; query: { readonly since?: string }; body: void; res: readonly RoomPoint[] };
@@ -231,6 +239,7 @@ export interface Api {
   getPass: { params: { readonly passId: string }; query: void; body: void; res: PassDetail };
   /**
    * codex: starts a device login for a NEW account (the answer is a LoginStart; the account exists once the login ends well).
+   * claude with no token: starts a setup-token sign-in on the server (the answer is a LoginStart with `needsCode`).
    * claude with a token, or pi with a provider and a key: writes the account at once (the answer is its AccountView).
    * The person who is signed in owns it.
    */

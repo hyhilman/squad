@@ -28,6 +28,10 @@ export interface TerminalOpts {
   readonly identity?: { readonly name: string; readonly email: string };
   /** A person at a terminal. Default true. The web login has none: it reads the CLI's output. */
   readonly tty?: boolean;
+  /** The CLI args in place of the runner's login args (the claude setup-token). */
+  readonly args?: readonly string[];
+  /** Extra container env, such as the terminal size. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: string | null, args: readonly string[], o: TerminalOpts, action: string, entrypoint?: string): PassPlan {
@@ -49,7 +53,7 @@ function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: st
     identity: o.identity ?? { name: "squad", email: "squad@localhost" },
     ghDir: null,
     home: o.home,
-    env: {},
+    env: o.env ?? {},
     args,
     tty: o.tty ?? true,
     ...(entrypoint === undefined ? {} : { entrypoint }),
@@ -64,7 +68,7 @@ function loginArgs(runner: Runner): string[] {
 
 /** The `docker run` argv of a login into `staging`. There is no lock: nothing else can see staging. */
 export function loginArgv(runner: Runner, o: TerminalOpts & { readonly staging: string; readonly name?: string }): string[] {
-  const args = loginArgs(runner);
+  const args = o.args ?? loginArgs(runner);
   // Kind "key" only means "mount the folder, take no lock"; the row is made after the login.
   return dockerRunArgv(terminalPlan(runner, { name: o.name ?? "login", kind: "key", dir: o.staging }, null, args, o, "login"));
 }

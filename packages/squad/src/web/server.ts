@@ -12,20 +12,22 @@ import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
 import { ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
+import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
-import { authJsonFor, modelsJsonFor, providerEntries } from "../providers.ts";
+import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
 import { getAccount, getHealth, healthOf, listAccounts, roomSince, setConsent, setOwnerFloors, setState, type AccountRow } from "../accounts/store.ts";
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
 import { ACCOUNT_NAME } from "../accounts/store.ts";
-import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, envNum, envOn, envOptional } from "../settings.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, envNum, envOn, envOptional } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { passDetail, passViews } from "./passes.ts";
 import { allowedProviders, loadWebConfig } from "./settings.ts";
+import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
 import { startTicker, type Timers } from "./ticker.ts";
 
 export interface Ctx<N extends RouteName> {
@@ -57,7 +59,7 @@ export interface WebOpts {
   /** Replaces the loop's timers. For tests only. */
   readonly ticker?: { readonly timers?: Timers };
   /** Replaces the docker calls of a web login, and its timers. For tests only. */
-  readonly login?: Partial<LoginRunner> & { readonly timers?: LoginTimers };
+  readonly login?: Partial<LoginRunner> & { readonly timers?: LoginTimers; readonly pty?: PtyRunner };
   /** Replaces handlers. For tests only. */
   readonly handlers?: Partial<Handlers>;
 }
@@ -102,13 +104,21 @@ const floor = (v: unknown): number | null => {
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
   me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {},
+  submitLoginCode: {
+    // The code is secret and short-lived: the message is fixed, nothing from the body is echoed.
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["code"]) || typeof b.code !== "string" || codeShapeError(b.code) !== undefined) throw bad("body must be {code}, 1 to 512 visible characters with no space");
+      return { code: b.code };
+    },
+  },
   listProviders: {},
   addAccount: {
     // The messages are fixed text: a refused body may hold a key, so nothing from it is echoed.
     body: (b) => {
-      const shape = 'body must be {runner: "codex", name}, {runner: "claude", name, token} or {runner: "pi", name, provider, key}';
+      const shape = 'body must be {runner: "codex", name}, {runner: "claude", name[, token]} or {runner: "pi", name, provider, key}';
       if (!isObj(b) || typeof b.name !== "string") throw bad(shape);
       if (b.runner === "codex" && onlyKeys(b, ["runner", "name"])) return { runner: "codex", name: b.name };
+      if (b.runner === "claude" && onlyKeys(b, ["runner", "name"])) return { runner: "claude", name: b.name };
       if (b.runner === "claude" && onlyKeys(b, ["runner", "name", "token"]) && typeof b.token === "string") return { runner: "claude", name: b.name, token: b.token };
       if (b.runner === "pi" && onlyKeys(b, ["runner", "name", "provider", "key"]) && typeof b.provider === "string" && typeof b.key === "string") return { runner: "pi", name: b.name, provider: b.provider, key: b.key };
       throw bad(shape);
@@ -175,7 +185,7 @@ const INPUTS: Inputs = {
 
 // ---- the handlers ----
 
-function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | undefined): Handlers {
+function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, adminGroup: string | undefined): Handlers {
   const db = o.store.db;
   const now = o.now ?? (() => new Date());
   const busyOf = o.busy ?? ((a: AccountRow): boolean => {
@@ -274,7 +284,16 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | und
       const a = owned(session, params.runner, params.name);
       return refuseAsync(() => logins.start(session.email, a));
     },
-    loginStatus: ({ session, params }) => refuse(() => logins.status(session.email, params.loginId)),
+    loginStatus: ({ session, params }) => refuse(() => {
+      try {
+        return logins.status(session.email, params.loginId);
+      } catch (e) {
+        // A login id belongs to one of the two managers.
+        if (e instanceof LoginRefused && e.status === 404) return setups.status(session.email, params.loginId);
+        throw e;
+      }
+    }),
+    submitLoginCode: ({ session, params, body }) => refuse(() => setups.submitCode(session.email, params.loginId, body.code)),
     usage: ({ session, query }) => {
       if (!(USAGE_BYS as readonly string[]).includes(query.by)) throw bad(`by must be one of ${USAGE_BYS.join(", ")}`);
       const since = sinceOf(query.since ?? "7d", "7d");
@@ -317,18 +336,27 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, adminGroup: string | und
       if (row === undefined || !(isAdmin(session) || (owner !== undefined && owner.ownerEmail !== null && owner.ownerEmail.toLowerCase() === session.email.toLowerCase()))) throw new HttpError(404, "not-found", "no such pass");
       return passDetail(o.home, row);
     },
-    listProviders: () => providerEntries(loadProviders(o.home), allowedProviders(o.env)).map((e): ProviderView => ({
-      id: e.id, name: e.name, runner: e.runner, kind: e.kind, ...(e.builtin === true ? { builtin: true as const } : {}), models: e.models,
-    })),
+    listProviders: ({ session }) => {
+      const used = new Map<string, number>();
+      const bump = (id: string): void => void used.set(id, (used.get(id) ?? 0) + 1);
+      for (const a of visible(session)) {
+        if (a.runner === "pi") for (const id of piProvidersIn(join(o.home.accounts, "pi", a.name, "auth.json"))) bump(id);
+        else bump(a.runner);
+      }
+      return providerEntries(loadProviders(o.home), allowedProviders(o.env)).map((e): ProviderView => ({
+        id: e.id, name: e.name, runner: e.runner, kind: e.kind, ...(e.builtin === true ? { builtin: true as const } : {}), models: e.models, accounts: used.get(e.id) ?? 0,
+      }));
+    },
     addAccount: ({ session, body }) => {
       // The setting is enforced here, not only in the list the page shows.
       const wanted = body.runner === "pi" ? body.provider : body.runner;
       const entry = providerEntries(loadProviders(o.home), allowedProviders(o.env)).find((e) => e.id === wanted && e.runner === body.runner);
       if (entry === undefined) throw bad("this provider is not offered");
       if (body.runner === "codex") return refuseAsync(() => logins.startAdd(session.email, body.name));
+      if (body.runner === "claude" && body.token === undefined) return refuseAsync(() => setups.start(session.email, body.name));
       if (envOn(SQUAD_DRY_RUN_ENV, o.env)) throw new HttpError(501, "disabled", "no account is written while SQUAD_DRY_RUN=1");
       if (!ACCOUNT_NAME.test(body.name)) throw bad("the name must be lower-case letters, digits, dot, dash or underscore, and start with a letter or digit");
-      const secret = body.runner === "claude" ? body.token : body.key;
+      const secret = body.runner === "claude" ? body.token! : body.key;
       const why = secretShapeError(secret);
       if (why !== undefined) throw bad(why);
       const spec = { runner: body.runner, name: body.name, kind: entry.kind, ownerEmail: session.email.toLowerCase() };
@@ -423,7 +451,14 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     start: opts.login?.start ?? real.start, stop: opts.login?.stop ?? real.stop,
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
-  const handlers = makeHandlers(opts, logins, cfg.adminGroup);
+  const realPty = dockerPtyRunner(opts.env, docker);
+  const setups = new SetupTokenLogins({
+    env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
+    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    start: opts.login?.pty?.start ?? realPty.start, stop: opts.login?.pty?.stop ?? realPty.stop,
+    ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
+  });
+  const handlers = makeHandlers(opts, logins, setups, cfg.adminGroup);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
@@ -562,6 +597,21 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     res.end(req.method === "HEAD" ? undefined : data);
   }
 
+  /** GET /logos/<id>.svg: public data, so no session; the cache bounds the rate. An SVG opened by itself can run no script. */
+  async function serveLogo(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "method not allowed\n", { allow: "GET, HEAD" });
+    const m = /^\/logos\/([^/]+)\.svg$/.exec(pathname);
+    // Read the raw value: an empty address means "no fetch", which envOptional would turn into the default.
+    const url = opts.env[SQUAD_PRICES_URL_ENV.key] ?? SQUAD_PRICES_URL_ENV.default ?? "";
+    const data = m === null ? undefined : await getLogo({ home: opts.home, url, id: m[1]!, now: (opts.now ?? (() => new Date()))().getTime(), fetch: opts.fetch ?? globalThis.fetch, env: opts.env });
+    if (data === undefined) return sendText(res, 404, "not found\n");
+    res.writeHead(200, {
+      "content-type": "image/svg+xml", "content-length": data.length, "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox", "cache-control": "public, max-age=3600",
+    });
+    res.end(req.method === "HEAD" ? undefined : data);
+  }
+
   const server = createServer((req, res) => {
     const t0 = performance.now();
     let route = "static";
@@ -585,7 +635,9 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const isApi = pathname === "/api" || pathname.startsWith("/api/");
     const isAuth = pathname === "/auth" || pathname.startsWith("/auth/");
     if (isApi || isAuth) res.setHeader("cache-control", "no-store");
-    const run = isApi ? api(req, res, pathname, url, (r) => (route = r)) : isAuth ? auth(req, res, pathname, url, (r) => (route = r)) : Promise.resolve(opts.apiOnly === true ? sendText(res, 404, "not found\n") : serveStatic(req, res, pathname));
+    const isLogo = pathname.startsWith("/logos/");
+    if (isLogo) route = "logo";
+    const run = isApi ? api(req, res, pathname, url, (r) => (route = r)) : isLogo ? serveLogo(req, res, pathname) : isAuth ? auth(req, res, pathname, url, (r) => (route = r)) : Promise.resolve(opts.apiOnly === true ? sendText(res, 404, "not found\n") : serveStatic(req, res, pathname));
     run.catch((e: unknown) => {
       log.error("request_failed", { route });
       void e;
@@ -618,6 +670,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
           server.closeAllConnections();
         }),
         logins.close(),
+        setups.close(),
       ]);
     },
   };

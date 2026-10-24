@@ -881,7 +881,7 @@ test("addAccount codex: a bad body is 400; a bad name is 400, an existing name 4
   const r = await rig({ login: f.opts });
   seed(r);
   const alice = await signIn(r, "alice@example.test");
-  for (const body of [{ runner: "claude", name: "x" }, { runner: "pi", name: "x" }, { runner: "pi", name: "x", key: "k" }, { runner: "dsh", name: "x" }, { name: "x" }, { runner: "codex" }, { runner: "codex", name: 5 }, { runner: "codex", name: "x", extra: 1 }, { runner: "codex", name: "x", key: "k" }]) {
+  for (const body of [{ runner: "claude", name: "x", token: 5 }, { runner: "claude", name: "x", extra: 1 }, { runner: "pi", name: "x" }, { runner: "pi", name: "x", key: "k" }, { runner: "dsh", name: "x" }, { name: "x" }, { runner: "codex" }, { runner: "codex", name: 5 }, { runner: "codex", name: "x", extra: 1 }, { runner: "codex", name: "x", key: "k" }]) {
     assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", body)).status, 400, JSON.stringify(body));
   }
   assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", { runner: "codex", name: "../evil" })).status, 400);
@@ -975,10 +975,26 @@ test("listProviders: seats, pi built-ins and custom catalog providers with their
   assert.equal(res.status, 200);
   assert.equal(findForbidden(res.body), undefined);
   assert.deepEqual(res.body.slice(0, 2).map((p) => [p.id, p.runner, p.kind]), [["codex", "codex", "login"], ["claude", "claude", "token"]]);
-  assert.deepEqual(res.body.find((p) => p.id === "opencode-go"), { id: "opencode-go", name: "OpenCode Go", runner: "pi", kind: "key", builtin: true, models: res.body.find((p) => p.id === "opencode-go")!.models });
+  assert.deepEqual(res.body.find((p) => p.id === "opencode-go"), { id: "opencode-go", name: "OpenCode Go", runner: "pi", kind: "key", builtin: true, models: res.body.find((p) => p.id === "opencode-go")!.models, accounts: 0 });
   assert.ok(res.body.find((p) => p.id === "engy")!.models > 0);
   assert.equal(res.body.find((p) => p.id === "engy")!.builtin, undefined);
   assert.equal((await api(r, undefined, "GET", "/api/providers")).status, 401);
+  await r.close();
+});
+
+test("listProviders counts the accounts the person can see: codex and claude by runner, pi by the providers in auth.json; never another person's", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  seed(r);
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  assert.equal((await api(r, alice, "POST", "/api/accounts", { runner: "pi", name: "e1", provider: "engy", key: FAKE_KEY })).status, 200);
+  assert.equal((await api(r, alice, "POST", "/api/accounts", { runner: "pi", name: "e2", provider: "engy", key: FAKE_KEY })).status, 200);
+  assert.equal((await api(r, bob, "POST", "/api/accounts", { runner: "pi", name: "z1", provider: "opencode-go", key: FAKE_KEY })).status, 200);
+  const count = async (c: string): Promise<Record<string, number>> =>
+    Object.fromEntries((await api<ProviderView[]>(r, c, "GET", "/api/providers")).body.filter((p) => p.accounts > 0).map((p) => [p.id, p.accounts]));
+  assert.deepEqual(await count(alice), { codex: 1, engy: 2 });
+  assert.deepEqual(await count(bob), { "opencode-go": 1 });
   await r.close();
 });
 
@@ -1080,4 +1096,132 @@ test("the usage and pass answers carry both costs", async () => {
   const s = (await api<UsageSeriesPoint[]>(r, c, "GET", "/api/usage/series?by=day&since=2d")).body;
   assert.deepEqual([s[0]!.cliCostUsd, s[0]!.catalogCostUsd], [0.4, 0.5]);
   await r.close();
+});
+
+// ---- logos ----
+
+const LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>';
+
+test("GET /logos/<id>.svg is served by squad from the catalog's copy, with a sandbox CSP, and needs no session", async () => {
+  const asked: string[] = [];
+  const catalogFetch = ((url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    if (!u.startsWith("http://catalog.test:7311/")) return fetch(url, init);
+    asked.push(u);
+    return Promise.resolve(u.endsWith("/logos/engy.svg") ? new Response(LOGO_SVG, { headers: { "content-type": "image/svg+xml" } }) : new Response("no", { status: 404 }));
+  }) as typeof globalThis.fetch;
+  const r = await rig({ fetch: catalogFetch }, { SQUAD_PRICES_URL: "http://catalog.test:7311/api.json" });
+  const ok = await fetch(`${r.base}/logos/engy.svg`);
+  assert.equal(ok.status, 200);
+  assert.equal(await ok.text(), LOGO_SVG);
+  assert.equal(ok.headers.get("content-type"), "image/svg+xml");
+  assert.equal(ok.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(ok.headers.get("content-security-policy"), "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  assert.match(ok.headers.get("cache-control") ?? "", /max-age=\d+/);
+  const again = await fetch(`${r.base}/logos/engy.svg`);
+  assert.equal(await again.text(), LOGO_SVG);
+  assert.deepEqual(asked, ["http://catalog.test:7311/logos/engy.svg"], "one fetch for two asks");
+  const head = await fetch(`${r.base}/logos/engy.svg`, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  for (const path of ["/logos/missing.svg", "/logos/UPPER.svg", "/logos/..%2fx.svg", "/logos/engy.png", "/logos/", "/logos/a/b.svg"]) {
+    const miss = await fetch(`${r.base}${path}`);
+    assert.equal(miss.status, 404, path);
+    assert.doesNotMatch(miss.headers.get("content-type") ?? "", /svg/, path);
+  }
+  const post = await fetch(`${r.base}/logos/engy.svg`, { method: "POST" });
+  assert.equal(post.status, 405);
+  await r.close();
+});
+
+test("with the catalog off, a logo that is not saved is a 404 and nothing is fetched", async () => {
+  let calls = 0;
+  const r = await rig({ fetch: (() => { calls++; return Promise.reject(new Error("no")); }) as typeof globalThis.fetch }, { SQUAD_NO_PRICES: "1" });
+  assert.equal((await fetch(`${r.base}/logos/engy.svg`)).status, 404);
+  assert.equal(calls, 0);
+  await r.close();
+});
+
+// ---- claude setup-token from the web ----
+
+const SETUP_URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000&response_type=code&scope=user%3Ainference&state=FAKESTATE000";
+const SETUP_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
+
+function fakePty() {
+  const procs: { say: (s: string) => void; exit: (c: number) => void; name: string; writes: string[] }[] = [];
+  const stops: string[] = [];
+  return {
+    procs, stops,
+    pty: {
+      start: (_argv: string[], name: string) => {
+        let cb: (s: string) => void = () => {};
+        let end: (c: number) => void = () => {};
+        const exited = new Promise<number>((r) => { end = r; });
+        const writes: string[] = [];
+        procs.push({ say: (s) => cb(s), exit: end, name, writes });
+        queueMicrotask(() => cb(`Browser didn't open?\r\n${SETUP_URL}\r\nPaste code here if prompted >`));
+        return { onOutput: (f: (s: string) => void) => { cb = f; }, write: (s: string) => void writes.push(s), exited };
+      },
+      stop: async (n: string) => { stops.push(n); procs.find((p) => p.name === n)?.exit(143); },
+    },
+  };
+}
+
+test("adding claude with no token starts a server-side setup-token login; the code route is for its owner; the token makes the account and shows nowhere", async () => {
+  const f = fakePty();
+  const r = await rig({ login: { pty: f.pty } });
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  const start = await api<{ loginId: string; verifyUrl: string; needsCode?: true; userCode?: string }>(r, alice, "POST", "/api/accounts", { runner: "claude", name: "c1" });
+  assert.equal(start.status, 200);
+  assert.equal(start.body.verifyUrl, SETUP_URL);
+  assert.equal(start.body.needsCode, true);
+  assert.equal(start.body.userCode, undefined);
+  assert.equal(findForbidden(start.body), undefined);
+  const id = start.body.loginId;
+  assert.deepEqual((await api(r, alice, "GET", `/api/logins/${id}`)).body, { loginId: id, state: "pending" });
+  assert.equal((await api(r, bob, "GET", `/api/logins/${id}`)).status, 404);
+  assert.equal((await api(r, bob, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" })).status, 404);
+  assert.equal((await api(r, undefined, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" })).status, 401);
+  assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "has space" })).status, 400);
+  assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "x", extra: 1 })).status, 400);
+  assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, {})).status, 400);
+  assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" }, { origin: "http://evil.test" })).status, 403);
+  assert.deepEqual(f.procs[0]!.writes, []);
+  const sent = await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" });
+  assert.deepEqual([sent.status, sent.body], [200, { loginId: id, state: "pending" }]);
+  assert.deepEqual(f.procs[0]!.writes, ["PAGE-CODE\r"]);
+  assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" })).status, 409);
+  f.procs[0]!.say(`\r\n${SETUP_TOKEN}\r\n`);
+  for (let i = 0; i < 5; i++) await new Promise((res) => setImmediate(res));
+  const done = await api(r, alice, "GET", `/api/logins/${id}`);
+  assert.deepEqual(done.body, { loginId: id, state: "done" });
+  const mine = await api<AccountView[]>(r, alice, "GET", "/api/accounts");
+  assert.deepEqual(mine.body.map((a) => [a.account, a.kind, a.ownerEmail]), [["claude/c1", "token", "alice@example.test"]]);
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "c1", "token"), "utf8"), SETUP_TOKEN);
+  assert.equal(statSync(join(r.home.accounts, "claude", "c1", "token")).mode & 0o777, 0o600);
+  assert.ok(!JSON.stringify([mine.body, done.body, sent.body]).includes("oat01") && !r.logs.join("\n").includes("oat01") && !r.logs.join("\n").includes("PAGE-CODE"), "no token or code in an answer or a log");
+  assert.deepEqual(f.stops, [f.procs[0]!.name]);
+  await r.close();
+});
+
+test("claude with a pasted token still writes the account at once; a dry run refuses the server-side login", async () => {
+  const f = fakePty();
+  const r = await rig({ login: { pty: f.pty } });
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const paste = await api<AccountView>(r, c, "POST", "/api/accounts", { runner: "claude", name: "pasted", token: SETUP_TOKEN });
+  assert.equal(paste.status, 200);
+  assert.equal(paste.body.account, "claude/pasted");
+  assert.equal(f.procs.length, 0);
+  assert.equal((await api(r, c, "POST", "/api/accounts", { runner: "claude", name: "pasted" })).status, 409);
+  await r.close();
+  {
+    const q = await rig({ login: { pty: fakePty().pty } }, { SQUAD_DRY_RUN: "1" });
+    await withCatalog(q);
+    const qc = await signIn(q, "alice@example.test");
+    assert.equal((await api(q, qc, "POST", "/api/accounts", { runner: "claude", name: "x" })).status, 501);
+    await q.close();
+  }
 });

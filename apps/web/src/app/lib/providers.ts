@@ -47,11 +47,67 @@ export function secretError(v: string | undefined): string | undefined {
 }
 
 /** The request for a provider, name and secret. */
-export function addBody(p: ProviderView, name: string, secret: string): AddAccountBody {
+export function addBody(p: ProviderView, name: string, secret = ""): AddAccountBody {
   if (p.runner === "codex") return { runner: "codex", name };
-  if (p.runner === "claude") return { runner: "claude", name, token: secret };
+  // No token: the server runs the setup-token sign-in itself.
+  if (p.runner === "claude") return secret === "" ? { runner: "claude", name } : { runner: "claude", name, token: secret };
   return { runner: "pi", name, provider: p.id, key: secret };
 }
 
 /** The runner folder the account will have, for the hint under the name box. */
 export const accountPrefix = (p: ProviderView | undefined): string => (p === undefined ? "<runner>" : p.runner);
+
+// ---- the provider picker ----
+
+export interface PickerItem {
+  readonly id: string;
+  readonly name: string;
+  /** The catalog logo to ask for (/logos/<logoId>.svg). */
+  readonly logoId: string;
+  /** The small line under the name. */
+  readonly sub: string;
+  readonly accounts: number;
+}
+export interface PickerGroup {
+  readonly label: string;
+  readonly items: readonly PickerItem[];
+}
+
+/** A pi provider with no models is hidden. The seats (codex, claude) always show. */
+export const visibleProviders = (list: readonly ProviderView[]): ProviderView[] => list.filter((p) => p.runner !== "pi" || p.models > 0);
+
+/** The catalog keeps the seats' logos under the company names. */
+export const logoIdOf = (p: Pick<ProviderView, "id" | "runner">): string => (p.runner === "codex" ? "openai" : p.runner === "claude" ? "anthropic" : p.id);
+
+export const logoSrc = (logoId: string): string => `/logos/${encodeURIComponent(logoId)}.svg`;
+
+/** The letter on the badge shown when a logo is missing. */
+export const badgeLetter = (name: string): string => /[A-Za-z0-9]/.exec(name)?.[0]?.toUpperCase() ?? "?";
+
+export function providerSub(p: Pick<ProviderView, "runner" | "models">): string {
+  if (p.runner === "codex") return "device login";
+  if (p.runner === "claude") return "setup-token";
+  return `API key · ${p.models} model${p.models === 1 ? "" : "s"}`;
+}
+
+const itemOf = (p: ProviderView): PickerItem => ({ id: p.id, name: p.name, logoId: logoIdOf(p), sub: providerSub(p), accounts: p.accounts });
+
+/**
+ * The picker's groups: Seats, In use (pi providers the person already has an account for, most first),
+ * Built into pi, From the catalog. A provider sits in the first group that fits. The search matches the
+ * name or the id. Empty groups are left out.
+ */
+export function pickerGroups(list: readonly ProviderView[], query = ""): PickerGroup[] {
+  const q = query.trim().toLowerCase();
+  const shown = visibleProviders(list).filter((p) => q === "" || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  const seats = shown.filter((p) => p.runner !== "pi");
+  const pi = shown.filter((p) => p.runner === "pi");
+  const used = pi.filter((p) => p.accounts > 0).sort((a, b) => b.accounts - a.accounts);
+  const rest = pi.filter((p) => p.accounts === 0);
+  return [
+    { label: "Seats", items: seats.map(itemOf) },
+    { label: "In use", items: used.map(itemOf) },
+    { label: "Built into pi", items: rest.filter((p) => p.builtin === true).map(itemOf) },
+    { label: "From the catalog", items: rest.filter((p) => p.builtin !== true).map(itemOf) },
+  ].filter((g) => g.items.length > 0);
+}

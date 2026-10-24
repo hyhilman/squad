@@ -11,7 +11,7 @@ export default defineConfig({
   vite: {
     server: {
       // In dev, the API comes from a local `squad web --api-only`.
-      proxy: { "/api": "http://127.0.0.1:20140", "/auth": "http://127.0.0.1:20140" },
+      proxy: { "/api": "http://127.0.0.1:20140", "/auth": "http://127.0.0.1:20140", "/logos": "http://127.0.0.1:20140" },
     },
   },
 });

@@ -23,3 +23,9 @@ test("matchPath is the inverse of pathOf", () => {
   assert.equal(matchPath(ROUTES.setFloor.path, "/api/accounts/pi/x"), undefined);
   assert.equal(matchPath(ROUTES.getAccount.path, "/api/accounts/pi/"), undefined);
 });
+
+test("the code route sits under its login and does not shadow the status route", () => {
+  assert.deepEqual(matchPath(ROUTES.submitLoginCode.path, "/api/logins/abc/code"), { loginId: "abc" });
+  assert.equal(matchPath(ROUTES.loginStatus.path, "/api/logins/abc/code"), undefined);
+  assert.equal(matchPath(ROUTES.submitLoginCode.path, "/api/logins/abc"), undefined);
+});

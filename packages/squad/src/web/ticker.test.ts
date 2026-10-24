@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createFileAccount } from "../accounts/add.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -192,6 +192,18 @@ test("prices: after a refreshed copy the step writes the price history and rewri
   const doc = JSON.parse(readFileSync(join(r.deps.home.accounts, "pi", "e1", "models.json"), "utf8"));
   assert.deepEqual([doc.providers.engy.baseUrl, doc.providers.engy.models.map((m: { id: string }) => m.id)], ["https://api.engy.ai/v1", ["a"]]);
   assert.ok(r.lines.some((l) => l.includes("models-json-updated")));
+});
+
+test("prices: a refreshed copy drops the saved logos; a fresh copy keeps them", async () => {
+  const r = rig();
+  const logo = join(r.deps.home.state, "logos", "engy.svg");
+  mkdirSync(join(r.deps.home.state, "logos"), { recursive: true });
+  writeFileSync(logo, "<svg/>");
+  writeFileSync(join(r.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog: { openai: { models: { x: { cost: { input: 3, output: 1 } } } } } }));
+  await tickSteps({ ...r.deps, refreshPrices: async () => "fresh" })[2]!.run();
+  assert.ok(existsSync(logo));
+  await tickSteps({ ...r.deps, refreshPrices: async () => "refreshed" })[2]!.run();
+  assert.ok(!existsSync(logo));
 });
 
 test("prices: the first tick prices old passes from the saved copy, even when the copy is fresh", async () => {

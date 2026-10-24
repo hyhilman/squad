@@ -8,6 +8,7 @@ import { dueReads, readIntervalMs, refreshUsage } from "../accounts/usage-read.t
 import type { HomeLayout } from "../home.ts";
 import type { Log } from "../log.ts";
 import { syncModelsFiles } from "../accounts/models-sync.ts";
+import { clearLogos } from "../logos.ts";
 import { backfillCatalogCosts, loadPrices, loadProviders, recordPriceHistory, refreshPrices as realRefreshPrices, type RefreshPrices } from "../prices.ts";
 import {
   SQUAD_DRY_RUN_ENV, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV,
@@ -155,6 +156,7 @@ export function tickSteps(d: StepDeps): TickStep[] {
         }
         // Only a new copy can hold a new price or a new model.
         if (result !== "refreshed") return;
+        clearLogos(d.home);
         try {
           recordPriceHistory(d.store.db, loadPrices(d.home), d.now());
         } catch (e) {

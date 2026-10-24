@@ -177,6 +177,10 @@ style `api.json`):
 - Other providers from the catalog that have an `api` address and the `@ai-sdk/openai-compatible`
   package (engy, sumopod, ...). squad writes `auth.json` and a `models.json` built from the catalog.
 
+Each provider card shows the catalog's logo. squad fetches `<catalog origin>/logos/<id>.svg` once, keeps it in `state/logos/`, and serves it at `/logos/<id>.svg` (an SVG with a sandbox CSP); a missing logo is a 404.
+
+Adding `claude` with no token runs `claude setup-token` on the server: the page shows the claude.com sign-in link, you paste the code it gives, and squad writes the token account. Pasting a token still works.
+
 `SQUAD_WEB_PROVIDERS` is `all` by default; a comma list of ids restricts what is offered, and the
 server refuses the rest. The table that says which runner serves a provider is `PROVIDER_RUNNER` in
 `packages/squad/src/providers.ts`. While the web loop runs, a new catalog copy also rewrites the
