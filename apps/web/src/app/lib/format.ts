@@ -55,3 +55,24 @@ export const totalTokens = (r: { input: number; output: number; cacheRead: numbe
 export const hasCost = (rows: readonly { costUsd?: number }[]): boolean => rows.some((r) => r.costUsd !== undefined);
 
 export const costText = (usd: number | undefined): string => (usd === undefined ? "" : `$${usd.toFixed(2)}`);
+
+const nf = new Intl.NumberFormat("en-US");
+export const tokensText = (n: number): string => nf.format(n);
+
+/** 1500 -> 1.5k. Short numbers for chart axes. */
+export function compactNumber(n: number): string {
+  const units: [number, string][] = [[1e9, "B"], [1e6, "M"], [1e3, "k"]];
+  for (const [size, suffix] of units) if (Math.abs(n) >= size) return `${Math.round((n / size) * 10) / 10}${suffix}`;
+  return String(n);
+}
+
+export function durationText(startIso: string, endIso: string | undefined): string {
+  if (endIso === undefined) return "running";
+  const sec = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 1000));
+  if (Number.isNaN(sec)) return "unknown";
+  if (sec < 60) return `${sec} s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min`;
+  const rest = min % 60;
+  return rest === 0 ? `${Math.floor(min / 60)} h` : `${Math.floor(min / 60)} h ${rest} min`;
+}

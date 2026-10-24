@@ -1,87 +1,51 @@
-import { useList } from "@refinedev/core";
-import type { UsageBy, UsageRow } from "@squad/contract";
+import type { UsageRow } from "@squad/contract";
+import { Card, Flex, Segmented, Space, Table, Typography } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
-import { costText, hasCost, totalTokens } from "../lib/format.ts";
-
-const BYS: readonly UsageBy[] = ["account", "task", "flow", "day", "model"];
-const SINCES = ["24h", "7d", "30d"] as const;
-const nf = new Intl.NumberFormat("en-US");
+import { UsageCharts } from "../components/UsageCharts.tsx";
+import { ErrorNote } from "../components/ErrorNote.tsx";
+import { costText, hasCost, tokensText, totalTokens } from "../lib/format.ts";
+import { RANGES, sinceFor, type Bucket, type Range } from "../lib/range.ts";
+import { useUsageByAccount, useUsageSeries } from "../queries.ts";
 
 export function Usage() {
-  const [by, setBy] = useState<UsageBy>("account");
-  const [since, setSince] = useState<string>("7d");
-  const { result, query } = useList<UsageRow & { id: string }>({
-    resource: "usage",
-    pagination: { mode: "off" },
-    filters: [
-      { field: "by", operator: "eq", value: by },
-      { field: "since", operator: "eq", value: since },
-    ],
-  });
-  const rows = result.data;
-  const money = hasCost(rows);
+  const [range, setRange] = useState<Range>("7d");
+  const [by, setBy] = useState<Bucket>("day");
+  const since = sinceFor(range, by);
+  const series = useUsageSeries(by, since);
+  const totals = useUsageByAccount(since);
+  const rows = totals.data ?? [];
+  const num = (title: string, f: (r: UsageRow) => number) => ({ title, align: "right" as const, sorter: (a: UsageRow, b: UsageRow) => f(a) - f(b), render: (_: unknown, r: UsageRow) => tokensText(f(r)) });
+  const columns: ColumnsType<UsageRow> = [
+    { title: "Account", dataIndex: "key", sorter: (a, b) => a.key.localeCompare(b.key) },
+    num("Passes", (r) => r.passes),
+    num("Input", (r) => r.input),
+    num("Output", (r) => r.output),
+    num("Cache read", (r) => r.cacheRead),
+    num("Cache write", (r) => r.cacheWrite),
+    num("Reasoning", (r) => r.reasoning),
+    { ...num("Total tokens", totalTokens), defaultSortOrder: "descend" },
+    ...(hasCost(rows) ? [{ title: "Cost", align: "right" as const, render: (_: unknown, r: UsageRow) => costText(r.costUsd) }] : []),
+  ];
   return (
-    <>
-      <h1>Usage</h1>
-      <div className="row">
-        <label>
-          Group by{" "}
-          <select value={by} onChange={(e) => setBy(e.target.value as UsageBy)}>
-            {BYS.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Since{" "}
-          <select value={since} onChange={(e) => setSince(e.target.value)}>
-            {SINCES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {query.isLoading ? <p>Loading…</p> : null}
-      {query.isError ? <p className="error">Could not load usage.</p> : null}
-      {query.isSuccess && rows.length === 0 ? <p className="muted">No usage in this time.</p> : null}
-      {rows.length > 0 ? (
-        <div className="scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>{by}</th>
-                <th className="num">Passes</th>
-                <th className="num">Input</th>
-                <th className="num">Output</th>
-                <th className="num">Cache read</th>
-                <th className="num">Cache write</th>
-                <th className="num">Reasoning</th>
-                <th className="num">Total</th>
-                {money ? <th className="num">Cost</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.key}</td>
-                  <td className="num">{nf.format(r.passes)}</td>
-                  <td className="num">{nf.format(r.input)}</td>
-                  <td className="num">{nf.format(r.output)}</td>
-                  <td className="num">{nf.format(r.cacheRead)}</td>
-                  <td className="num">{nf.format(r.cacheWrite)}</td>
-                  <td className="num">{nf.format(r.reasoning)}</td>
-                  <td className="num">{nf.format(totalTokens(r))}</td>
-                  {money ? <td className="num">{costText(r.costUsd)}</td> : null}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-    </>
+    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+      <Flex justify="space-between" align="center" wrap gap="small">
+        <Typography.Title level={3} style={{ margin: 0 }}>
+          Usage
+        </Typography.Title>
+        <Space wrap>
+          <Segmented<Range> options={[...RANGES]} value={range} onChange={setRange} />
+          <Segmented<Bucket> options={[{ label: "By day", value: "day" }, { label: "By hour", value: "hour" }]} value={by} onChange={setBy} />
+        </Space>
+      </Flex>
+      {by === "hour" && range !== "7d" ? <Typography.Text type="secondary">Hour buckets show the last 7 days at most.</Typography.Text> : null}
+      <Card title={`Tokens per ${by}, by account`} loading={series.isLoading}>
+        {series.isError ? <ErrorNote error={series.error} /> : <UsageCharts points={series.data ?? []} />}
+      </Card>
+      <Card title="Totals by account">
+        {totals.isError ? <ErrorNote error={totals.error} /> : null}
+        <Table<UsageRow> rowKey="key" size="small" loading={totals.isLoading} dataSource={[...rows]} columns={columns} pagination={false} scroll={{ x: "max-content" }} locale={{ emptyText: "No usage in this time." }} />
+      </Card>
+    </Space>
   );
 }

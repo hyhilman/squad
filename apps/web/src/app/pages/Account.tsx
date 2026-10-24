@@ -1,192 +1,165 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useOne } from "@refinedev/core";
-import type { AccountView, LoginStart, LoginStatus, Runner } from "@squad/contract";
-import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { AccountView, LoginStart, Runner } from "@squad/contract";
+import { App, Button, Card, Descriptions, Form, Input, Popconfirm, Skeleton, Space, Tag, Typography } from "antd";
+import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { api } from "../api.ts";
-import { Room } from "../Meter.tsx";
+import { ErrorNote } from "../components/ErrorNote.tsx";
+import { LoginProgress } from "../components/LoginProgress.tsx";
+import { PassesTable } from "../components/PassesTable.tsx";
+import { Room } from "../components/Room.tsx";
+import { RoomChart } from "../components/RoomChart.tsx";
+import { healthColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
-import { floorBody } from "../lib/floors.ts";
+import { floorBody, parseFloor } from "../lib/floors.ts";
 import { agoText } from "../lib/format.ts";
-import { canLogInAgain, isFinalLogin, loginStateText, POLL_MS } from "../lib/login.ts";
+import { canLogInAgain } from "../lib/login.ts";
+import { usePasses, useRoomSeries } from "../queries.ts";
 
-type Notice = { kind: "ok" | "error"; text: string } | undefined;
+const floorRule = { validator: (_: unknown, v: string | undefined) => { const r = parseFloor(v ?? ""); return r.ok ? Promise.resolve() : Promise.reject(new Error(r.error)); } };
 
 export function Account() {
   const { runner, name } = useParams();
   const id = `${runner}/${name}`;
   const { result, query } = useOne<AccountView & { id: string }>({ resource: "accounts", id });
+  if (query.isLoading) return <Skeleton active />;
+  if (query.isError || result === undefined) return <ErrorNote error={query.error ?? new Error("not loaded")} />;
+  return <AccountBody a={result} />;
+}
+
+function AccountBody({ a }: { a: AccountView }) {
+  const { message } = App.useApp();
   const qc = useQueryClient();
-  const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState(false);
-  const [f5, setF5] = useState<string | undefined>();
-  const [fw, setFw] = useState<string | undefined>();
-  const [started, setStarted] = useState<LoginStart | undefined>();
-  const [loginState, setLoginState] = useState<LoginStatus | undefined>();
-
-  // Ask for the login state until it is final or the page goes away.
-  const loginId = started?.loginId;
-  useEffect(() => {
-    if (loginId === undefined) return;
-    let stop = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      try {
-        const st = await api("loginStatus", { params: { loginId } });
-        if (stop) return;
-        setLoginState(st);
-        if (isFinalLogin(st.state)) {
-          if (st.state === "done") void qc.invalidateQueries();
-          return;
-        }
-      } catch (e) {
-        if (stop) return;
-        setNotice({ kind: "error", text: failureText(e) });
-        return;
-      }
-      timer = setTimeout(() => void poll(), POLL_MS);
-    };
-    timer = setTimeout(() => void poll(), POLL_MS);
-    return () => {
-      stop = true;
-      clearTimeout(timer);
-    };
-  }, [loginId, qc]);
-
-  if (query.isLoading) return <p>Loading…</p>;
-  if (query.isError || result === undefined) return <p className="error">Could not load this account.</p>;
-  const a = result;
+  const [started, setStarted] = useState<LoginStart>();
   const params = { runner: a.runner as Runner, name: a.name };
-  const shown5 = f5 ?? (a.floorSource === "owner" ? String(a.floor5h) : "");
-  const shownW = fw ?? (a.floorSource === "owner" ? String(a.floorWeek) : "");
+  const room = useRoomSeries(params.runner, params.name, "7d");
+  const passes = usePasses(a.account, undefined, 10);
 
-  // One guard for every action: show the plain error, refresh the account on success.
+  // One guard for every action: show the plain error, refresh the data on success.
   const run = async (ok: string, act: () => Promise<unknown>) => {
     setBusy(true);
-    setNotice(undefined);
     try {
       await act();
       await qc.invalidateQueries();
-      setF5(undefined);
-      setFw(undefined);
-      setNotice({ kind: "ok", text: ok });
+      void message.success(ok);
     } catch (e) {
-      setNotice({ kind: "error", text: failureText(e) });
+      void message.error(failureText(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const saveFloors = (ev: { preventDefault(): void }) => {
-    ev.preventDefault();
-    const b = floorBody(shown5, shownW);
-    if (!b.ok) return setNotice({ kind: "error", text: b.errors.join(" ") });
-    void run("Floors saved.", () => api("setFloor", { params, body: b.body }));
-  };
-
-  const toggle = () => {
-    const to = a.health === "disabled";
-    if (!window.confirm(to ? `Enable ${a.account}?` : `Disable ${a.account}? No pass will use it until you enable it again.`)) return;
-    void run(to ? "Account enabled." : "Account disabled.", () => api("setEnabled", { params, body: { enabled: to } }));
-  };
-
-  const login = async () => {
+  const disabled = a.health === "disabled";
+  const startLogin = async () => {
     setBusy(true);
-    setNotice(undefined);
     try {
-      setLoginState(undefined);
       setStarted(await api("startLogin", { params }));
     } catch (e) {
-      setStarted(undefined);
-      setNotice({ kind: "error", text: failureText(e) });
+      void message.error(failureText(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const now = new Date();
   return (
-    <>
-      <p>
+    <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <div>
         <Link to="/accounts">Back to accounts</Link>
-      </p>
-      <h1>{a.account}</h1>
-      {notice === undefined ? null : <p className={`notice ${notice.kind}`}>{notice.text}</p>}
-      {started === undefined ? null : (
-        <div className="notice ok">
-          <p>
-            Open <a href={started.verifyUrl} target="_blank" rel="noreferrer">{started.verifyUrl}</a> and enter this code: <strong>{started.userCode}</strong>
-          </p>
-          <p>{loginStateText(loginState ?? { loginId: started.loginId, state: "pending" })}</p>
-        </div>
-      )}
-      <dl className="facts">
-        <dt>Kind</dt>
-        <dd>{a.kind}</dd>
-        <dt>Owner</dt>
-        <dd>{a.ownerEmail}</dd>
-        <dt>Pools</dt>
-        <dd>{a.pools.length === 0 ? "none" : a.pools.join(", ")}</dd>
-        <dt>State</dt>
-        <dd>{a.busy ? "busy (a pass holds it)" : "idle"}</dd>
-        <dt>Health</dt>
-        <dd>
-          {a.health}
-          {a.lastCode === undefined ? "" : ` (${a.lastCode})`}
-          {a.coolUntil === undefined ? "" : `, cooling until ${a.coolUntil}`}
-        </dd>
-        <dt>5-hour left</dt>
-        <dd>
-          <Room value={a.left5h} />
-        </dd>
-        <dt>Week left</dt>
-        <dd>
-          <Room value={a.leftWeek} />
-        </dd>
-        <dt>Last read</dt>
-        <dd>{agoText(a.readAt, now)}</dd>
-        <dt>Floors</dt>
-        <dd>
-          5-hour {a.floor5h}%, week {a.floorWeek}% ({a.floorSource})
-        </dd>
-        <dt>Consent</dt>
-        <dd>{a.consentAt === undefined ? "not given" : `given ${a.consentAt}`}</dd>
-      </dl>
-
-      <h2>Floors</h2>
-      <p className="muted">The percent of each window to keep free. Leave a box empty to use the default.</p>
-      <form className="floors" onSubmit={saveFloors}>
-        <label>
-          5-hour floor (%)
-          <input inputMode="numeric" value={shown5} onChange={(e) => setF5(e.target.value)} placeholder="default" />
-        </label>
-        <label>
-          Week floor (%)
-          <input inputMode="numeric" value={shownW} onChange={(e) => setFw(e.target.value)} placeholder="default" />
-        </label>
-        <div>
-          <button type="submit" disabled={busy}>
-            Save floors
-          </button>
-        </div>
-      </form>
-
-      <h2>Actions</h2>
-      <div className="row">
-        <button type="button" disabled={busy} onClick={toggle}>
-          {a.health === "disabled" ? "Enable" : "Disable"}
-        </button>
-        {a.consentAt === undefined ? (
-          <button type="button" disabled={busy} onClick={() => void run("Consent recorded.", () => api("consent", { params, body: { agree: true } }))}>
-            Give consent
-          </button>
-        ) : null}
-        {canLogInAgain(a) ? (
-          <button type="button" disabled={busy} onClick={() => void login()}>
-            Log in again
-          </button>
-        ) : null}
+        <Typography.Title level={3} style={{ margin: "4px 0 0" }}>
+          {a.account}
+        </Typography.Title>
       </div>
-    </>
+
+      {started === undefined ? null : (
+        <Card title="Log in again">
+          <LoginProgress start={started} />
+        </Card>
+      )}
+
+      <Card title="Facts">
+        <Descriptions column={{ xs: 1, sm: 1, md: 2 }} bordered size="small">
+          <Descriptions.Item label="Kind">{a.kind}</Descriptions.Item>
+          <Descriptions.Item label="Owner">{a.ownerEmail}</Descriptions.Item>
+          <Descriptions.Item label="Login email">{a.loginEmail ?? "none"}</Descriptions.Item>
+          <Descriptions.Item label="Pools">{a.pools.length === 0 ? "none" : a.pools.map((p) => <Tag key={p}>{p}</Tag>)}</Descriptions.Item>
+          <Descriptions.Item label="Health">
+            <Tag color={healthColor(a.health)}>{a.health}</Tag>
+            {a.busy ? <Tag color="processing">busy</Tag> : null}
+          </Descriptions.Item>
+          <Descriptions.Item label="Last failure code">{a.lastCode ?? "none"}</Descriptions.Item>
+          <Descriptions.Item label="Cooling until">{a.coolUntil === undefined ? "not cooling" : new Date(a.coolUntil).toLocaleString()}</Descriptions.Item>
+          <Descriptions.Item label="Last read">{agoText(a.readAt, new Date())}</Descriptions.Item>
+          <Descriptions.Item label="5-hour left">
+            <Room value={a.left5h} />
+          </Descriptions.Item>
+          <Descriptions.Item label="Week left">
+            <Room value={a.leftWeek} />
+          </Descriptions.Item>
+          <Descriptions.Item label="Floors">
+            5-hour {a.floor5h}%, week {a.floorWeek}% ({a.floorSource})
+          </Descriptions.Item>
+          <Descriptions.Item label="Consent">{a.consentAt === undefined ? "not given" : new Date(a.consentAt).toLocaleString()}</Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      <Card title="Room left, last 7 days">
+        {room.isError ? <ErrorNote error={room.error} /> : <RoomChart points={room.data ?? []} floor5h={a.floor5h} floorWeek={a.floorWeek} />}
+      </Card>
+
+      <Card title="Floors" extra={<Typography.Text type="secondary">The percent of each window to keep free. Leave a box empty for the default.</Typography.Text>}>
+        <Form
+          key={`${a.floor5h}/${a.floorWeek}/${a.floorSource}`}
+          layout="vertical"
+          style={{ maxWidth: 360 }}
+          initialValues={{ f5: a.floorSource === "owner" ? String(a.floor5h) : "", fw: a.floorSource === "owner" ? String(a.floorWeek) : "" }}
+          onFinish={(v: { f5?: string; fw?: string }) => {
+            const b = floorBody(v.f5 ?? "", v.fw ?? "");
+            if (!b.ok) return void message.error(b.errors.join(" "));
+            void run("Floors saved.", () => api("setFloor", { params, body: b.body }));
+          }}
+        >
+          <Form.Item name="f5" label="5-hour floor (%)" rules={[floorRule]}>
+            <Input inputMode="numeric" placeholder="default" />
+          </Form.Item>
+          <Form.Item name="fw" label="Week floor (%)" rules={[floorRule]}>
+            <Input inputMode="numeric" placeholder="default" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={busy}>
+            Save floors
+          </Button>
+        </Form>
+      </Card>
+
+      <Card title="Actions">
+        <Space wrap>
+          <Popconfirm
+            title={disabled ? `Enable ${a.account}?` : `Disable ${a.account}?`}
+            description={disabled ? undefined : "No pass will use it until you enable it again."}
+            okText={disabled ? "Enable" : "Disable"}
+            onConfirm={() => run(disabled ? "Account enabled." : "Account disabled.", () => api("setEnabled", { params, body: { enabled: disabled } }))}
+          >
+            <Button danger={!disabled} disabled={busy}>
+              {disabled ? "Enable" : "Disable"}
+            </Button>
+          </Popconfirm>
+          {a.consentAt === undefined ? (
+            <Button disabled={busy} onClick={() => void run("Consent recorded.", () => api("consent", { params, body: { agree: true } }))}>
+              Give consent
+            </Button>
+          ) : null}
+          {canLogInAgain(a) ? (
+            <Button disabled={busy} onClick={() => void startLogin()}>
+              Log in again
+            </Button>
+          ) : null}
+        </Space>
+      </Card>
+
+      <Card title="Recent passes" extra={<Link to={`/passes?account=${encodeURIComponent(a.account)}`}>All passes</Link>}>
+        {passes.isError ? <ErrorNote error={passes.error} /> : <PassesTable rows={passes.data ?? []} loading={passes.isLoading} showAccount={false} />}
+      </Card>
+    </Space>
   );
 }

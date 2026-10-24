@@ -41,3 +41,24 @@ test("hasCost is true only when some row has a cost", () => {
   assert.equal(costText(undefined), "");
   assert.equal(costText(1.5), "$1.50");
 });
+
+import { compactNumber, tokensText, durationText } from "./format.ts";
+
+test("compactNumber: short numbers for chart axes", () => {
+  assert.equal(compactNumber(0), "0");
+  assert.equal(compactNumber(950), "950");
+  assert.equal(compactNumber(1500), "1.5k");
+  assert.equal(compactNumber(2_000_000), "2M");
+  assert.equal(compactNumber(3_400_000_000), "3.4B");
+});
+
+test("tokensText: grouped digits", () => {
+  assert.equal(tokensText(1234567), "1,234,567");
+});
+
+test("durationText: seconds, minutes, hours; unknown when unset", () => {
+  assert.equal(durationText("2026-10-24T10:00:00Z", "2026-10-24T10:00:42Z"), "42 s");
+  assert.equal(durationText("2026-10-24T10:00:00Z", "2026-10-24T10:05:30Z"), "5 min");
+  assert.equal(durationText("2026-10-24T10:00:00Z", "2026-10-24T12:10:00Z"), "2 h 10 min");
+  assert.equal(durationText("2026-10-24T10:00:00Z", undefined), "running");
+});
