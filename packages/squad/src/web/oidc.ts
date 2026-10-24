@@ -25,8 +25,41 @@ export interface Session {
 
 export type FailReason = "no-login-cookie" | "provider-error" | "state-mismatch" | "token-endpoint" | "bad-id-token" | "email-unverified" | "not-in-group";
 
+/** Why discovery or the key fetch failed. A fixed word, so a log line can carry it. */
+export type SetupReason = "network" | "discovery-http" | "issuer-mismatch" | "discovery-incomplete" | "jwks-failed";
+
+/** The message is fixed too: it never holds a URL, a body or the text of the cause. */
+export class OidcError extends Error {
+  readonly reason: SetupReason;
+  readonly status: number | undefined;
+  constructor(reason: SetupReason, status?: number) {
+    super(
+      reason === "issuer-mismatch" ? "oidc discovery issuer does not match SQUAD_OIDC_ISSUER"
+      : reason === "discovery-incomplete" ? "oidc discovery document is incomplete"
+      : reason === "discovery-http" ? "oidc discovery failed"
+      : reason === "jwks-failed" ? "jwks fetch failed"
+      : "oidc provider unreachable",
+    );
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+const MAX_TO = 2048;
+/** A same-origin path to come back to after sign-in, or "/". Stops open redirects (a `to` that leaves the site). */
+export function safeReturnPath(raw: string | null | undefined): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_TO) return "/";
+  if (raw[0] !== "/" || raw[1] === "/" || raw[1] === "\\") return "/";
+  // Printable ASCII only: the browser sends its path percent-encoded, and Node throws on a
+  // Location header with a character above 0xff.
+  if (/[^\x21-\x7e]|\\/.test(raw)) return "/";
+  if (/^\/(%2f|%5c)/i.test(raw)) return "/";
+  if (raw === "/auth" || raw.startsWith("/auth/") || raw.startsWith("/auth?")) return "/";
+  return raw;
+}
+
 export type FinishResult =
-  | { readonly ok: true; readonly session: Session; readonly setCookies: readonly string[] }
+  | { readonly ok: true; readonly session: Session; readonly to: string; readonly setCookies: readonly string[] }
   | { readonly ok: false; readonly reason: FailReason; readonly setCookies: readonly string[] };
 
 export interface OidcDeps {
@@ -82,8 +115,14 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
   const clearLogin = (): string => cookie(LOGIN_COOKIE, "", "/auth", 0);
 
   async function getJson(url: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
-    const res = await doFetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
-    const text = await res.text();
+    let res: Response;
+    let text: string;
+    try {
+      res = await doFetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+      text = await res.text();
+    } catch {
+      throw new OidcError("network"); // the cause text can hold a URL
+    }
     let body: unknown;
     try {
       body = text.length > MAX_JSON ? undefined : JSON.parse(text);
@@ -97,10 +136,11 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
   async function discovery(): Promise<Doc> {
     if (doc !== undefined && now() - doc.at < DOC_TTL_MS) return doc.value;
     const { status, body } = await getJson(`${cfg.issuer.replace(/\/$/, "")}/.well-known/openid-configuration`);
-    if (status !== 200 || !isObj(body)) throw new Error("oidc discovery failed");
-    if (body.issuer !== cfg.issuer) throw new Error("oidc discovery issuer does not match SQUAD_OIDC_ISSUER");
+    if (status !== 200) throw new OidcError("discovery-http", status);
+    if (!isObj(body)) throw new OidcError("discovery-incomplete");
+    if (body.issuer !== cfg.issuer) throw new OidcError("issuer-mismatch");
     const { authorization_endpoint, token_endpoint, jwks_uri } = body;
-    if (!isStr(authorization_endpoint) || !isStr(token_endpoint) || !isStr(jwks_uri)) throw new Error("oidc discovery document is incomplete");
+    if (!isStr(authorization_endpoint) || !isStr(token_endpoint) || !isStr(jwks_uri)) throw new OidcError("discovery-incomplete");
     doc = { value: { authorization_endpoint, token_endpoint, jwks_uri }, at: now() };
     return doc.value;
   }
@@ -109,7 +149,7 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
   async function keys(refetch: boolean): Promise<Jwk[]> {
     if (jwks !== undefined && !refetch) return jwks;
     const { status, body } = await getJson((await discovery()).jwks_uri);
-    if (status !== 200 || !isObj(body) || !Array.isArray(body.keys)) throw new Error("jwks fetch failed");
+    if (status !== 200 || !isObj(body) || !Array.isArray(body.keys)) throw new OidcError("jwks-failed", status);
     jwks = body.keys.filter(isObj);
     return jwks;
   }
@@ -163,7 +203,7 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
 
   return {
     /** Where to send the browser, and the login cookie to set with it. */
-    async startLogin(): Promise<{ location: string; setCookie: string }> {
+    async startLogin(to?: string): Promise<{ location: string; setCookie: string }> {
       const d = await discovery();
       const state = b64u(32);
       const nonce = b64u(32);
@@ -177,7 +217,7 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
       u.searchParams.set("nonce", nonce);
       u.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
       u.searchParams.set("code_challenge_method", "S256");
-      const sealed = seal(loginKey, { state, nonce, verifier, exp: now() + LOGIN_TTL_S * 1000 });
+      const sealed = seal(loginKey, { state, nonce, verifier, to: safeReturnPath(to), exp: now() + LOGIN_TTL_S * 1000 });
       return { location: u.toString(), setCookie: cookie(LOGIN_COOKIE, sealed, "/auth", LOGIN_TTL_S) };
     },
 
@@ -221,7 +261,7 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
         groups,
         exp: Math.floor(now() / 1000) + SESSION_TTL_S,
       };
-      return { ok: true, session, setCookies: [cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S), clearLogin()] };
+      return { ok: true, session, to: safeReturnPath(typeof login.to === "string" ? login.to : undefined), setCookies: [cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S), clearLogin()] };
     },
 
     /** The session in a Cookie header, or undefined when none, forged, or past its expiry. */

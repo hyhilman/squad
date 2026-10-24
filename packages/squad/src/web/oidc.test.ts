@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { randomBytes } from "node:crypto";
 import { after, before, test } from "node:test";
 import { CLIENT_ID, hs256, jwt, makeKey, signWith, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
-import { createOidc, type OidcConfig } from "./oidc.ts";
+import { createOidc, OidcError, safeReturnPath, type OidcConfig } from "./oidc.ts";
 
 let p: FakeOidc;
 let pEc: FakeOidc;
@@ -265,4 +265,44 @@ test("a session cookie from another key, or past its exp, is no session", async 
   t += 13 * 3600_000;
   assert.equal(a.readSession(c), undefined, "past 12 h");
   assert.match(a.clearSessionCookie(), /^squad_session=; .*Max-Age=0/);
+});
+
+test("safeReturnPath keeps a same-origin path and sends everything else to /", () => {
+  const bad = ["//evil.com", "/\\evil.com", "\\evil.com", "https://evil.com", "javascript:alert(1)", "/auth/login", "/auth", "/auth/callback?x=1", "%2F%2Fevil.com", "/%2Fevil.com", "/%5Cevil.com", "/a\\b", "/a\nb", "/a\u0000b", "/a\u007fb", "/日本", "/caf\u00e9", "/a b", "", "accounts", undefined, null, "/" + "a".repeat(2100)];
+  for (const raw of bad) assert.equal(safeReturnPath(raw), "/", JSON.stringify(raw));
+  assert.equal(safeReturnPath("/accounts/pi/dev?x=1"), "/accounts/pi/dev?x=1");
+  assert.equal(safeReturnPath("/"), "/");
+  assert.equal(safeReturnPath("/authors"), "/authors");
+});
+
+test("the return path rides in the sealed login cookie and comes back from finishLogin", async () => {
+  reset(p);
+  const oidc = createOidc(cfgOf(p));
+  const start = await oidc.startLogin("/accounts/pi/dev?x=1");
+  assert.ok(!start.setCookie.includes("accounts"), "sealed, not plain");
+  assert.ok(!start.location.includes("accounts"), "not sent to the provider");
+  const auth = await fetch(start.location, { redirect: "manual" });
+  const back = new URL(auth.headers.get("location")!);
+  const res = await oidc.finishLogin(back.searchParams, cookieOf(start.setCookie));
+  assert.ok(res.ok);
+  assert.equal(res.ok && res.to, "/accounts/pi/dev?x=1");
+  const evil = await oidc.startLogin("//evil.com");
+  const a2 = await fetch(evil.location, { redirect: "manual" });
+  const r2 = await oidc.finishLogin(new URL(a2.headers.get("location")!).searchParams, cookieOf(evil.setCookie));
+  assert.equal(r2.ok && r2.to, "/");
+  const none = await signIn(p);
+  assert.equal(none.res.ok && none.res.to, "/");
+});
+
+test("a discovery or jwks failure carries a fixed reason code", async () => {
+  reset(p);
+  p.discoveryIssuer = "https://evil.example.test";
+  await assert.rejects(createOidc(cfgOf(p)).startLogin(), (e: unknown) => e instanceof OidcError && e.reason === "issuer-mismatch");
+  reset(p);
+  const down = createOidc(cfgOf(p), { fetch: async () => { throw new Error("connect ECONNREFUSED http://secret.internal/x"); } });
+  await assert.rejects(down.startLogin(), (e: unknown) => e instanceof OidcError && e.reason === "network" && !/secret/.test(e.message));
+  const http = createOidc(cfgOf(p), { fetch: async () => new Response("{}", { status: 503 }) });
+  await assert.rejects(http.startLogin(), (e: unknown) => e instanceof OidcError && e.reason === "discovery-http" && e.status === 503);
+  const partial = createOidc(cfgOf(p), { fetch: async () => new Response(JSON.stringify({ issuer: p.issuer }), { status: 200 }) });
+  await assert.rejects(partial.startLogin(), (e: unknown) => e instanceof OidcError && e.reason === "discovery-incomplete");
 });

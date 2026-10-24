@@ -17,7 +17,7 @@ import { flockBusy, lockPathOf } from "../run.ts";
 import { SQUAD_FLOOR_DEFAULT_ENV, envNum } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, usageBy, type UsageBy } from "../usage/report.ts";
-import { createOidc, type FailReason, type Session } from "./oidc.ts";
+import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { loadWebConfig } from "./settings.ts";
 
 export interface Ctx<N extends RouteName> {
@@ -360,17 +360,18 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     }
     if (pathname === "/auth/login") {
       try {
-        const s = await oidc.startLogin();
+        const s = await oidc.startLogin(safeReturnPath(url.searchParams.get("to")));
         res.writeHead(302, { location: s.location, "set-cookie": s.setCookie });
         return void res.end();
-      } catch {
-        log.error("signin_unavailable", {});
+      } catch (e) {
+        // Only the fixed reason and an HTTP status are logged: the error text can hold a URL.
+        log.error("signin_unavailable", e instanceof OidcError ? { reason: e.reason, status: e.status } : { reason: "unknown" });
         return sendText(res, 502, "sign-in unavailable\n");
       }
     }
     const done = await oidc.finishLogin(url.searchParams, req.headers.cookie);
     if (done.ok) {
-      res.writeHead(302, { location: "/", "set-cookie": [...done.setCookies] });
+      res.writeHead(302, { location: done.to, "set-cookie": [...done.setCookies] });
       return void res.end();
     }
     log.warn("signin_refused", { reason: done.reason });

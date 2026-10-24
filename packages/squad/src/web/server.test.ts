@@ -432,3 +432,40 @@ test("the access log has method, route, status and ms, and never a cookie or a q
 test("SQUAD_NO_WEB_LOGIN=1 stops the start", async () => {
   await assert.rejects(rig({}, { SQUAD_NO_WEB_LOGIN: "1" }), /SQUAD_NO_WEB_LOGIN/);
 });
+
+test("sign-in returns to the page the person came from; a bad target goes to /", async () => {
+  const r = await rig();
+  p.mutate = (c) => { c.email = "a@example.test"; c.groups = ["squad"]; };
+  for (const [to, want] of [["/accounts/pi/dev?x=1", "/accounts/pi/dev?x=1"], ["//evil.com", "/"], ["/auth/login", "/"], [undefined, "/"]] as const) {
+    const q = to === undefined ? "" : `?to=${encodeURIComponent(to)}`;
+    const login = await fetch(`${r.base}/auth/login${q}`, { redirect: "manual" });
+    const lc = login.headers.getSetCookie()[0]!.split(";")[0]!;
+    const auth = await fetch(login.headers.get("location")!, { redirect: "manual" });
+    const back = new URL(auth.headers.get("location")!);
+    const cb = await fetch(`${r.base}${back.pathname}${back.search}`, { redirect: "manual", headers: { cookie: lc } });
+    assert.equal(cb.headers.get("location"), want);
+  }
+  assert.ok(!r.logs.some((l) => /evil|accounts\/pi/.test(l)), "the target is never logged");
+  await r.close();
+});
+
+test("signin_unavailable logs a fixed reason, never a URL or the error text", async () => {
+  const cases: [typeof fetch, RegExp][] = [
+    [async () => new Response("secret body", { status: 503 }), /reason=discovery-http/],
+    [async () => { throw new Error("connect ECONNREFUSED http://secret.internal"); }, /reason=network/],
+  ];
+  for (const [f, want] of cases) {
+    const r = await rig({ fetch: f });
+    const res = await fetch(`${r.base}/auth/login`, { redirect: "manual" });
+    assert.equal(res.status, 502);
+    assert.equal(await res.text(), "sign-in unavailable\n");
+    const line = r.logs.find((l) => /event=signin_unavailable/.test(l))!;
+    assert.match(line, want);
+    assert.ok(!/secret|http:/.test(line), line);
+    await r.close();
+  }
+  const r = await rig({ fetch: async () => new Response("x", { status: 503 }) });
+  await fetch(`${r.base}/auth/login`, { redirect: "manual" });
+  assert.match(r.logs.find((l) => /signin_unavailable/.test(l))!, /status=503/);
+  await r.close();
+});

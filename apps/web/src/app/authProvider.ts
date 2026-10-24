@@ -3,10 +3,11 @@
 import type { AuthProvider } from "@refinedev/core";
 import { ApiFailure } from "@squad/contract";
 import { api } from "./api.ts";
+import { signInUrl } from "./lib/signin.ts";
 
 export const authProvider: AuthProvider = {
   login: async () => {
-    window.location.assign("/auth/login");
+    window.location.assign(signInUrl(window.location.pathname, window.location.search));
     return { success: true };
   },
   logout: async () => {
@@ -20,7 +21,7 @@ export const authProvider: AuthProvider = {
       await api("me", {});
       return { authenticated: true };
     } catch (e) {
-      if (e instanceof ApiFailure && e.status === 401) return { authenticated: false, redirectTo: "/auth/login" };
+      if (e instanceof ApiFailure && e.status === 401) return { authenticated: false }; // no redirectTo: that would be a router move to /auth/login, a blank page
       throw e;
     }
   },

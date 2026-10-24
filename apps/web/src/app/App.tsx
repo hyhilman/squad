@@ -1,14 +1,23 @@
 // The web app: Refine core (headless; no UI kit) under React Router. Pages are plain React.
+import { useEffect } from "react";
 import { Authenticated, Refine } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import "./app.css";
 import { authProvider } from "./authProvider.ts";
 import { dataProvider } from "./dataProvider.ts";
+import { signInUrl } from "./lib/signin.ts";
 import { Layout } from "./Layout.tsx";
 import { Account } from "./pages/Account.tsx";
 import { Accounts } from "./pages/Accounts.tsx";
 import { Usage } from "./pages/Usage.tsx";
+
+function SignIn() {
+  useEffect(() => {
+    window.location.assign(signInUrl(window.location.pathname, window.location.search));
+  }, []);
+  return null;
+}
 
 export default function App() {
   return (
@@ -25,10 +34,10 @@ export default function App() {
         options={{ disableTelemetry: true }}
       >
         <Routes>
-          {/* Not signed in: the authProvider's check sends the browser to /auth/login. */}
+          {/* Not signed in: SignIn does a full page load to /auth/login, never a router move. */}
           <Route
             element={
-              <Authenticated key="app" redirectOnFail="/auth/login">
+              <Authenticated key="app" fallback={<SignIn />}>
                 <Layout />
               </Authenticated>
             }
