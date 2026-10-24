@@ -10,7 +10,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoginStart, LoginState, LoginStatus } from "@squad/contract";
@@ -33,6 +33,8 @@ const AUTH_PATH = "/cai/oauth/authorize";
 export const LINK_WAIT_MS = 30_000;
 /** After the code is typed, the token must come within this time. */
 export const TOKEN_WAIT_MS = 60_000;
+/** The CLI's input box takes a pasted chunk as text; Enter must come as its own key press after it. */
+export const ENTER_DELAY_MS = 250;
 /** What is kept of the output before the link, and of the output after the code. */
 const MAX_BEFORE = 64 * 1024;
 const MAX_AFTER = 16 * 1024;
@@ -296,7 +298,8 @@ export class SetupTokenLogins {
     if (e.state !== "pending" || e.finishing !== undefined) throw new LoginRefused(409, "conflict", "the login is not waiting for a code");
     if (e.sent) throw new LoginRefused(409, "conflict", "a code was already sent");
     e.sent = true;
-    e.proc.write(`${code}\r`);
+    e.proc.write(code);
+    this.t.after(() => { if (e.state === "pending") e.proc.write("\r"); }, ENTER_DELAY_MS);
     e.step = this.t.after(() => void this.noToken(e), TOKEN_WAIT_MS);
     this.d.log.info("web_login_code_sent", { account: e.accountId, login: e.id });
     return { loginId, state: "pending" };
@@ -342,8 +345,24 @@ export class SetupTokenLogins {
     return this.halt(e, false);
   }
 
+  /**
+   * Keeps what the CLI printed after the code, so a change in its output can be seen. Every run of 20
+   * or more token characters is replaced, so no token, code or key can be in the file.
+   */
+  private trace(e: Entry): void {
+    try {
+      const dir = join(this.d.home.state, "debug");
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const text = strip(e.tail, " ").replace(/sk-ant[A-Za-z0-9_-]*/g, "[token?]").replace(/[A-Za-z0-9_-]{20,}/g, "[long]").replace(/[ \t]+/g, " ");
+      writeFileSync(join(dir, `setup-token-${e.id}.txt`), text, { mode: 0o600 });
+    } catch {
+      // A trace is a help, never a reason for the login to fail differently.
+    }
+  }
+
   private noToken(e: Entry): Promise<void> {
     if (e.state !== "pending" || e.finishing !== undefined) return Promise.resolve();
+    this.trace(e);
     e.finishing = this.fail(e);
     return e.finishing;
   }
@@ -368,6 +387,7 @@ export class SetupTokenLogins {
     }
     this.clr(e.life);
     this.clr(e.step);
+    if (e.sent) this.trace(e);
     this.end(e, "failed", "login-failed");
     this.clean(e);
   }

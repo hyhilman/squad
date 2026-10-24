@@ -1254,7 +1254,8 @@ test("adding claude with no token starts a server-side setup-token login; the co
   assert.deepEqual(f.procs[0]!.writes, []);
   const sent = await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" });
   assert.deepEqual([sent.status, sent.body], [200, { loginId: id, state: "pending" }]);
-  assert.deepEqual(f.procs[0]!.writes, ["PAGE-CODE\r"]);
+  await new Promise((ok) => setTimeout(ok, 400)); // Enter comes as its own key press, 250 ms after the code
+  assert.deepEqual(f.procs[0]!.writes, ["PAGE-CODE", "\r"]);
   assert.equal((await api(r, alice, "POST", `/api/logins/${id}/code`, { code: "PAGE-CODE" })).status, 409);
   f.procs[0]!.say(`\r\n${SETUP_TOKEN}\r\n`);
   for (let i = 0; i < 5; i++) await new Promise((res) => setImmediate(res));

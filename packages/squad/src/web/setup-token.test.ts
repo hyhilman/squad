@@ -9,7 +9,7 @@ import { ensureHome, layoutOf } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore } from "../store/db.ts";
 import { LoginRefused } from "./device-login.ts";
-import { SetupTokenLogins, codeShapeError, findToken, parseSetupOutput, ptyCommand, type PtyProc } from "./setup-token.ts";
+import { ENTER_DELAY_MS, SetupTokenLogins, codeShapeError, findToken, parseSetupOutput, ptyCommand, type PtyProc } from "./setup-token.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const ESC = "\u001b";
@@ -227,9 +227,11 @@ test("the code: only the owner (others get 404), a wrong shape is 400, a good on
   for (const bad of ["", "a b", "x".repeat(513), "a\nb"]) await refused(() => r.logins.submitCode("alice@example.test", s.loginId, bad), 400, "bad-request");
   assert.deepEqual(s.proc.writes, [], "nothing reached the terminal yet");
   assert.deepEqual(r.logins.submitCode("ALICE@example.test", s.loginId, "CODE-FROM-PAGE"), { loginId: s.loginId, state: "pending" });
-  assert.deepEqual(s.proc.writes, ["CODE-FROM-PAGE\r"]);
+  assert.deepEqual(s.proc.writes, ["CODE-FROM-PAGE"], "the code first, like a paste");
+  r.fire(ENTER_DELAY_MS);
+  assert.deepEqual(s.proc.writes, ["CODE-FROM-PAGE", "\r"], "then Enter on its own, as a key press");
   await refused(() => r.logins.submitCode("alice@example.test", s.loginId, "CODE-FROM-PAGE"), 409, "conflict");
-  assert.equal(s.proc.writes.length, 1);
+  assert.equal(s.proc.writes.length, 2);
   await r.logins.close();
   clean(r, { ...s, proc: undefined });
   r.store.close();
@@ -321,11 +323,17 @@ test("no token within 60 s of the code fails with login-failed and stops the con
   const r = rig();
   const s = await begin(r);
   r.logins.submitCode("alice@example.test", s.loginId, "CODE-FROM-PAGE");
+  s.proc.say("\u001b[2K\u001b[1GPress\u001b[1Center\u001b[1Cto\u001b[1Ccontinue sk-ant-oat01-short LONGRUNABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 almost\r\n");
   r.fire(60_000);
   await r.settle();
   assert.deepEqual(r.logins.status("alice@example.test", s.loginId), { loginId: s.loginId, state: "failed", reason: "login-failed" });
   assert.deepEqual(r.stops, [s.proc.name]);
   assert.ok(!existsSync(s.proc.staging));
+  // A masked trace of what the CLI printed after the code, so a change in its output can be seen.
+  const trace = readFileSync(join(r.home.state, "debug", `setup-token-${s.loginId}.txt`), "utf8");
+  assert.equal(statSync(join(r.home.state, "debug", `setup-token-${s.loginId}.txt`)).mode & 0o777, 0o600);
+  assert.ok(trace.includes("Press enter to continue"), trace);
+  assert.ok(!/[A-Za-z0-9_-]{20,}/.test(trace) && !trace.includes("sk-ant"), "no token-like run in the trace");
   await r.logins.close();
   r.store.close();
 });
