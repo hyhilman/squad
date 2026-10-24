@@ -269,6 +269,35 @@ test("probe: the usage export holds no /tmp path", async () => {
   assert.doesNotMatch(readFileSync(join(dir, files[0]!), "utf8"), /\/tmp\//);
 });
 
+test("probe: a suspect or cooling account is tested; a dead or unshared one is refused", async () => {
+  const r = probeRig("ok");
+  seed(r, (s) => putHealth(s.db, { ...emptyHealth("pi/x"), suspectSince: "2026-10-24T09:00:00.000Z", authFails: 1 }));
+  assert.equal(await r.run("probe", "pi/x", "--model", "m"), 0);
+  seed(r, (s) => putHealth(s.db, { ...emptyHealth("pi/x"), coolUntil: "2999-01-01T00:00:00.000Z", coolKind: "rate-limit" }));
+  assert.equal(await r.run("probe", "pi/x", "--model", "m"), 0);
+  assert.equal(r.fake.callsOf("run").length, 2);
+  seed(r, (s) => setState(s.db, "pi/x", "dead", "401:AuthError"));
+  assert.equal(await r.run("probe", "pi/x", "--model", "m"), 1);
+  assert.match(r.out.join(""), /pi\/x fail no-account/);
+  assert.equal(r.fake.callsOf("run").length, 2, "no container on a dead account");
+});
+
+test("probeAccount: a deadline stops the pass and answers the failure kind timeout", async () => {
+  const { probeAccount } = await import("./squad.ts");
+  const r = probeRig("hang");
+  const home = layoutOf(join(r.root, "home"), r.io.env);
+  const store = openStore({ dbPath: home.db, spoolDir: home.spool });
+  try {
+    const t0 = Date.now();
+    const res = await probeAccount(store, r.io, "pi/x", "m", { idleMs: 5_000, deadlineMs: 300 });
+    assert.equal(res.failure?.kind, "timeout");
+    assert.ok(Date.now() - t0 < 4_000, "it came back at the deadline");
+    assert.ok(r.fake.callsOf("stop").length >= 1, "stop before kill");
+  } finally {
+    store.close();
+  }
+});
+
 test("probe: no model for pi, a missing account, or a bad id exits 2", async () => {
   const r = probeRig("ok");
   assert.equal(await r.run("probe", "pi/x"), 2);

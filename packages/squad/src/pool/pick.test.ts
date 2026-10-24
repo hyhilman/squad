@@ -73,3 +73,21 @@ test("a removed account and one its owner does not share are left out with a rea
   assert.deepEqual(r.order, ["codex/c"]);
   assert.deepEqual(r.skipped, { "codex/a": "removed", "codex/b": "no-consent" });
 });
+
+test("a probe may pick a suspect or cooling account; dead, disabled, moved, removed, unshared and busy still refuse", () => {
+  const list = [
+    base("codex/a", { health: "suspect" }),
+    base("codex/b", { health: "cooling", coolUntil: new Date(NOW + 60_000).toISOString() }),
+    base("codex/c", { health: "cooling" }),
+    base("codex/d", { health: "dead" }),
+    base("codex/e", { health: "disabled" }),
+    base("codex/f", { health: "moved" }),
+    base("codex/g", { health: "removed" }),
+    base("codex/h", { sharing: false }),
+    base("codex/i", { busy: true }),
+  ];
+  const r = pick(list, NOW, undefined, { probe: true });
+  assert.deepEqual(r.order, ["codex/a", "codex/b", "codex/c"]);
+  assert.deepEqual(r.skipped, { "codex/d": "dead", "codex/e": "disabled", "codex/f": "moved", "codex/g": "removed", "codex/h": "no-consent", "codex/i": "busy" });
+  assert.deepEqual(pick(list, NOW).order, [], "not a probe: today's rule");
+});

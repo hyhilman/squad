@@ -46,6 +46,8 @@ export interface PassRequest extends TurnOptions {
   readonly session?: string;
   /** Set by `send` only. A busy account then answers `busy`, not `no-account`, so the caller can wait and ask again. */
   readonly conversation?: boolean;
+  /** Internal, set by probeAccount only: a named probe may run on a suspect or cooling account (pool/pick.ts). */
+  readonly probe?: boolean;
   /** Internal: false when a conversation's skill is already in its history (see runners/table.ts). */
   readonly openSkill?: boolean;
   readonly idleMs?: number;
@@ -279,7 +281,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
   if (pinned !== undefined && named !== undefined && named !== pinned.account) {
     return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: `session ${req.session} is pinned to ${pinned.account}; it cannot run on ${named}` });
   }
-  const picked = pick(pinned === undefined ? list : list.filter((c) => c.account === pinned.account), nowFn().getTime());
+  const picked = pick(pinned === undefined ? list : list.filter((c) => c.account === pinned.account), nowFn().getTime(), undefined, { probe: req.probe === true && named !== undefined });
   // The owner stopped sharing: a fixed code, so a caller can tell it from a full pool.
   const unshared = named ?? pinned?.account;
   if (picked.order.length === 0 && unshared !== undefined && picked.skipped[unshared] === "no-consent") {

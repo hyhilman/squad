@@ -36,7 +36,7 @@ import { allowedProviders, loadWebConfig } from "./settings.ts";
 import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
 import { LimitResets } from "./limit-reset.ts";
 import { startTicker, type Timers } from "./ticker.ts";
-import type { ProbeOutcome } from "../cli/squad.ts";
+import type { ProbeLimits, ProbeOutcome } from "../cli/squad.ts";
 
 type NoSession = (typeof NO_SESSION_ROUTES)[number];
 export interface Ctx<N extends RouteName> {
@@ -70,7 +70,7 @@ export interface WebOpts {
    * Runs one probe pass on an account (the same code as `squad probe`). The background loop starts only
    * when this is given, so a caller that does not want real passes never gets them.
    */
-  readonly probe?: (account: AccountRow, model: string) => Promise<ProbeOutcome | void>;
+  readonly probe?: (account: AccountRow, model: string, limits?: ProbeLimits) => Promise<ProbeOutcome | void>;
   /** Replaces the loop's timers. For tests only. */
   readonly ticker?: { readonly timers?: Timers };
   /** Replaces the docker calls of a web login, and its timers. For tests only. */
@@ -249,6 +249,12 @@ const INPUTS: Inputs = {
 const PROBE_MODEL: Readonly<Record<string, EnvSpec>> = { codex: SQUAD_PROBE_MODEL_CODEX_ENV, claude: SQUAD_PROBE_MODEL_CLAUDE_ENV, pi: SQUAD_PROBE_MODEL_PI_ENV };
 /** One test pass per account in this time. */
 export const TEST_EVERY_MS = 60_000;
+/**
+ * The Test pass answers an open HTTP request. Behind the Cloudflare tunnel the browser gets a 524
+ * after about 100 s, so the deadline, plus the stop's grace time (20 s by default) and the kill's
+ * 2 s, stays under that. A deadline answers the failure kind `timeout`.
+ */
+export const TEST_LIMITS = { idleMs: 45_000, deadlineMs: 60_000 } as const;
 
 function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, connects: ConnectPairs, resets: LimitResets, adminGroup: string | undefined): Handlers {
   const db = o.store.db;
@@ -506,7 +512,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       if (last !== undefined && t - last < TEST_EVERY_MS) throw new HttpError(429, "too-many", "one test per account per minute");
       // Counted when it starts, so a second click while the first runs is refused too.
       tested.set(a.id, t);
-      const res = await o.probe(a, model);
+      const res = await o.probe(a, model, TEST_LIMITS);
       if (res === undefined) throw new HttpError(501, "disabled", "this server runs no test pass");
       const h = getHealth(db, a.id);
       return {

@@ -102,8 +102,9 @@ These rules guard real logins. Breaking one can revoke a person's whole token fa
   `docker run --init`). Exit 75 means busy. Never take an account lock in the host process that
   starts the container: it frees when that process dies, while the container keeps running.
   The one exception is a step with no container on the account: `squad login` moving the new login
-  into place, and `squad import` moving a login out (`src/lock.ts`). There the host holds the lock
-  only for the move itself, and a running pass makes it fail at once.
+  into place, `squad import` moving a login out, and `squad remove` (and the web Remove) deleting
+  the folder (`src/lock.ts`). There the host holds the lock only for that step itself, and a
+  running pass makes it fail at once.
 - Stop before kill: `docker stop` with the grace time, so a token refresh in flight can finish.
 - A failure kind comes from structured output or an exact provider error code. Never guess it from
   free text with a regex or a keyword list.

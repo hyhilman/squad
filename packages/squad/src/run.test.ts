@@ -938,6 +938,21 @@ test("an account its owner does not share: a named pass, a pinned session and a 
   assert.equal(pooled.account, "pi/k2");
 });
 
+test("a named probe runs on a suspect or cooling account; a named pass that is not a probe, or a pool probe, does not", async () => {
+  const r = rig(["k1", "k2"]);
+  putHealth(r.store.db, { ...emptyHealth("pi/k1"), suspectSince: NOW.toISOString(), authFails: 1 });
+  putHealth(r.store.db, { ...emptyHealth("pi/k2"), coolUntil: new Date(NOW.getTime() + 600_000).toISOString(), coolKind: "rate-limit" });
+  for (const id of ["pi/k1", "pi/k2"]) {
+    assert.equal((await runPass(req(r, { pool: undefined, account: id }), r.deps)).failure?.kind, "no-account", id);
+    const probed = await runPass(req(r, { pool: undefined, account: id, probe: true }), r.deps);
+    assert.deepEqual([probed.account, probed.failure], [id, undefined], id);
+  }
+  // A probe names its account; on a pool the flag changes nothing.
+  r.store.db.prepare("UPDATE health SET suspect_since = ? WHERE account = 'pi/k1'").run(NOW.toISOString());
+  putHealth(r.store.db, { ...emptyHealth("pi/k2"), coolUntil: new Date(NOW.getTime() + 600_000).toISOString() });
+  assert.equal((await runPass(req(r, { probe: true }), r.deps)).failure?.kind, "no-account");
+});
+
 test("a removed account is unknown to a named pass and never picked by the pool", async () => {
   const { markRemoved } = await import("./accounts/store.ts");
   const r = rig(["k1", "k2"]);

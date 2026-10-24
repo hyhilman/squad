@@ -351,6 +351,11 @@ function passDeps(store: Store, io: Io): RunDeps {
 const PROBE_PROMPT = "Reply with the single word: ok";
 
 /** What one probe pass found. `reason` is the failure text with secret-looking lines dropped, cut at 200. */
+export interface ProbeLimits {
+  readonly idleMs: number;
+  readonly deadlineMs: number;
+}
+
 export interface ProbeOutcome {
   readonly account: string;
   readonly model: string;
@@ -361,13 +366,14 @@ export interface ProbeOutcome {
 }
 
 /** One tiny pass on one account: the probe of `squad probe`, the auto probe and the web app's Test. */
-export async function probeAccount(store: Store, io: Io, account: string, model: string): Promise<ProbeOutcome> {
+/** `limits`: a shorter idle time and deadline than a normal pass, for a caller that must answer in time. */
+export async function probeAccount(store: Store, io: Io, account: string, model: string, limits?: ProbeLimits): Promise<ProbeOutcome> {
   const runner = account.split("/")[0]!;
   const cwd = mkdtempSync(join(tmpdir(), "squad-probe-"));
   const t0 = performance.now();
   try {
     if (spawnSync("git", ["init", "-q"], { cwd, stdio: "ignore" }).status !== 0) throw new Error("cannot make the probe folder a git repo");
-    const res = await runPass({ runner: runner as SupportedRunner, model, prompt: PROBE_PROMPT, account, cwd, caller: { flow: "cli", action: "probe" } }, passDeps(store, io));
+    const res = await runPass({ runner: runner as SupportedRunner, model, prompt: PROBE_PROMPT, account, cwd, caller: { flow: "cli", action: "probe" }, probe: true, ...limits }, passDeps(store, io));
     const ms = Math.round(performance.now() - t0);
     const base = { account: res.account ?? account, input: res.usage.input, output: res.usage.output, ms };
     if (res.failure === undefined) return { ...base, model: res.model ?? model };
@@ -592,7 +598,7 @@ async function web(store: Store, io: Io, args: readonly string[]): Promise<numbe
   if (args.some((a) => a !== "--api-only")) throw new UsageError("web takes only --api-only");
   const handle = await startWeb({
     // The loop's probes run the verb above, so there is one way to start a probe pass.
-    probe: (a, model) => probeAccount(store, { ...io, stdout: () => {}, stderr: () => {} }, a.id, model),
+    probe: (a, model, limits) => probeAccount(store, { ...io, stdout: () => {}, stderr: () => {} }, a.id, model, limits),
     env: io.env, home: layoutOf(homeRoot(io.cwd, io.env), io.env), store, apiOnly: args.length > 0,
     ...(io.fetch === undefined ? {} : { fetch: io.fetch }), ...(io.now === undefined ? {} : { now: io.now }),
   });

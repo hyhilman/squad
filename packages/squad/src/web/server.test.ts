@@ -1464,8 +1464,9 @@ test("the token route refuses a bad body with a fixed message, and holds an addr
 
 // ---- account care: consent gate, test, remove, reset health, log in again, limit reset ----
 
-const okProbe = (calls: string[]) => async (a: { id: string }, model: string) => {
+const okProbe = (calls: string[], limits: unknown[] = []) => async (a: { id: string }, model: string, l?: unknown) => {
   calls.push(`${a.id} ${model}`);
+  limits.push(l);
   return { account: a.id, model, input: 10, output: 2, ms: 1234 };
 };
 
@@ -1581,6 +1582,25 @@ test("testAccount: owner or admin; a served model or the probe default, else 400
   await r.close();
   await r2.close();
   await r3.close();
+});
+
+test("testAccount gives the pass a short deadline, so the answer comes back before the tunnel gives up (about 100 s)", async () => {
+  const limits: unknown[] = [];
+  const r = await rig({ probe: okProbe([], limits) }, { SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(r);
+  const alice = await signIn(r, "alice@example.test");
+  assert.equal((await api(r, alice, "POST", "/api/accounts/pi/alice-key/test", {})).status, 200);
+  const l = limits[0] as { idleMs: number; deadlineMs: number };
+  assert.ok(l.idleMs <= l.deadlineMs, "idle within the deadline");
+  // The deadline plus the stop's grace time (SQUAD_STOP_GRACE_S, 20 s by default) and the kill's 2 s.
+  assert.ok(l.deadlineMs + 20_000 + 2_000 < 100_000, `deadline ${l.deadlineMs} ms`);
+  const timedOut = await rig({ probe: async (a, model) => ({ account: a.id, model, input: 0, output: 0, ms: 60_000, failure: { kind: "timeout", code: "", reason: "the deadline passed" } }) }, { SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(timedOut);
+  const c = await signIn(timedOut, "alice@example.test");
+  const t = await api<Record<string, unknown>>(timedOut, c, "POST", "/api/accounts/pi/alice-key/test", {});
+  assert.deepEqual([t.status, t.body.ok, t.body.failureKind], [200, false, "timeout"]);
+  await r.close();
+  await timedOut.close();
 });
 
 test("testAccount answers a failure with its kind and code and the room after it; never a reason text", async () => {

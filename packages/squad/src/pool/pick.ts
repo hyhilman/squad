@@ -47,7 +47,16 @@ function room(c: Candidate, fresh: boolean): number {
   return Math.min(c.left5h - c.floor5h, c.leftWeek - c.floorWeek);
 }
 
-export function pick(candidates: readonly Candidate[], now: number = Date.now(), maxReadAgeMs: number = MAX_READ_AGE_MS): PickResult {
+export interface PickOptions {
+  /**
+   * A probe of one named account. It may run on a suspect or cooling account: the probe is how such
+   * an account gets its test. Every other refusal stays.
+   */
+  readonly probe?: boolean;
+}
+
+export function pick(candidates: readonly Candidate[], now: number = Date.now(), maxReadAgeMs: number = MAX_READ_AGE_MS, opts: PickOptions = {}): PickResult {
+  const probe = opts.probe === true;
   const skipped: Record<string, Skip> = {};
   const left: { c: Candidate; room: number }[] = [];
   for (const c of candidates) {
@@ -60,7 +69,7 @@ export function pick(candidates: readonly Candidate[], now: number = Date.now(),
       continue;
     }
     // A suspect account waits for a probe; a real pass must not be its test.
-    if (c.health === "suspect") {
+    if (c.health === "suspect" && !probe) {
       skipped[c.account] = "suspect";
       continue;
     }
@@ -68,7 +77,7 @@ export function pick(candidates: readonly Candidate[], now: number = Date.now(),
     // end time stays cooling until something clears it.
     const until = time(c.coolUntil);
     const coolEnded = Number.isFinite(until) && until <= now;
-    if ((Number.isFinite(until) && until > now) || (c.health === "cooling" && !coolEnded)) {
+    if (!probe && ((Number.isFinite(until) && until > now) || (c.health === "cooling" && !coolEnded))) {
       skipped[c.account] = "cooling";
       continue;
     }
