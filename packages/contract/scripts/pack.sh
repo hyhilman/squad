@@ -10,7 +10,7 @@ cd "$here"
 # A stale file from an older build must not ship.
 rm -rf dist
 "$repo/node_modules/.bin/tsc" -p tsconfig.publish.json
-# The version is squad's, so one release number names every tarball. No licence file exists in the repo, so the package says UNLICENSED.
+# The version is squad's, so one release number names every tarball. The licence is the repo's (MIT).
 node -e '
 const fs = require("node:fs");
 const v = JSON.parse(fs.readFileSync("../squad/package.json", "utf8")).version;
@@ -19,12 +19,13 @@ const pkg = {
   version: v,
   type: "module",
   description: "Typed client and shapes for the squad HTTP API",
-  license: "UNLICENSED",
+  license: "MIT",
   exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
-  files: ["*.js", "*.d.ts", "README.md"],
+  files: ["*.js", "*.d.ts", "README.md", "LICENSE"],
 };
 fs.writeFileSync("dist/package.json", JSON.stringify(pkg, null, 2) + "\n");
 '
+cp "$repo/LICENSE" dist/LICENSE
 cat > dist/README.md <<'EOT'
 # @squad/contract
 

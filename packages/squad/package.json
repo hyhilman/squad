@@ -2,6 +2,7 @@
   "name": "squad",
   "private": true,
   "version": "0.1.0-rc.3",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "squad": "dist/cli/squad.js"
