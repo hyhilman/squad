@@ -37,6 +37,11 @@ export const useAccount = (runner: Runner, name: string) =>
 export const useRoomSeries = (runner: Runner, name: string, since: string) =>
   useQuery({ queryKey: ["room", runner, name, since], queryFn: () => api("roomSeries", { params: { runner, name }, query: { since } }) });
 
+/** Today's passes (UTC), newest first, one page: enough to count today's failures. */
+export const TODAY_PAGE = 200;
+export const useTodayPasses = (day: string) =>
+  useQuery({ queryKey: ["passes", "today", day], queryFn: () => api("listPasses", { query: { since: `${day}T00:00:00Z`, limit: TODAY_PAGE } }) });
+
 export const usePasses = (account: string | undefined, before: string | undefined, limit: number) =>
   useQuery({
     queryKey: ["passes", account ?? "", before ?? "", limit],

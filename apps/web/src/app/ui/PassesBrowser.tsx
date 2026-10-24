@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, History } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { diffText, diffTone, moneyText, TONE_COLOR, tokensText, totalTokens } from "../lib/format.ts";
-import { filterPasses, type OutcomeGroup } from "../lib/passFilter.ts";
+import { filterPasses, outcomeFromParam, type OutcomeGroup } from "../lib/passFilter.ts";
 import { useAccounts, usePasses } from "../queries.ts";
 import { PassDrawer } from "./PassDrawer.tsx";
 import { EmptyBlock, ErrorBlock, OutcomeBadge, Panel } from "./parts.tsx";
@@ -98,7 +98,8 @@ export function PassesBrowser({ account: fixedAccount }: { account?: string }) {
   const accounts = useAccounts();
   const [account, setAccount] = useState("");
   const [runner, setRunner] = useState("");
-  const [outcome, setOutcome] = useState("");
+  // A link such as the overview's "3 failed" opens this page with ?outcome=failed.
+  const [outcome, setOutcome] = useState<string>(() => outcomeFromParam(params.get("outcome")));
   // The cursors of the pages before this one; the last is this page's `before`.
   const [cursors, setCursors] = useState<string[]>([]);
   const before = cursors.at(-1);

@@ -1,10 +1,11 @@
-import { Box, Flex, HStack, Link, SimpleGrid, Skeleton, Stack, Text } from "@chakra-ui/react";
-import { Activity, CheckCircle2, Coins, DollarSign, Users } from "lucide-react";
+import { Box, Button, Flex, HStack, Link, SimpleGrid, Skeleton, Stack, Text } from "@chakra-ui/react";
+import { Activity, CheckCircle2, Coins, DollarSign, TriangleAlert, Users } from "lucide-react";
 import { Link as RouterLink } from "react-router";
 import { countHealth, needsAttention } from "../lib/attention.ts";
 import { compactNumber, moneyText, tokensText } from "../lib/format.ts";
 import { seriesTotals, utcDay } from "../lib/totals.ts";
-import { useAccounts, useUsageSeries } from "../queries.ts";
+import { failedText } from "../lib/passFilter.ts";
+import { TODAY_PAGE, useAccounts, useTodayPasses, useUsageSeries } from "../queries.ts";
 import { TokensChart } from "../ui/charts.tsx";
 import { EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, StatCard, logoOfRunner } from "../ui/parts.tsx";
 
@@ -12,6 +13,8 @@ export function Overview() {
   const accounts = useAccounts();
   const series = useUsageSeries("day", "7d");
   const today = utcDay(new Date());
+  const todayPasses = useTodayPasses(today);
+  const failed = failedText(todayPasses.data ?? [], TODAY_PAGE);
   const t = seriesTotals(series.data ?? [], today);
   const week = seriesTotals(series.data ?? []);
   const h = countHealth(accounts.data ?? []);
@@ -24,6 +27,7 @@ export function Overview() {
         <StatCard
           label="Healthy accounts"
           icon={Users}
+          to={h.attention === 0 ? "/accounts" : "/accounts?health=attention"}
           loading={accounts.isPending}
           value={
             <>
@@ -36,11 +40,29 @@ export function Overview() {
           }
           hint={h.attention === 0 ? "Nothing needs attention" : `${h.attention} need${h.attention === 1 ? "s" : ""} attention`}
         />
-        <StatCard label="Passes today" icon={Activity} loading={series.isPending} value={tokensText(t.passes)} hint={`${tokensText(week.passes)} in the last 7 days`} />
-        <StatCard label="Tokens today" icon={Coins} loading={series.isPending} value={compactNumber(t.tokens)} hint={`${tokensText(t.tokens)} tokens`} />
+        <StatCard
+          label="Passes today"
+          icon={Activity}
+          to="/passes"
+          loading={series.isPending}
+          value={tokensText(t.passes)}
+          hint={`${tokensText(week.passes)} in the last 7 days`}
+          action={
+            failed === "" ? undefined : (
+              <Button asChild size="xs" colorPalette="red" variant="solid">
+                <RouterLink to="/passes?outcome=failed">
+                  <TriangleAlert size={12} aria-hidden />
+                  {failed}
+                </RouterLink>
+              </Button>
+            )
+          }
+        />
+        <StatCard label="Tokens today" icon={Coins} to="/usage" loading={series.isPending} value={compactNumber(t.tokens)} hint={`${tokensText(t.tokens)} tokens`} />
         <StatCard
           label="Cost today"
           icon={DollarSign}
+          to="/usage"
           loading={series.isPending}
           value={moneyText(t.catalogCostUsd) || "$0.00"}
           hint={t.cliCostUsd === undefined ? "At catalog prices" : `At catalog prices; CLI said ${moneyText(t.cliCostUsd)}`}

@@ -1,7 +1,8 @@
 // Small building blocks every page uses, so spacing, type and colour stay the same everywhere.
-import { Badge, Box, Button, Clipboard, EmptyState, Flex, HStack, IconButton, Portal, Skeleton, Stack, Text, Tooltip, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Clipboard, EmptyState, Flex, HStack, IconButton, LinkBox, LinkOverlay, Portal, Skeleton, Stack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import type { Health } from "@squad/contract";
-import { AlertTriangle, Check, Copy, Inbox, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, Inbox, type LucideIcon } from "lucide-react";
+import { Link as RouterLink } from "react-router";
 import { useState, type ReactNode } from "react";
 import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
@@ -58,28 +59,60 @@ export function Panel({ title, description, actions, children, flush = false, ..
   );
 }
 
-export function StatCard({ label, icon: Icon, value, hint, loading }: { label: string; icon: LucideIcon; value: ReactNode; hint?: ReactNode; loading?: boolean }) {
+/**
+ * A number card. With `to`, the whole card opens that page; `action` (a button) sits above the
+ * card's link, so the two never nest.
+ */
+export function StatCard({ label, icon: Icon, value, hint, loading, to, action }: { label: string; icon: LucideIcon; value: ReactNode; hint?: ReactNode; loading?: boolean; to?: string; action?: ReactNode }) {
   return (
-    <Box bg="surface" borderWidth="1px" borderColor="border" rounded="xl" shadow="xs" p={{ base: "4", md: "5" }} minW="0">
+    <LinkBox
+      bg="surface"
+      borderWidth="1px"
+      borderColor="border"
+      rounded="xl"
+      shadow="xs"
+      p={{ base: "4", md: "5" }}
+      minW="0"
+      transition="border-color 0.15s, box-shadow 0.15s"
+      _hover={to === undefined ? undefined : { borderColor: "border.emphasized", shadow: "sm" }}
+    >
       <HStack gap="2" color="fg.muted" minW="0">
         <Box flexShrink={0}>
           <Icon size={15} strokeWidth={2} aria-hidden />
         </Box>
-        <Text fontSize="sm" lineClamp={2}>
-          {label}
+        <Text fontSize="sm" lineClamp={2} flex="1">
+          {to === undefined ? (
+            label
+          ) : (
+            <LinkOverlay asChild>
+              <RouterLink to={to}>{label}</RouterLink>
+            </LinkOverlay>
+          )}
         </Text>
+        {to === undefined ? null : (
+          <Box flexShrink={0} color="fg.subtle">
+            <ChevronRight size={14} aria-hidden />
+          </Box>
+        )}
       </HStack>
       {loading === true ? (
         <Skeleton h="8" w="24" mt="3" rounded="md" />
       ) : (
-        <Text mt="2" fontSize={{ base: "xl", md: "2xl" }} fontWeight="600" letterSpacing="-0.02em" lineHeight="1.3" truncate>
-          {value}
-        </Text>
+        <HStack mt="2" gap="3" justify="space-between" align="center" minW="0">
+          <Text fontSize={{ base: "xl", md: "2xl" }} fontWeight="600" letterSpacing="-0.02em" lineHeight="1.3" truncate>
+            {value}
+          </Text>
+          {action === undefined ? null : (
+            <Box position="relative" zIndex="1" flexShrink={0}>
+              {action}
+            </Box>
+          )}
+        </HStack>
       )}
       <Text mt="1" fontSize="xs" color="fg.subtle" minH="4" lineClamp={2}>
         {loading === true ? "" : hint}
       </Text>
-    </Box>
+    </LinkBox>
   );
 }
 

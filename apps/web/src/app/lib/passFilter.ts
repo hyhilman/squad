@@ -30,3 +30,15 @@ export function lastPassByAccount(list: readonly PassLike[]): Record<string, str
   }
   return out;
 }
+
+/** "3 failed" for the passes given, or "" when none failed. A full page means there may be more. */
+export function failedText(list: readonly PassLike[], pageSize: number): string {
+  const n = list.filter((p) => p.outcome !== "busy" && outcomeGroup(p.outcome) === "failed").length;
+  if (n === 0) return "";
+  return `${n}${list.length >= pageSize ? "+" : ""} failed`;
+}
+
+const OUTCOMES: readonly OutcomeGroup[] = ["ok", "failed", "running", "lost"];
+
+/** The outcome filter from a link (?outcome=failed); anything else is no filter. */
+export const outcomeFromParam = (v: string | null): OutcomeGroup | "" => (OUTCOMES as readonly string[]).includes(v ?? "") ? (v as OutcomeGroup) : "";

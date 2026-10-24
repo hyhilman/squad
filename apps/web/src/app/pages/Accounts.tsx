@@ -2,7 +2,7 @@ import { Box, Button, Flex, HStack, Input, InputGroup, Link, Skeleton, Stack, Ta
 import type { AccountView, Health } from "@squad/contract";
 import { Search, Users } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link as RouterLink, useNavigate } from "react-router";
+import { Link as RouterLink, useNavigate, useSearchParams } from "react-router";
 import { attentionOf } from "../lib/attention.ts";
 import { agoText } from "../lib/format.ts";
 import { lastPassByAccount } from "../lib/passFilter.ts";
@@ -59,7 +59,9 @@ export function Accounts() {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [runner, setRunner] = useState("");
-  const [health, setHealth] = useState<HealthFilter>("");
+  const [params] = useSearchParams();
+  // The overview links here with ?health=attention; any other value is no filter.
+  const [health, setHealth] = useState<HealthFilter>(() => (params.get("health") === "attention" ? "attention" : ""));
   const last = useMemo(() => lastPassByAccount(recent.data ?? []), [recent.data]);
   const list = accounts.data ?? [];
   const runners = [...new Set(list.map((a) => a.runner))].sort();
