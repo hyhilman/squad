@@ -8,8 +8,9 @@
 // Modes: ok, claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
 // codex-reused (an inline shape-test stream: a permanent auth failure), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
 // nokey (pi stderr, exit 1, no stream), tmpcwd (ok, with a /tmp path as session cwd),
-// login-codex / login-pi (a login run: write the file given to `setLoginAuth` as auth.json into the mounted /codex or /pi folder; the host path comes from the --mount arg).
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+// login-codex / login-pi (a login run: write the file given to `setLoginAuth` as auth.json into the mounted /codex or /pi folder; the host path comes from the --mount arg),
+// login-files (copy the files given to `setLoginFiles` into the mounted /codex, /pi or /claude folder; exit 0).
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,8 @@ case "$mode" in
   login-codex|login-pi)
     t=/codex; [ "$mode" = login-pi ] && t=/pi
     for a in "$@"; do case "$a" in *target=$t) o="\${a#type=bind,source=}"; o="\${o%%,*}"; cp "$d/login-auth.json" "$o/auth.json" ;; esac; done ;;
+  login-files)
+    for a in "$@"; do case "$a" in *target=/codex|*target=/pi|*target=/claude) o="\${a#type=bind,source=}"; o="\${o%%,*}"; cp -a "$d/login-files/." "$o/" ;; esac; done ;;
   busy) exit 75 ;;
   crash) head -n 4 "$d/ok.jsonl"; echo "docker: something broke" >&2; exit 3 ;;
   hang) while [ ! -f "$d/stopped" ]; do sleep 0.05; done; exit 143 ;;
@@ -72,6 +75,8 @@ export interface FakeDocker {
   /** The rows `docker ps` prints: name, pass label, state, created-at. Replaces the earlier rows. */
   /** The auth.json body a `login-codex` or `login-pi` run writes into the mounted account folder. */
   setLoginAuth(body: string): void;
+  /** The files (path -> body) a `login-files` run writes into the mounted account folder. */
+  setLoginFiles(files: Record<string, string>): void;
   setPs(...rows: [name: string, passId: string, state: string, createdAt: string][]): void;
 }
 
@@ -113,5 +118,14 @@ export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-do
   };
   const setPs = (...rows: string[][]): void => writeFileSync(join(dir, "ps"), rows.map((r) => `${r.join("\t")}\n`).join(""));
   const setLoginAuth = (body: string): void => writeFileSync(join(dir, "login-auth.json"), body);
-  return { path, setModes, setLoginAuth, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs };
+  const setLoginFiles = (files: Record<string, string>): void => {
+    const root = join(dir, "login-files");
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    for (const [f, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      writeFileSync(join(root, f), body);
+    }
+  };
+  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs };
 }

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -192,6 +192,21 @@ test("exit 0 with no files fails with login-failed; another non-zero exit fails 
   assert.deepEqual(r.logins.status("bob@example.test", b.loginId), { loginId: b.loginId, state: "failed", reason: "login-failed" });
   assert.ok(!existsSync(join(r.home.accounts, "codex", "bob")));
   assert.ok(!existsSync(b.proc.staging));
+  await r.logins.close();
+  r.store.close();
+});
+
+test("exit 0 with only log/ and tmp/ (a stopped codex) fails with no-login and moves nothing", async () => {
+  const r = rig();
+  const s = await begin(r);
+  mkdirSync(join(s.proc.staging, "log"));
+  mkdirSync(join(s.proc.staging, "tmp"));
+  s.proc.exit(0);
+  await waitFor(() => r.logins.status("alice@example.test", s.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("alice@example.test", s.loginId), { loginId: s.loginId, state: "failed", reason: "no-login" });
+  assert.ok(!existsSync(join(r.home.accounts, "codex", "alice")));
+  assert.ok(!existsSync(s.proc.staging));
+  assert.equal(getAccount(r.store.db, "codex/alice")!.state, "dead");
   await r.logins.close();
   r.store.close();
 });

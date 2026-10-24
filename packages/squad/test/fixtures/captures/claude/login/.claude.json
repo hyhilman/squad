@@ -1,0 +1,26 @@
+{
+  "numStartups": 1,
+  "userID": "USER_ID",
+  "oauthAccount": {
+    "accountUuid": "00000000-0000-4000-8000-000000000001",
+    "emailAddress": "EMAIL",
+    "organizationUuid": "00000000-0000-4000-8000-000000000002",
+    "hasExtraUsageEnabled": true,
+    "billingType": "stripe_subscription",
+    "accountCreatedAt": "2026-01-01T00:00:00.000000Z",
+    "subscriptionCreatedAt": "2026-01-01T00:00:00.000000Z",
+    "ccOnboardingFlags": {},
+    "claudeCodeTrialEndsAt": null,
+    "claudeCodeTrialDurationDays": null,
+    "seatTier": null,
+    "displayName": "NAME",
+    "fullName": "FULL NAME",
+    "profileFetchedAt": 1790000000000,
+    "organizationRole": "admin",
+    "workspaceRole": null,
+    "organizationName": "ORG",
+    "organizationType": "claude_max",
+    "organizationRateLimitTier": "default_claude_max_20x",
+    "userRateLimitTier": null
+  }
+}

@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { identityOf } from "./accounts/identity.ts";
+import { identityOf, loginFilesOf } from "./accounts/identity.ts";
 import { addAccount, getAccount, reviveByLogin, setOwnerEmail, ACCOUNT_NAME } from "./accounts/store.ts";
 import { dockerRunArgv, type AccountKind, type PassPlan, type Runner } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
@@ -56,11 +56,10 @@ function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: st
   };
 }
 
-/** The CLI args that start a login, after the image's entrypoint. claude is refused: its login needs a capture we have not made. */
+/** The CLI args that start a login, after the image's entrypoint. */
 function loginArgs(runner: Runner): string[] {
   if (runner === "codex") return ["login", "--device-auth"];
-  if (runner === "pi") return []; // the person types /login
-  throw new Error("squad login is not ready for claude: make a token with `claude setup-token` and use `squad add-token`");
+  return []; // pi and claude: the person types /login, then /exit
 }
 
 /** The `docker run` argv of a login into `staging`. There is no lock: nothing else can see staging. */
@@ -88,7 +87,7 @@ export interface FinishParams {
 
 export type FinishResult =
   | { readonly ok: true; readonly ownerEmail: string | null }
-  | { readonly ok: false; readonly reason: "empty" | "owner-mismatch" | "busy"; readonly found?: string };
+  | { readonly ok: false; readonly reason: "empty" | "no-login" | "owner-mismatch" | "busy"; readonly found?: string };
 
 /**
  * The part of a login after the container: check what it left in `staging`, move it into `accounts/`
@@ -102,6 +101,13 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   if (readdirSync(staging).length === 0) {
     drop();
     return { ok: false, reason: "empty" };
+  }
+
+  // A CLI that is stopped (a docker restart) exits 0 with only log/ and tmp/. That is no login.
+  const files = loginFilesOf(runner, staging);
+  if (files === "none") {
+    drop();
+    return { ok: false, reason: "no-login" };
   }
 
   const found = identityOf(runner, "login", staging);
@@ -134,7 +140,10 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   if (aside.old !== null) rmSync(aside.old, { recursive: true, force: true });
 
   const existing = getAccount(store.db, id);
-  if (existing === undefined) addAccount(store.db, { runner, name, kind: "login", ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
+  // A pi login that holds only API keys is a key account: no lock, many passes. A dead login account
+  // that is logged in again keeps its kind, so a re-login never changes how its row is locked.
+  const kind = files === "keys" ? "key" : "login";
+  if (existing === undefined) addAccount(store.db, { runner, name, kind, ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
   else {
     // The state may have changed while the login ran. Only a dead account is revived.
     if (existing.state === "dead") reviveByLogin(store.db, id);
@@ -215,6 +224,7 @@ export async function runLogin(p: LoginParams): Promise<number> {
   const fin = await finishLogin({ store, home, runner, name, staging, ...(p.owner === undefined ? {} : { owner: p.owner }), now: p.now });
   if (!fin.ok) {
     if (fin.reason === "empty") out.stderr("the login wrote no files; nothing was changed\n");
+    else if (fin.reason === "no-login") out.stderr("the login left no login file (the CLI was stopped or you did not log in); nothing was changed\n");
     else if (fin.reason === "owner-mismatch") out.stderr(`the login is for ${fin.found}, not ${p.owner}; nothing was moved\n`);
     else out.stderr(`${id}: account busy (a pass holds it); the new login was dropped, nothing was changed\n`);
     return 1;

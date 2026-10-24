@@ -40,8 +40,8 @@ Failure kinds: `quota`, `rate-limit`, `auth`, `provider`, `idle`, `timeout`, `no
 
 | Kind | What it is | Passes at once |
 |---|---|---|
-| `login` | an OAuth login that refreshes itself (codex device login, pi `/login`) | one, under the lock |
-| `key` | an API key that never changes | many, each on a throwaway copy |
+| `login` | an OAuth login that refreshes itself (codex device login, claude `/login`, pi `/login` with an OAuth provider) | one, under the lock |
+| `key` | an API key that never changes (also a pi `/login` that stored only keys) | many, each on a throwaway copy |
 | `token` | a static token that never refreshes (claude `setup-token`) | many |
 
 ## Requirements

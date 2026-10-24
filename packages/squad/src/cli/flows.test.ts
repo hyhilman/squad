@@ -162,14 +162,107 @@ test("login: a CLI that fails, or writes nothing, leaves nothing behind", async 
   assert.deepEqual(readdirSync(r.home.staging), []);
 });
 
-test("login: claude is refused for now and points to add-token; a bad shape is a usage error", async () => {
+test("login: a bad shape is a usage error and docker never runs", async () => {
   const r = rig();
-  assert.equal(await r.run("login", "claude/c1"), 2);
-  assert.match(r.text(), /add-token/);
   assert.equal(await r.run("login", "nope"), 2);
   assert.equal(await r.run("login", "dsh/x"), 2);
   assert.equal(await r.run("login", "codex/../x"), 2);
   assert.deepEqual(r.fake.calls(), []);
+});
+
+const CAP = join(import.meta.dirname, "..", "..", "test", "fixtures", "captures");
+const capture = (...p: string[]): string => readFileSync(join(CAP, ...p), "utf8");
+const claudeFiles = (email: string): Record<string, string> => ({
+  ".credentials.json": capture("claude", "login", ".credentials.json"),
+  ".claude.json": capture("claude", "login", ".claude.json").replace("EMAIL", email),
+});
+
+test("login: a codex that was stopped (exit 0, only log/ and tmp/) moves nothing and says no login", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "log/codex-tui.log": "x", "tmp/.keep": "" });
+  assert.equal(await r.run("login", "codex/alice"), 1);
+  assert.match(r.text(), /no login/);
+  assert.equal(existsSync(join(r.home.accounts, "codex", "alice")), false);
+  assert.equal(rowOf(r.home, "codex/alice"), undefined);
+  assert.deepEqual(readdirSync(r.home.staging), []);
+});
+
+test("login: a stopped login on a dead account keeps the old folder and the dead row", async () => {
+  const r = rig();
+  seedAccount(r.home, "codex", "alice", "login", { "auth.json": "OLD" });
+  withStore(r.home, (s) => setState(s.db, "codex/alice", "dead", "x", NOW));
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "log/codex-tui.log": "x" });
+  assert.equal(await r.run("login", "codex/alice"), 1);
+  assert.equal(readFileSync(join(r.home.accounts, "codex", "alice", "auth.json"), "utf8"), "OLD");
+  assert.equal(rowOf(r.home, "codex/alice")?.state, "dead");
+  assert.deepEqual(readdirSync(r.home.staging), []);
+});
+
+test("login claude: interactive with no args; the email comes from .claude.json and the owner check works", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles(claudeFiles("alice@example.test"));
+  assert.equal(await r.run("login", "claude/c1", "--owner", "bob@example.test"), 1);
+  assert.equal(existsSync(join(r.home.accounts, "claude", "c1")), false);
+  assert.deepEqual(readdirSync(r.home.staging), []);
+  assert.equal(await r.run("login", "claude/c1", "--owner", "ALICE@example.test"), 0);
+  const argv = r.fake.callsOf("run").at(-1)!;
+  assert.equal(argv[2], "-it");
+  assert.equal(argv.at(-1), "squad-claude:2.1.310");
+  const dest = join(r.home.accounts, "claude", "c1");
+  assert.ok(existsSync(join(dest, ".credentials.json")) && existsSync(join(dest, ".claude.json")));
+  const row = rowOf(r.home, "claude/c1")!;
+  assert.deepEqual([row.kind, row.state, row.ownerEmail], ["login", "active", "alice@example.test"]);
+  assert.ok(!r.text().includes("ACCESS_TOKEN"));
+});
+
+test("login claude: a folder with no .credentials.json is no login", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ ".claude.json": capture("claude", "login", ".claude.json") });
+  assert.equal(await r.run("login", "claude/c1"), 1);
+  assert.match(r.text(), /no login/);
+  assert.equal(rowOf(r.home, "claude/c1"), undefined);
+});
+
+test("login pi: a login that holds only api keys is registered as a key account", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "auth.json": capture("pi", "login", "auth.json") });
+  assert.equal(await r.run("login", "pi/k1", "--owner", "carol@example.test"), 0);
+  const row = rowOf(r.home, "pi/k1")!;
+  assert.deepEqual([row.kind, row.state, row.ownerEmail], ["key", "active", "carol@example.test"]);
+  assert.ok(existsSync(join(r.home.accounts, "pi", "k1", "auth.json")));
+});
+
+test("login pi: an entry that is not an api key keeps kind login", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "auth.json": JSON.stringify({ opencode: { type: "api_key", key: "K" }, other: { type: "oauth", refresh: "R" } }) });
+  assert.equal(await r.run("login", "pi/p2", "--owner", "carol@example.test"), 0);
+  assert.equal(rowOf(r.home, "pi/p2")?.kind, "login");
+});
+
+test("login pi: an empty auth.json is no login", async () => {
+  const r = rig();
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "auth.json": "{}", "sessions/x": "" });
+  assert.equal(await r.run("login", "pi/p3"), 1);
+  assert.match(r.text(), /no login/);
+  assert.equal(rowOf(r.home, "pi/p3"), undefined);
+});
+
+test("login pi: a dead login account that now holds only keys stays a login account", async () => {
+  const r = rig();
+  seedAccount(r.home, "pi", "p4", "login", { "auth.json": "OLD" });
+  withStore(r.home, (s) => setState(s.db, "pi/p4", "dead", "x", NOW));
+  r.fake.setModes("login-files");
+  r.fake.setLoginFiles({ "auth.json": capture("pi", "login", "auth.json") });
+  assert.equal(await r.run("login", "pi/p4"), 0);
+  const row = rowOf(r.home, "pi/p4")!;
+  assert.deepEqual([row.kind, row.state], ["login", "active"]);
 });
 
 test("login: SQUAD_DRY_RUN=1 prints the argv and runs nothing", async () => {

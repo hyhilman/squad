@@ -20,8 +20,11 @@ test("pi login: no args, the folder at /pi", () => {
   assert.equal(a[a.length - 1], "squad-pi:1");
 });
 
-test("claude login is refused and the message points to add-token", () => {
-  assert.throws(() => loginArgv("claude", { ...base, staging: "/h/.squad/staging/S1" }), /add-token/);
+test("claude login: no args (the person types /login), the folder at /claude, no lock", () => {
+  const a = loginArgv("claude", { ...base, image: "squad-claude:1", staging: "/h/.squad/staging/S1" });
+  assert.ok(pairs(a, "--mount").includes("type=bind,source=/h/.squad/staging/S1,target=/claude"));
+  assert.ok(!a.some((x) => x.includes("SQUAD_LOCK")));
+  assert.equal(a[a.length - 1], "squad-claude:1");
 });
 
 test("shell on a login: -it, the lock mounted, entrypoint squad-entry, bash", () => {
