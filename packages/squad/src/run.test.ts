@@ -1,0 +1,659 @@
+import { strict as assert } from "node:assert";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { makeFakeDocker } from "../test/fake-docker.ts";
+import { addAccount, getAccount, getHealth, putHealth, setState } from "./accounts/store.ts";
+import { emptyHealth } from "./accounts/health.ts";
+import { getSession } from "./sessions.ts";
+import { ensureHome, layoutOf, type HomeLayout } from "./home.ts";
+import { makeLog } from "./log.ts";
+import { runPass, type PassRequest, type RunDeps } from "./run.ts";
+import { openStore, type Store } from "./store/db.ts";
+import { findForbidden } from "@squad/contract";
+
+interface Rig {
+  home: HomeLayout;
+  store: Store;
+  cwd: string;
+  fake: ReturnType<typeof makeFakeDocker>;
+  deps: RunDeps;
+}
+
+const NOW = new Date("2026-10-24T12:00:00.000Z");
+
+/** A throwaway home with fake key accounts (fresh made-up files, never a real login). */
+function rig(keys: string[] = ["k1"], more: Partial<RunDeps> = {}): Rig {
+  const root = mkdtempSync(join(tmpdir(), "run-"));
+  const home = layoutOf(join(root, "home"), {});
+  ensureHome(home);
+  const store = openStore({ dbPath: home.db, spoolDir: home.spool });
+  for (const name of keys) {
+    addAccount(store.db, { runner: "pi", name, kind: "key" }, NOW);
+    mkdirSync(join(home.accounts, "pi", name), { recursive: true });
+    writeFileSync(join(home.accounts, "pi", name, "auth.json"), '{"fake":"not-a-real-key"}');
+  }
+  const cwd = join(root, "work");
+  mkdirSync(join(cwd, ".git"), { recursive: true });
+  const fake = makeFakeDocker(join(root, "bin"));
+  const deps: RunDeps = {
+    home,
+    store,
+    now: () => NOW,
+    docker: fake.path,
+    project: "proj",
+    identity: { name: "Bot", email: "bot@example.com" },
+    user: null,
+    log: makeLog(() => {}),
+    env: { SQUAD_STOP_GRACE_S: "7" },
+    ...more,
+  };
+  return { home, store, cwd, fake, deps };
+}
+
+const req = (r: Rig, more: Partial<PassRequest> = {}): PassRequest => ({
+  runner: "pi",
+  model: "opencode-go/hy4-preview",
+  prompt: "say ok",
+  pool: "all",
+  cwd: r.cwd,
+  caller: { flow: "fix", action: "fix:pi" },
+  ...more,
+});
+
+const passes = (r: Rig) => r.store.db.prepare("SELECT * FROM passes ORDER BY id").all() as Record<string, unknown>[];
+const mountsOf = (argv: string[]): { source: string; target: string }[] =>
+  argv.flatMap((a, i) => (argv[i - 1] === "--mount" ? [a] : [])).map((m) => {
+    const f = Object.fromEntries(m.split(",").map((kv) => kv.split("=") as [string, string]));
+    return { source: f.source!, target: f.target! };
+  });
+
+test("ok: one pass row with the tokens, health updated, the key copy gone, one account mount that is the copy", async () => {
+  const r = rig();
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure, undefined);
+  assert.equal(res.text, "ok");
+  assert.equal(res.account, "pi/k1");
+  assert.equal(res.turns, 1);
+  const rows = passes(r);
+  assert.equal(rows.length, 1);
+  const p = rows[0]!;
+  assert.deepEqual([p.input, p.output, p.cache_read, p.cache_write, p.reasoning], [1493, 71, 64, 0, 68]);
+  assert.equal(p.outcome, "ok");
+  assert.equal(p.account, "pi/k1");
+  assert.equal(p.exit_code, 0);
+  assert.equal(p.id, res.passId);
+  assert.equal(getHealth(r.store.db, "pi/k1").lastOkAt, NOW.toISOString());
+  assert.deepEqual(readdirSync(r.home.staging), [], "the copy is gone");
+  const runs = r.fake.callsOf("run");
+  assert.equal(runs.length, 1);
+  const acct = mountsOf(runs[0]!).filter((m) => m.target === "/pi");
+  assert.equal(acct.length, 1);
+  assert.ok(acct[0]!.source.startsWith(r.home.staging));
+  assert.notEqual(acct[0]!.source, join(r.home.accounts, "pi", "k1"));
+  assert.ok(!mountsOf(runs[0]!).some((m) => m.source.includes(r.home.accounts)), "no mount of the real folder");
+  assert.equal(runs[0]!.at(-1), "say ok");
+});
+
+test("the raw stdout goes to logs/passes/<date>/<passId>.log with mode 0600", async () => {
+  const r = rig();
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.logPath, join(r.home.passLogs, "2026-10-24", `${res.passId}.log`));
+  assert.equal(statSync(res.logPath!).mode & 0o777, 0o600);
+  assert.equal(readFileSync(res.logPath!, "utf8"), readFileSync(join(import.meta.dirname, "..", "test/fixtures/captures/pi/ok.jsonl"), "utf8"));
+});
+
+test("free-tier 403: a provider failure that leaves the key account healthy", async () => {
+  const r = rig();
+  r.fake.setModes("free-tier");
+  const res = await runPass(req(r), r.deps);
+  assert.deepEqual([res.failure?.kind, res.failure?.code], ["provider", "403:FreeTierError"]);
+  const h = getHealth(r.store.db, "pi/k1");
+  assert.equal(h.suspectSince, null);
+  assert.equal(h.authFails, 0);
+  assert.equal(getAccount(r.store.db, "pi/k1")!.state, "active");
+});
+
+test("auth 401: suspect, then the second auth kills the account and writes events", async () => {
+  const r = rig();
+  r.fake.setModes("auth");
+  const first = await runPass(req(r), r.deps);
+  assert.equal(first.failure?.kind, "auth");
+  assert.equal(first.failure?.code, "401:AuthError");
+  let h = getHealth(r.store.db, "pi/k1");
+  assert.equal(h.authFails, 1);
+  assert.equal(h.suspectSince, NOW.toISOString());
+  assert.equal(getAccount(r.store.db, "pi/k1")!.state, "active");
+  const row = passes(r)[0]!;
+  assert.deepEqual([row.outcome, row.fail_kind, row.fail_code], ["fail", "auth", "401:AuthError"]);
+  // A suspect account waits for a probe, so no pass picks it. The probe is stood in by clearing the mark.
+  const none = await runPass(req(r), r.deps);
+  assert.equal(none.failure?.kind, "no-account");
+  r.store.db.prepare("UPDATE health SET suspect_since = NULL WHERE account = 'pi/k1'").run();
+  const second = await runPass(req(r), r.deps);
+  assert.equal(second.failure?.kind, "auth");
+  h = getHealth(r.store.db, "pi/k1");
+  assert.equal(h.authFails, 2);
+  const acct = getAccount(r.store.db, "pi/k1")!;
+  assert.equal(acct.state, "dead");
+  assert.equal(acct.deadCode, "401:AuthError");
+  const ev = r.store.db.prepare("SELECT kind, account, code, pass_id FROM events ORDER BY id").all().map((e) => ({ ...e }));
+  assert.deepEqual(ev, [
+    { kind: "auth-fail", account: "pi/k1", code: "401:AuthError", pass_id: first.passId },
+    { kind: "dead", account: "pi/k1", code: "401:AuthError", pass_id: second.passId },
+  ]);
+});
+
+test("busy then ok: the lost race ends its row as busy, with no health change, and the next account runs", async () => {
+  const r = rig(["k1", "k2"]);
+  r.fake.setModes("busy", "ok");
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure, undefined);
+  const rows = passes(r);
+  assert.equal(rows.length, 2);
+  const busyRow = rows.find((p) => p.outcome === "busy")!;
+  const okRow = rows.find((p) => p.outcome === "ok")!;
+  assert.notEqual(busyRow.account, okRow.account);
+  assert.equal(res.account, okRow.account);
+  assert.equal(busyRow.exit_code, 75);
+  const busyHealth = getHealth(r.store.db, busyRow.account as string);
+  assert.equal(busyHealth.lastOkAt, null);
+  assert.equal(busyHealth.lastFailAt, null);
+  assert.equal(busyHealth.lastUsedAt, null);
+  assert.deepEqual(readdirSync(r.home.staging), []);
+});
+
+test("both busy: no-account, and every attempt left a busy row", async () => {
+  const r = rig(["k1", "k2"]);
+  r.fake.setModes("busy");
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "no-account");
+  assert.equal(res.account, null);
+  assert.deepEqual(passes(r).map((p) => p.outcome).sort(), ["busy", "busy", "no-account"]);
+});
+
+test("no accounts at all: no-account at once, with a row that has no account", async () => {
+  const r = rig([]);
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "no-account");
+  assert.equal(r.fake.calls().length, 0);
+  const rows = passes(r);
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0]!.outcome, rows[0]!.account, rows[0]!.fail_kind], ["no-account", null, "no-account"]);
+  assert.equal(res.passId, rows[0]!.id);
+});
+
+test("a named account that the host probe says is busy gives busy, and nothing starts", async () => {
+  const r = rig(["k1"], { busy: () => true });
+  const res = await runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps);
+  assert.equal(res.failure?.kind, "busy");
+  assert.equal(r.fake.calls().length, 0);
+  assert.equal(passes(r)[0]!.outcome, "busy");
+});
+
+test("exactly one of pool and account", async () => {
+  const r = rig();
+  await assert.rejects(() => runPass(req(r, { pool: undefined }), r.deps), /pool.*account/);
+  await assert.rejects(() => runPass(req(r, { account: "pi/k1" }), r.deps), /pool.*account/);
+});
+
+test("idle: the pass is stopped with the grace time, and the kind is idle", async () => {
+  const r = rig();
+  r.fake.setModes("hang");
+  const res = await runPass(req(r, { idleMs: 300 }), r.deps);
+  assert.equal(res.failure?.kind, "idle");
+  const stops = r.fake.callsOf("stop");
+  assert.equal(stops.length, 1);
+  assert.deepEqual(stops[0]!.slice(0, 3), ["stop", "-t", "7"]);
+  assert.match(stops[0]![3]!, /^squad-/);
+  assert.equal(passes(r)[0]!.fail_kind, "idle");
+  assert.equal(getHealth(r.store.db, "pi/k1").lastFailKind, "idle");
+  assert.deepEqual(readdirSync(r.home.staging), []);
+});
+
+test("deadline: the same stop, and the kind is timeout", async () => {
+  const r = rig();
+  r.fake.setModes("hang");
+  const res = await runPass(req(r, { idleMs: 60_000, deadlineMs: 300 }), r.deps);
+  assert.equal(res.failure?.kind, "timeout");
+  assert.equal(r.fake.callsOf("stop").length, 1);
+  assert.equal(getAccount(r.store.db, "pi/k1")!.state, "active");
+});
+
+test("a crash without agent_end and exit 3 is a provider failure with code exit:3", async () => {
+  const r = rig();
+  r.fake.setModes("crash");
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "provider");
+  assert.equal(res.failure?.code, "exit:3");
+  assert.equal(passes(r)[0]!.exit_code, 3);
+  assert.equal(getHealth(r.store.db, "pi/k1").lastFailCode, "exit:3");
+});
+
+test("dead and disabled accounts are never picked", async () => {
+  const r = rig(["k1", "k2", "k3"]);
+  r.store.db.prepare("UPDATE accounts SET state = 'dead' WHERE id = 'pi/k1'").run();
+  r.store.db.prepare("UPDATE accounts SET state = 'disabled' WHERE id = 'pi/k2'").run();
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.account, "pi/k3");
+  const named = await runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps);
+  assert.equal(named.failure?.kind, "no-account");
+  assert.equal(r.fake.callsOf("run").length, 1);
+});
+
+test("a cooling account is skipped", async () => {
+  const r = rig(["k1", "k2"]);
+  putHealth(r.store.db, { ...getHealth(r.store.db, "pi/k1"), coolUntil: "2026-10-24T12:05:00.000Z", coolKind: "rate-limit" });
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.account, "pi/k2");
+});
+
+test("a login account mounts its real folder and its lock file, and is never copied", async () => {
+  const r = rig([], { busy: () => false });
+  addAccount(r.store.db, { runner: "pi", name: "l1", kind: "login" }, NOW);
+  const dir = join(r.home.accounts, "pi", "l1");
+  mkdirSync(dir, { recursive: true });
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.account, "pi/l1");
+  const lock = join(r.home.locks, "pi", "l1.lock");
+  assert.ok(existsSync(lock));
+  assert.equal(statSync(lock).mode & 0o777, 0o600);
+  const m = mountsOf(r.fake.callsOf("run")[0]!);
+  assert.deepEqual(m.filter((x) => x.target === "/pi"), [{ source: dir, target: "/pi" }]);
+  assert.deepEqual(m.filter((x) => x.target === "/squad/lock"), [{ source: lock, target: "/squad/lock" }]);
+  assert.deepEqual(readdirSync(r.home.staging), []);
+});
+
+test("an ok pass writes one usage export: the header names project/flow/action, one message line, mode 0600", async () => {
+  const r = rig();
+  const res = await runPass(req(r), r.deps);
+  assert.deepEqual(readdirSync(r.home.usageExport), [`${res.passId}.jsonl`]);
+  const file = join(r.home.usageExport, `${res.passId}.jsonl`);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, any>);
+  assert.equal(lines.length, 2);
+  assert.deepEqual([lines[0]!.type, lines[0]!.id, lines[0]!.cwd], ["session", res.passId, "proj/fix/fix:pi"]);
+  assert.equal(lines[1]!.type, "message");
+  assert.equal(lines[1]!.id, `${res.passId}:6`);
+  assert.deepEqual(lines[1]!.message.content, []);
+  assert.equal(lines[1]!.message.usage.input, 1493);
+});
+
+test("SQUAD_NO_USAGE_EXPORT=1 turns the export off", async () => {
+  const r = rig(["k1"], { env: { SQUAD_NO_USAGE_EXPORT: "1" } });
+  await runPass(req(r), r.deps);
+  assert.deepEqual(readdirSync(r.home.usageExport), []);
+});
+
+test("a failing export logs a warning and the pass still succeeds", async () => {
+  const lines: string[] = [];
+  const r = rig();
+  writeFileSync(join(r.home.root, "blocker"), "");
+  const deps = { ...r.deps, home: { ...r.home, usageExport: join(r.home.root, "blocker", "pi") }, log: makeLog((l) => lines.push(l)) };
+  const res = await runPass(req(r), deps);
+  assert.equal(res.failure, undefined);
+  assert.ok(lines.some((l) => l.includes("level=warn event=usage-export-failed")));
+});
+
+const CATALOG = { "opencode-go": { models: { "hy4-preview": { cost: { input: 0.15, output: 0.5, cache_read: 0.03 } } } } };
+
+test("a key pass with a price has cost_usd and price_src", async () => {
+  const r = rig();
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify(CATALOG));
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.ok(Math.abs((p.cost_usd as number) - (1493 * 0.15 + 71 * 0.5 + 64 * 0.03) / 1e6) < 1e-12);
+  assert.equal(p.price_src, "catalog");
+});
+
+test("a key pass with an unknown model has no cost and no price_src", async () => {
+  const r = rig();
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify({ other: CATALOG["opencode-go"] }));
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.deepEqual([p.cost_usd, p.price_src], [null, null]);
+});
+
+test("a login pass has no cost, even with a price", async () => {
+  const r = rig([], { busy: () => false });
+  writeFileSync(join(r.home.state, "prices.json"), JSON.stringify(CATALOG));
+  addAccount(r.store.db, { runner: "pi", name: "l1", kind: "login" }, NOW);
+  mkdirSync(join(r.home.accounts, "pi", "l1"), { recursive: true });
+  await runPass(req(r), r.deps);
+  const p = passes(r)[0]!;
+  assert.deepEqual([p.account, p.cost_usd, p.price_src], ["pi/l1", null, null]);
+});
+
+// ---- claude ----
+
+const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE";
+
+/** A rig with one claude token account `claude/t1` whose file holds a made-up token. */
+function claudeRig(more: Partial<RunDeps> = {}): Rig {
+  const r = rig([], more);
+  addAccount(r.store.db, { runner: "claude", name: "t1", kind: "token" }, NOW);
+  const dir = join(r.home.accounts, "claude", "t1");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, "token"), FAKE_TOKEN, { mode: 0o600 });
+  r.fake.setModes("claude-ok");
+  return r;
+}
+
+const claudeReq = (r: Rig, more: Partial<PassRequest> = {}): PassRequest => req(r, { runner: "claude", model: "claude-opus-5-5", prompt: "say ok", action: undefined, ...more } as Partial<PassRequest>);
+
+test("claude token pass: the prompt goes on stdin, not in the argv; tokens, model and room are recorded", async () => {
+  const r = claudeRig();
+  const res = await runPass(claudeReq(r, { prompt: "say the word ok" }), r.deps);
+  assert.equal(res.failure, undefined);
+  assert.equal(res.account, "claude/t1");
+  assert.equal(res.model, "claude-opus-5-5");
+  const runs = r.fake.callsOf("run");
+  assert.equal(runs.length, 1);
+  assert.deepEqual(r.fake.stdins(), ["say the word ok"]);
+  assert.ok(!runs[0]!.some((a) => a.includes("say the word ok")), "the prompt is not in the argv");
+  const p = passes(r)[0]!;
+  assert.deepEqual([p.input, p.output, p.cache_read, p.cache_write], [2, 4, 11333, 5672]);
+  assert.equal(p.model, "claude-opus-5-5");
+  assert.equal(p.outcome, "ok");
+  assert.equal(p.cost_usd, null);
+  const h = getHealth(r.store.db, "claude/t1");
+  assert.deepEqual([h.left5h, h.leftWeek], [92, 70]);
+});
+
+test("claude token pass: the usage export holds exactly one message line from the result tokens", async () => {
+  const r = claudeRig();
+  const res = await runPass(claudeReq(r), r.deps);
+  const lines = readFileSync(join(r.home.usageExport, `${res.passId}.jsonl`), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, any>);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0]!.type, "session");
+  assert.equal(lines[1]!.type, "message");
+  const u = lines[1]!.message.usage;
+  assert.deepEqual([u.input, u.output, u.cacheRead, u.cacheWrite], [2, 4, 11333, 5672]);
+  assert.equal(lines[1]!.message.model, "claude-opus-5-5");
+});
+
+test("claude token pass: mounts only the token file, no /claude, and no token text in the argv", async () => {
+  const r = claudeRig();
+  await runPass(claudeReq(r), r.deps);
+  const argv = r.fake.callsOf("run")[0]!;
+  const m = mountsOf(argv);
+  assert.ok(!m.some((x) => x.target === "/claude" || x.target.startsWith("/claude/")), "no mount at /claude");
+  assert.deepEqual(m.filter((x) => x.target === "/squad/token"), [{ source: join(r.home.accounts, "claude", "t1", "token"), target: "/squad/token" }]);
+  assert.ok(argv.includes("SQUAD_TOKEN_FILE=/squad/token"));
+  const text = argv.join("\n");
+  assert.ok(!text.includes("sk-ant-oat01"), "no token text");
+  assert.ok(!text.includes("FAKEFAKE"));
+  assert.equal(findForbidden(text), undefined);
+  assert.deepEqual(readdirSync(r.home.staging), [], "a token account is not copied");
+});
+
+test("claude login account: the real folder at /claude and the lock, as pi", async () => {
+  const r = rig([], { busy: () => false });
+  addAccount(r.store.db, { runner: "claude", name: "l1", kind: "login" }, NOW);
+  const dir = join(r.home.accounts, "claude", "l1");
+  mkdirSync(dir, { recursive: true });
+  const res = await runPass(claudeReq(r), { ...r.deps });
+  assert.equal(res.account, "claude/l1");
+  const m = mountsOf(r.fake.callsOf("run")[0]!);
+  assert.deepEqual(m.filter((x) => x.target === "/claude"), [{ source: dir, target: "/claude" }]);
+  assert.equal(m.filter((x) => x.target === "/squad/lock").length, 1);
+});
+
+test("pi keeps stdin empty: the prompt is the last argument", async () => {
+  const r = rig();
+  await runPass(req(r), r.deps);
+  assert.deepEqual(r.fake.stdins(), [""]);
+});
+
+test("a pass with all-zero usage (the pi auth error) writes no usage export", async () => {
+  const r = rig();
+  r.fake.setModes("auth");
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "auth");
+  assert.deepEqual(readdirSync(r.home.usageExport), []);
+});
+
+test("an unsupported runner is refused", async () => {
+  const r = rig();
+  await assert.rejects(() => runPass(req(r, { runner: "dsh" as never }), r.deps), /not supported/);
+});
+
+test("the pass row keeps the model the stream reports, not the one asked for", async () => {
+  const r = claudeRig();
+  await runPass(claudeReq(r, { model: "claude-sonnet-5-5" }), r.deps);
+  assert.equal(passes(r)[0]!.model, "claude-opus-5-5");
+});
+
+// --- sessions (pi only) ---
+
+const sessionMount = (argv: string[]) => mountsOf(argv).filter((m) => m.target === "/squad/sessions");
+
+test("session, first pass: its own folder (0700, empty) is mounted, pi gets the session flags, the rows carry the id", async () => {
+  const r = rig();
+  const res = await runPass(req(r, { session: "s1" }), r.deps);
+  assert.equal(res.failure, undefined);
+  const dir = join(r.home.sessions, "pi", "k1", "s1");
+  const run = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(sessionMount(run), [{ source: dir, target: "/squad/sessions" }]);
+  const i = run.indexOf("--session-dir");
+  assert.deepEqual(run.slice(i, i + 4), ["--session-dir", "/squad/sessions", "--session-id", "s1"]);
+  assert.ok(i < run.indexOf("--"), "the flags come before the prompt");
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal(passes(r)[0]!.session_id, "s1");
+  const s = getSession(r.store.db, "pi", "s1")!;
+  assert.deepEqual([s.account, s.createdAt, s.lastUsedAt], ["pi/k1", NOW.toISOString(), NOW.toISOString()]);
+  assert.ok(!mountsOf(run).some((m) => m.source === r.home.sessions), "never the sessions root");
+});
+
+test("a pass without a session has no session mount and no session flags", async () => {
+  const r = rig();
+  await runPass(req(r), r.deps);
+  const run = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(sessionMount(run), []);
+  assert.ok(!run.includes("--session-dir"));
+});
+
+test("session follow-up: same account even when another is less used; the folder is kept; last_used moves", async () => {
+  const r = rig(["k1", "k2"]);
+  const t = { now: NOW };
+  const first = await runPass(req(r, { session: "s1" }), { ...r.deps, now: () => t.now });
+  assert.equal(first.account, "pi/k1");
+  writeFileSync(join(r.home.sessions, "pi", "k1", "s1", "transcript.jsonl"), "{}\n");
+  t.now = new Date("2026-10-24T13:00:00.000Z");
+  const second = await runPass(req(r, { session: "s1" }), { ...r.deps, now: () => t.now });
+  assert.equal(second.account, "pi/k1", "k2 is less used, but the session is pinned");
+  assert.deepEqual(readdirSync(join(r.home.sessions, "pi", "k1", "s1")), ["transcript.jsonl"]);
+  const s = getSession(r.store.db, "pi", "s1")!;
+  assert.deepEqual([s.createdAt, s.lastUsedAt], [NOW.toISOString(), t.now.toISOString()]);
+  assert.equal(passes(r).filter((p) => p.session_id === "s1").length, 2);
+});
+
+test("a fresh session empties a leftover folder of that name", async () => {
+  const r = rig();
+  const dir = join(r.home.sessions, "pi", "k1", "s2");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "old.jsonl"), "old");
+  await runPass(req(r, { session: "s2" }), r.deps);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test("a pinned account that cannot run gives no-account that names the reason; the session never moves", async () => {
+  const cases: [string, (r: Rig) => Partial<RunDeps> | void, RegExp][] = [
+    ["cooling", (r) => putHealth(r.store.db, { ...emptyHealth("pi/k1"), coolUntil: "2026-10-24T12:30:00.000Z", coolKind: "rate-limit" }), /pi\/k1.*cooling/],
+    ["dead", (r) => setState(r.store.db, "pi/k1", "dead", "401", NOW), /pi\/k1.*dead/],
+    ["busy", (r) => ({ busy: () => true }), /pi\/k1.*busy/],
+  ];
+  for (const [label, arm, msg] of cases) {
+    const r = rig(["k1", "k2"]);
+    await runPass(req(r, { session: "s1" }), r.deps);
+    const runsBefore = r.fake.callsOf("run").length;
+    const more = arm(r) ?? {};
+    const res = await runPass(req(r, { session: "s1" }), { ...r.deps, ...more });
+    assert.equal(res.failure?.kind, "no-account", label);
+    assert.match(res.failure!.message, msg, label);
+    assert.match(res.failure!.message, /s1/, label);
+    assert.equal(res.account, null);
+    assert.equal(r.fake.callsOf("run").length, runsBefore, `${label}: no container`);
+    assert.equal(getSession(r.store.db, "pi", "s1")!.account, "pi/k1", label);
+    assert.equal(passes(r).at(-1)!.session_id, "s1", `${label}: the refusal row carries the session`);
+  }
+});
+
+test("a named account other than the pinned one is refused", async () => {
+  const r = rig(["k1", "k2"]);
+  await runPass(req(r, { session: "s1" }), r.deps);
+  const res = await runPass(req(r, { session: "s1", pool: undefined, account: "pi/k2" }), r.deps);
+  assert.equal(res.failure?.kind, "no-account");
+  assert.match(res.failure!.message, /pinned to pi\/k1/);
+});
+
+test("a new session whose first account loses the lock race is pinned to the account that ran it", async () => {
+  const r = rig(["k1", "k2"]);
+  r.fake.setModes("busy", "ok");
+  const res = await runPass(req(r, { session: "s1" }), r.deps);
+  assert.equal(res.account, "pi/k2");
+  assert.equal(getSession(r.store.db, "pi", "s1")!.account, "pi/k2");
+  assert.ok(!existsSync(join(r.home.sessions, "pi", "k1", "s1")), "the folder of the account that did not run is gone");
+});
+
+test("a bad session id throws before anything is made", async () => {
+  const r = rig();
+  for (const bad of ["", "../x", "A", "-a", "a/b", "a".repeat(65)])
+    await assert.rejects(runPass(req(r, { session: bad }), r.deps), /session id/, bad);
+  assert.equal(passes(r).length, 0);
+  assert.equal(r.fake.calls().length, 0);
+});
+
+test("claude (and any non-pi runner) refuses a session with a clear error", async () => {
+  const r = rig();
+  await assert.rejects(runPass(req(r, { runner: "claude", model: "claude-opus-5-5", session: "s1" }), r.deps), /claude.*session|session.*claude/);
+  assert.equal(passes(r).length, 0);
+  assert.equal(r.fake.calls().length, 0);
+});
+
+// ---- codex ----
+
+/** A rig with one codex account of the given kind, holding made-up files only. */
+function codexRig(kind: "key" | "login", more: Partial<RunDeps> = {}): Rig {
+  const r = rig([], kind === "login" ? { busy: () => false, ...more } : more);
+  addAccount(r.store.db, { runner: "codex", name: "c1", kind }, NOW);
+  const dir = join(r.home.accounts, "codex", "c1");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, "auth.json"), '{"fake":"not-a-real-login"}', { mode: 0o600 });
+  r.fake.setModes("codex-ok");
+  return r;
+}
+
+const codexReq = (r: Rig, more: Partial<PassRequest> = {}): PassRequest => req(r, { runner: "codex", model: "gpt-6.1-sol", prompt: "say ok", ...more });
+
+test("codex key pass: prompt on stdin, fresh input and the requested model recorded, usage export written", async () => {
+  const r = codexRig("key");
+  const res = await runPass(codexReq(r, { prompt: "say the word ok" }), r.deps);
+  assert.equal(res.failure, undefined);
+  assert.equal(res.account, "codex/c1");
+  assert.equal(res.text, "ok");
+  assert.deepEqual(res.usage, { input: 14081, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 });
+  assert.deepEqual(r.fake.stdins(), ["say the word ok"]);
+  assert.ok(!r.fake.callsOf("run")[0]!.includes("say the word ok"));
+  const files = readdirSync(r.home.usageExport);
+  assert.equal(files.length, 1);
+  const lines = readFileSync(join(r.home.usageExport, files[0]!), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines[1].message.provider, "openai");
+  assert.equal(lines[1].message.model, "gpt-6.1-sol");
+});
+
+test("codex login pass: real folder at /codex, the lock, and a read-only empty config.toml over it, after the account mount", async () => {
+  const r = codexRig("login");
+  const res = await runPass(codexReq(r), r.deps);
+  assert.equal(res.account, "codex/c1");
+  const argv = r.fake.callsOf("run")[0]!;
+  const m = mountsOf(argv);
+  const acct = m.findIndex((x) => x.target === "/codex");
+  const over = m.findIndex((x) => x.target === "/codex/config.toml");
+  assert.ok(acct >= 0 && over > acct, "the overlay comes after the account mount");
+  assert.equal(m[acct]!.source, join(r.home.accounts, "codex", "c1"));
+  assert.ok(m[over]!.source.endsWith("/assets/codex-config.toml"));
+  assert.ok(!m[over]!.source.startsWith(r.home.root), "the overlay file is outside the home");
+  assert.ok(argv.some((a) => a.includes("target=/codex/config.toml,readonly")));
+  assert.equal(m.filter((x) => x.target === "/squad/lock").length, 1);
+  const body = readFileSync(m[over]!.source, "utf8");
+  assert.ok(body.split("\n").every((l) => l.trim() === "" || l.trim().startsWith("#")), "only comments");
+});
+
+test("codex: the config.toml mount target exists as a user file before the pass, so docker does not make a root-owned one", async () => {
+  const r = codexRig("login");
+  const target = join(r.home.accounts, "codex", "c1", "config.toml");
+  assert.ok(!existsSync(target));
+  await runPass(codexReq(r), r.deps);
+  assert.ok(existsSync(target));
+  assert.equal(statSync(target).uid, process.getuid!());
+  assert.equal(statSync(target).mode & 0o777, 0o600);
+});
+
+test("codex: the out dir is fresh, outside the home, and gone after the pass", async () => {
+  const r = codexRig("key");
+  await runPass(codexReq(r), r.deps);
+  const out = mountsOf(r.fake.callsOf("run")[0]!).find((x) => x.target === "/squad/out")!;
+  assert.ok(!out.source.startsWith(r.home.root) && !out.source.startsWith(r.cwd));
+  assert.ok(out.source.startsWith(tmpdir()));
+  assert.equal(existsSync(out.source), false);
+});
+
+test("codex: the last-message file is used only when the stream has no agent_message", async () => {
+  const r = codexRig("key");
+  r.fake.setModes("codex-file", "codex-ok");
+  const a = await runPass(codexReq(r), r.deps);
+  assert.equal(a.text, "from the file");
+  assert.deepEqual(a.texts, ["from the file"]);
+  const b = await runPass(codexReq(r), r.deps);
+  assert.equal(b.text, "ok");
+});
+
+test("codex: a token account cannot be added (docker.ts refuses it too)", () => {
+  const r = rig([]);
+  assert.throws(() => addAccount(r.store.db, { runner: "codex", name: "t", kind: "token" }, NOW), /token/);
+});
+
+test("codex: model_not_found is a provider failure, and the account stays alive", async () => {
+  const r = codexRig("key");
+  r.fake.setModes("codex-model-not-found");
+  const res = await runPass(codexReq(r, { model: "no-such-model" }), r.deps);
+  assert.equal(res.failure?.kind, "provider");
+  assert.equal(res.failure?.code, "model_not_found");
+  assert.equal(getAccount(r.store.db, "codex/c1")?.state, "active");
+});
+
+test("codex: a refresh_token_reused failure marks the login account dead and writes a dead event", async () => {
+  // shape test: the stream is invented (no capture of this failure exists).
+  const r = codexRig("login");
+  r.fake.setModes("codex-reused");
+  const res = await runPass(codexReq(r), r.deps);
+  assert.equal(res.failure?.kind, "auth");
+  assert.equal(res.failure?.code, "refresh_token_reused");
+  assert.equal(getAccount(r.store.db, "codex/c1")?.state, "dead");
+  const ev = r.store.db.prepare("SELECT kind, account, code FROM events").all().map((e) => ({ ...e }));
+  assert.deepEqual(ev, [{ kind: "dead", account: "codex/c1", code: "refresh_token_reused" }]);
+});
+
+test("breaker: a pool whose every account is cooling or dead gets no-account at once, with no container", async () => {
+  const r = rig(["k1", "k2"]);
+  putHealth(r.store.db, { ...emptyHealth("pi/k1"), coolUntil: new Date(NOW.getTime() + 60_000).toISOString(), coolKind: "rate-limit" });
+  setState(r.store.db, "pi/k2", "dead", "x", NOW);
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.failure?.kind, "no-account");
+  assert.equal(res.failure?.message, "breaker open: every pi account is cooling or dead");
+  assert.equal(res.account, null);
+  assert.equal(r.fake.callsOf("run").length, 0);
+  assert.equal(passes(r).length, 1, "the refusal is a pass row, as any no-account is");
+});
+
+test("breaker: closed while one account can run, and a named account is not checked by it", async () => {
+  const r = rig(["k1", "k2"]);
+  putHealth(r.store.db, { ...emptyHealth("pi/k1"), coolUntil: new Date(NOW.getTime() + 60_000).toISOString(), coolKind: "rate-limit" });
+  const res = await runPass(req(r), r.deps);
+  assert.equal(res.account, "pi/k2");
+  const named = await runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps);
+  assert.ok(!named.failure?.message.startsWith("breaker open"));
+});

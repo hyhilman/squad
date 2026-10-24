@@ -1,0 +1,15 @@
+node_modules
+dist/
+.astro/
+*.db
+*.db-wal
+*.db-shm
+.env
+# A project's squad home: account folders, locks, the database. Never committed.
+.squad/
+squad.secret.toml
+# Internal notes: they name private infrastructure, so they stay out of git.
+docs/private/
+# Agent and dev git worktrees live here; they are full checkouts, never this repo's source.
+.worktrees/
+*.tgz

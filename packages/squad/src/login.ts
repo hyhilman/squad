@@ -1,0 +1,189 @@
+// `squad login` and the argv of a person's terminal session (`login`, `shell`).
+//
+// A login runs the real CLI login in a container whose account mount is a fresh staging folder. No
+// lock is mounted: nothing else can see staging. Only when the login worked does the folder move into
+// `accounts/`, under the account lock, in one rename. So a failed or wrong-owner login never
+// touches the account that is there.
+
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { identityOf } from "./accounts/identity.ts";
+import { addAccount, getAccount, reviveByLogin, setOwnerEmail, ACCOUNT_NAME } from "./accounts/store.ts";
+import { dockerRunArgv, type AccountKind, type PassPlan, type Runner } from "./docker.ts";
+import type { HomeLayout } from "./home.ts";
+import { IMAGES } from "./images.ts";
+import { ulid } from "./ids.ts";
+import { withHostLock } from "./lock.ts";
+import type { Store } from "./store/db.ts";
+
+export interface TerminalOpts {
+  /** A throwaway folder for the container's cwd. The real cwd may hold the home, which a mount must not touch. */
+  readonly cwd: string;
+  readonly passId: string;
+  readonly project: string;
+  readonly user: { readonly uid: number; readonly gid: number } | null;
+  readonly home: string;
+  readonly image?: string;
+  readonly identity?: { readonly name: string; readonly email: string };
+}
+
+function terminalPlan(runner: Runner, account: PassPlan["account"], lockFile: string | null, args: readonly string[], o: TerminalOpts, action: string, entrypoint?: string): PassPlan {
+  return {
+    runner,
+    image: o.image ?? IMAGES[runner].tag,
+    name: `squad-${action}-${o.passId.toLowerCase()}`,
+    passId: o.passId,
+    purpose: action === "login" ? "login" : "shell",
+    caller: { project: o.project, flow: "cli" },
+    user: o.user,
+    cwd: o.cwd,
+    gitDir: join(o.cwd, ".git"),
+    mounts: [],
+    overlays: [],
+    session: null,
+    account,
+    lockFile,
+    identity: o.identity ?? { name: "squad", email: "squad@localhost" },
+    ghDir: null,
+    home: o.home,
+    env: {},
+    args,
+    tty: true,
+    ...(entrypoint === undefined ? {} : { entrypoint }),
+  };
+}
+
+/** The CLI args that start a login, after the image's entrypoint. claude is refused: its login needs a capture we have not made. */
+function loginArgs(runner: Runner): string[] {
+  if (runner === "codex") return ["login", "--device-auth"];
+  if (runner === "pi") return []; // the person types /login
+  throw new Error("squad login is not ready for claude: make a token with `claude setup-token` and use `squad add-token`");
+}
+
+/** The `docker run` argv of a login into `staging`. There is no lock: nothing else can see staging. */
+export function loginArgv(runner: Runner, o: TerminalOpts & { readonly staging: string; readonly name?: string }): string[] {
+  const args = loginArgs(runner);
+  // Kind "key" only means "mount the folder, take no lock"; the row is made after the login.
+  return dockerRunArgv(terminalPlan(runner, { name: o.name ?? "login", kind: "key", dir: o.staging }, null, args, o, "login"));
+}
+
+/** The argv of a bash session on one account, behind the same lock, key copy or token file a pass uses. */
+export function shellArgv(account: { readonly runner: Runner; readonly name: string; readonly kind: AccountKind }, o: TerminalOpts & { readonly dir: string; readonly lockFile: string | null }): string[] {
+  return dockerRunArgv(terminalPlan(account.runner, { name: account.name, kind: account.kind, dir: o.dir }, o.lockFile, ["bash"], o, "shell", "squad-entry"));
+}
+
+export interface Out {
+  readonly stdout: (s: string) => void;
+  readonly stderr: (s: string) => void;
+}
+
+export interface LoginParams {
+  readonly store: Store;
+  readonly home: HomeLayout;
+  readonly runner: Runner;
+  readonly name: string;
+  readonly owner?: string;
+  readonly docker: string;
+  readonly interactive: (docker: string, argv: readonly string[]) => Promise<number>;
+  readonly dryRun: boolean;
+  readonly project: string;
+  readonly user: TerminalOpts["user"];
+  readonly now: Date;
+  readonly out: Out;
+}
+
+/** Exit codes: 0 done, 1 failed, 2 wrong use. */
+export async function runLogin(p: LoginParams): Promise<number> {
+  const { store, home, runner, name, out } = p;
+  const id = `${runner}/${name}`;
+  if (runner !== "codex" && runner !== "pi" && runner !== "claude") {
+    out.stderr(`squad login: unknown runner ${runner}\n`);
+    return 2;
+  }
+  if (!ACCOUNT_NAME.test(name)) {
+    out.stderr(`squad login: account name ${JSON.stringify(name)} is not safe for a folder name\n`);
+    return 2;
+  }
+  const existing = getAccount(store.db, id);
+  if (existing !== undefined && (existing.state !== "dead" || existing.kind !== "login")) {
+    out.stderr(`${id} exists (${existing.kind}, ${existing.state}): use a new name or wait until it is dead\n`);
+    return 2;
+  }
+  const passId = ulid(p.now.getTime());
+  const staging = join(home.staging, passId);
+  const cwd = join(tmpdir(), `squad-login-${passId}`);
+  const opts = { cwd, passId, project: p.project, user: p.user, home: home.root, staging, name };
+  let argv: string[];
+  try {
+    argv = loginArgv(runner, opts);
+  } catch (e) {
+    out.stderr(`${e instanceof Error ? e.message : "cannot build the login"}\n`);
+    return 2;
+  }
+  if (p.dryRun) {
+    out.stdout(`${p.docker} ${argv.join(" ")}\n`);
+    out.stdout(`plan: log in to ${id} in ${staging}; check the owner; move it into accounts under the lock; ${existing === undefined ? "register" : "revive"} the account\n`);
+    return 0;
+  }
+
+  mkdirSync(staging, { recursive: true, mode: 0o700 });
+  mkdirSync(cwd, { mode: 0o700 });
+  let code: number;
+  try {
+    code = await p.interactive(p.docker, argv);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+  const drop = (): void => rmSync(staging, { recursive: true, force: true });
+  if (code !== 0) {
+    drop();
+    out.stderr(`the login did not finish (exit ${code}); nothing was changed\n`);
+    return 1;
+  }
+  if (readdirSync(staging).length === 0) {
+    drop();
+    out.stderr("the login wrote no files; nothing was changed\n");
+    return 1;
+  }
+
+  const found = identityOf(runner, "login", staging);
+  if (p.owner !== undefined && found !== null && found.email.toLowerCase() !== p.owner.toLowerCase()) {
+    drop();
+    out.stderr(`the login is for ${found.email}, not ${p.owner}; nothing was moved\n`);
+    return 1;
+  }
+  const ownerEmail = found?.email ?? p.owner ?? null;
+
+  const dest = join(home.accounts, runner, name);
+  const stamp = p.now.toISOString().replace(/\D/g, "");
+  const aside: { old: string | null } = { old: null };
+  const locked = await withHostLock(join(home.locks, runner, `${name}.lock`), () => {
+    mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
+    const oldPath = join(dirname(dest), `.${name}.old-${stamp}`);
+    const had = existsSync(dest);
+    if (had) renameSync(dest, oldPath);
+    try {
+      renameSync(staging, dest);
+    } catch (e) {
+      if (had) renameSync(oldPath, dest);
+      throw e;
+    }
+    aside.old = had ? oldPath : null;
+  });
+  if (locked === "busy") {
+    drop();
+    out.stderr(`${id}: account busy (a pass holds it); the new login was dropped, nothing was changed\n`);
+    return 1;
+  }
+  if (aside.old !== null) rmSync(aside.old, { recursive: true, force: true });
+
+  if (existing === undefined) addAccount(store.db, { runner, name, kind: "login", ...(ownerEmail === null ? {} : { ownerEmail }) }, p.now);
+  else {
+    reviveByLogin(store.db, id);
+    if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
+  }
+  store.event({ at: p.now.toISOString(), kind: "login", account: id });
+  out.stdout(`logged in ${id}${ownerEmail === null ? "" : ` (${ownerEmail})`}\n`);
+  return 0;
+}

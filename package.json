@@ -1,0 +1,21 @@
+{
+  "name": "squad-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/contract",
+    "packages/squad",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  }
+}

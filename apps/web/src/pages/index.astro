@@ -1,0 +1,16 @@
+---
+// The one page. The whole app is a single React island: Refine needs the browser (router, query
+// cache), so it renders on the client only.
+import App from "../app/App.tsx";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>squad</title>
+  </head>
+  <body>
+    <App client:only="react" />
+  </body>
+</html>

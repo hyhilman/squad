@@ -1,0 +1,240 @@
+// OIDC sign-in: code flow with PKCE, no library. This file never keeps the access, refresh or ID
+// token. It checks the ID token once, then the session holds only the email, name, groups and expiry.
+// An error from here carries a fixed reason word, never a token, a code or a claim.
+import { createHash, createPublicKey, timingSafeEqual, verify, randomBytes, type KeyObject } from "node:crypto";
+import { deriveKey, seal, unseal } from "./seal.ts";
+
+export interface OidcConfig {
+  /** The public base URL of the web app, no trailing slash. */
+  readonly url: string;
+  readonly issuer: string;
+  readonly clientId: string;
+  readonly group?: string;
+  readonly clientSecret?: string;
+  readonly sessionKey: Buffer;
+  readonly secure: boolean;
+}
+
+export interface Session {
+  readonly email: string;
+  readonly name: string;
+  readonly groups: readonly string[];
+  /** Epoch seconds. */
+  readonly exp: number;
+}
+
+export type FailReason = "no-login-cookie" | "provider-error" | "state-mismatch" | "token-endpoint" | "bad-id-token" | "email-unverified" | "not-in-group";
+
+export type FinishResult =
+  | { readonly ok: true; readonly session: Session; readonly setCookies: readonly string[] }
+  | { readonly ok: false; readonly reason: FailReason; readonly setCookies: readonly string[] };
+
+export interface OidcDeps {
+  readonly fetch?: typeof globalThis.fetch;
+  /** Epoch milliseconds. */
+  readonly now?: () => number;
+}
+
+export const SESSION_COOKIE = "squad_session";
+export const LOGIN_COOKIE = "squad_oidc";
+const LOGIN_TTL_S = 600;
+const SESSION_TTL_S = 12 * 3600;
+const DOC_TTL_MS = 3600_000;
+const SKEW_S = 60;
+const HTTP_TIMEOUT_MS = 10_000;
+const MAX_JSON = 1_000_000;
+
+interface Doc {
+  readonly authorization_endpoint: string;
+  readonly token_endpoint: string;
+  readonly jwks_uri: string;
+}
+type Jwk = Record<string, unknown>;
+type Claims = Record<string, unknown>;
+
+const b64u = (n: number): string => randomBytes(n).toString("base64url");
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string" && v !== "";
+
+/** Compares in constant time: both sides are hashed first, so the lengths match. */
+function sameSecret(a: string, b: string): boolean {
+  return timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+}
+
+function cookies(header: string | undefined): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const part of (header ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) m.set(part.slice(0, i).trim(), part.slice(i + 1).trim());
+  }
+  return m;
+}
+
+export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
+  const doFetch = deps.fetch ?? globalThis.fetch;
+  const now = deps.now ?? Date.now;
+  const loginKey = deriveKey(cfg.sessionKey, "login");
+  const sessionKey = deriveKey(cfg.sessionKey, "session");
+  const redirectUri = `${cfg.url}/auth/callback`;
+
+  const cookie = (name: string, value: string, path: string, maxAge: number): string =>
+    `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${maxAge}${cfg.secure ? "; Secure" : ""}`;
+  const clearLogin = (): string => cookie(LOGIN_COOKIE, "", "/auth", 0);
+
+  async function getJson(url: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
+    const res = await doFetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+    const text = await res.text();
+    let body: unknown;
+    try {
+      body = text.length > MAX_JSON ? undefined : JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    return { status: res.status, body };
+  }
+
+  let doc: { value: Doc; at: number } | undefined;
+  async function discovery(): Promise<Doc> {
+    if (doc !== undefined && now() - doc.at < DOC_TTL_MS) return doc.value;
+    const { status, body } = await getJson(`${cfg.issuer.replace(/\/$/, "")}/.well-known/openid-configuration`);
+    if (status !== 200 || !isObj(body)) throw new Error("oidc discovery failed");
+    if (body.issuer !== cfg.issuer) throw new Error("oidc discovery issuer does not match SQUAD_OIDC_ISSUER");
+    const { authorization_endpoint, token_endpoint, jwks_uri } = body;
+    if (!isStr(authorization_endpoint) || !isStr(token_endpoint) || !isStr(jwks_uri)) throw new Error("oidc discovery document is incomplete");
+    doc = { value: { authorization_endpoint, token_endpoint, jwks_uri }, at: now() };
+    return doc.value;
+  }
+
+  let jwks: Jwk[] | undefined;
+  async function keys(refetch: boolean): Promise<Jwk[]> {
+    if (jwks !== undefined && !refetch) return jwks;
+    const { status, body } = await getJson((await discovery()).jwks_uri);
+    if (status !== 200 || !isObj(body) || !Array.isArray(body.keys)) throw new Error("jwks fetch failed");
+    jwks = body.keys.filter(isObj);
+    return jwks;
+  }
+
+  /** The keys that may have signed a token with this header. */
+  function candidates(all: readonly Jwk[], alg: "RS256" | "ES256", kid: unknown): KeyObject[] {
+    const out: KeyObject[] = [];
+    for (const jwk of all) {
+      if (kid !== undefined && jwk.kid !== kid) continue;
+      if (jwk.use !== undefined && jwk.use !== "sig") continue;
+      if (jwk.alg !== undefined && jwk.alg !== alg) continue;
+      if (jwk.kty !== (alg === "RS256" ? "RSA" : "EC") || (alg === "ES256" && jwk.crv !== "P-256")) continue;
+      try {
+        const key = createPublicKey({ key: jwk as never, format: "jwk" });
+        if (alg === "RS256" && (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
+        out.push(key);
+      } catch {
+        // a key we cannot read is not a candidate
+      }
+    }
+    // A token with no kid is only accepted when one key could have signed it.
+    return kid === undefined && out.length !== 1 ? [] : out;
+  }
+
+  /** The claims of a token whose signature, issuer, audience, times and nonce all check. Throws otherwise. */
+  async function verifyIdToken(token: string, nonce: string): Promise<Claims> {
+    const parts = token.split(".");
+    if (parts.length !== 3 || parts.some((p) => !/^[A-Za-z0-9_-]*$/.test(p))) throw new Error("malformed");
+    const header: unknown = JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8"));
+    if (!isObj(header) || (header.alg !== "RS256" && header.alg !== "ES256")) throw new Error("alg");
+    const alg = header.alg;
+    const input = Buffer.from(`${parts[0]}.${parts[1]}`);
+    const sig = Buffer.from(parts[2]!, "base64url");
+    const good = (list: readonly KeyObject[]): boolean =>
+      list.some((k) => (alg === "RS256" ? verify("sha256", input, k, sig) : sig.length === 64 && verify("sha256", input, { key: k, dsaEncoding: "ieee-p1363" }, sig)));
+    let ok = good(candidates(await keys(false), alg, header.kid));
+    if (!ok && header.kid !== undefined) ok = good(candidates(await keys(true), alg, header.kid));
+    if (!ok) throw new Error("signature");
+    const c: unknown = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
+    if (!isObj(c)) throw new Error("claims");
+    const nowS = Math.floor(now() / 1000);
+    if (c.iss !== cfg.issuer) throw new Error("iss");
+    const aud = c.aud;
+    if (!(aud === cfg.clientId || (Array.isArray(aud) && aud.includes(cfg.clientId)))) throw new Error("aud");
+    if (Array.isArray(aud) && aud.length > 1 && c.azp !== cfg.clientId) throw new Error("azp");
+    if (typeof c.exp !== "number" || c.exp <= nowS) throw new Error("exp");
+    if (typeof c.iat !== "number" || c.iat > nowS + SKEW_S) throw new Error("iat");
+    if (!isStr(c.nonce) || !sameSecret(c.nonce, nonce)) throw new Error("nonce");
+    return c;
+  }
+
+  return {
+    /** Where to send the browser, and the login cookie to set with it. */
+    async startLogin(): Promise<{ location: string; setCookie: string }> {
+      const d = await discovery();
+      const state = b64u(32);
+      const nonce = b64u(32);
+      const verifier = b64u(32);
+      const u = new URL(d.authorization_endpoint);
+      u.searchParams.set("response_type", "code");
+      u.searchParams.set("client_id", cfg.clientId);
+      u.searchParams.set("redirect_uri", redirectUri);
+      u.searchParams.set("scope", "openid email profile groups");
+      u.searchParams.set("state", state);
+      u.searchParams.set("nonce", nonce);
+      u.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
+      u.searchParams.set("code_challenge_method", "S256");
+      const sealed = seal(loginKey, { state, nonce, verifier, exp: now() + LOGIN_TTL_S * 1000 });
+      return { location: u.toString(), setCookie: cookie(LOGIN_COOKIE, sealed, "/auth", LOGIN_TTL_S) };
+    },
+
+    async finishLogin(query: URLSearchParams, cookieHeader: string | undefined): Promise<FinishResult> {
+      const fail = (reason: FailReason): FinishResult => ({ ok: false, reason, setCookies: [clearLogin()] });
+      const raw = cookies(cookieHeader).get(LOGIN_COOKIE);
+      const login = raw === undefined ? undefined : unseal(loginKey, raw);
+      if (!isObj(login) || !isStr(login.state) || !isStr(login.nonce) || !isStr(login.verifier) || typeof login.exp !== "number" || login.exp <= now()) return fail("no-login-cookie");
+      if (query.has("error")) return fail("provider-error");
+      const state = query.get("state");
+      const code = query.get("code");
+      if (state === null || !sameSecret(state, login.state)) return fail("state-mismatch");
+      if (code === null || code === "") return fail("provider-error");
+
+      const form = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, code_verifier: login.verifier });
+      const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
+      if (cfg.clientSecret === undefined) form.set("client_id", cfg.clientId);
+      else headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(cfg.clientSecret)}`).toString("base64")}`;
+      let idToken: unknown;
+      try {
+        const { status, body } = await getJson((await discovery()).token_endpoint, { method: "POST", headers, body: form.toString() });
+        if (status !== 200 || !isObj(body)) return fail("token-endpoint");
+        idToken = body.id_token; // the access and refresh tokens in `body` are dropped unread
+      } catch {
+        return fail("token-endpoint");
+      }
+      if (!isStr(idToken)) return fail("token-endpoint");
+
+      let claims: Claims;
+      try {
+        claims = await verifyIdToken(idToken, login.nonce);
+      } catch {
+        return fail("bad-id-token");
+      }
+      if (!isStr(claims.email) || claims.email_verified !== true) return fail("email-unverified");
+      const groups = Array.isArray(claims.groups) ? claims.groups.filter(isStr) : [];
+      if (cfg.group !== undefined && !groups.includes(cfg.group)) return fail("not-in-group");
+      const session: Session = {
+        email: claims.email,
+        name: isStr(claims.name) ? claims.name : isStr(claims.preferred_username) ? claims.preferred_username : claims.email,
+        groups,
+        exp: Math.floor(now() / 1000) + SESSION_TTL_S,
+      };
+      return { ok: true, session, setCookies: [cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S), clearLogin()] };
+    },
+
+    /** The session in a Cookie header, or undefined when none, forged, or past its expiry. */
+    readSession(cookieHeader: string | undefined): Session | undefined {
+      const raw = cookies(cookieHeader).get(SESSION_COOKIE);
+      const s = raw === undefined ? undefined : unseal(sessionKey, raw);
+      if (!isObj(s) || !isStr(s.email) || typeof s.name !== "string" || !Array.isArray(s.groups) || typeof s.exp !== "number") return undefined;
+      if (s.exp <= Math.floor(now() / 1000)) return undefined;
+      return { email: s.email, name: s.name, groups: s.groups.filter(isStr), exp: s.exp };
+    },
+
+    clearSessionCookie: (): string => cookie(SESSION_COOKIE, "", "/", 0),
+  };
+}
+
+export type Oidc = ReturnType<typeof createOidc>;

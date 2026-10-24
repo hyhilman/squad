@@ -1,0 +1,14 @@
+{
+  "name": "@squad/contract",
+  "private": true,
+  "version": "0.1.0-dev",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "pretest": "npm run typecheck",
+    "test": "node --test \"src/**/*.test.ts\""
+  }
+}

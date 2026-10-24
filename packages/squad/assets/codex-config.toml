@@ -1,0 +1,1 @@
+# Empty on purpose. squad mounts this read-only over /codex/config.toml so codex cannot write its per-pass trust entry into the account folder.

@@ -1,0 +1,32 @@
+{
+  "name": "squad",
+  "private": true,
+  "version": "0.1.0-rc.1",
+  "type": "module",
+  "bin": {
+    "squad": "dist/cli/squad.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "squad": "node src/cli/squad.ts",
+    "build": "node scripts/build.ts",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "npm run typecheck",
+    "test": "node --test --import ./test/tmp-root.ts $TEST_ARGS \"src/**/*.test.ts\" \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@squad/contract": "0.1.0-dev"
+  }
+}

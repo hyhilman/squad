@@ -1,0 +1,9 @@
+# The runner has gh but no git credential helper, so `git fetch`/`git push` over https prompt
+# and fail. gh holds the token at $GH_CONFIG_DIR, mounted read-only for one pass. The empty helper
+# clears any inherited one first, so only gh answers.
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true,
+    // Read the vendored contract build (scripts/build.ts makes it first), so tsc does not pull in its sources.
+    "paths": { "@squad/contract": ["./dist/vendor/contract/index.d.ts"] }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

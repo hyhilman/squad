@@ -1,0 +1,28 @@
+{
+  "name": "@squad/web",
+  "private": true,
+  "version": "0.1.0-dev",
+  "type": "module",
+  "scripts": {
+    "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "typecheck": "ASTRO_TELEMETRY_DISABLED=1 astro check",
+    "test": "npm run typecheck && node --test \"src/app/lib/*.test.ts\""
+  },
+  "dependencies": {
+    "@astrojs/react": "7.0.1",
+    "@refinedev/core": "5.0.12",
+    "@refinedev/react-router": "2.0.4",
+    "@squad/contract": "0.1.0-dev",
+    "@tanstack/react-query": "5.104.1",
+    "astro": "7.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "7.18.4"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
+  }
+}
