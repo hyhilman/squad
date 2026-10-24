@@ -464,7 +464,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       const first = catalogModelCompare(catalog, params.modelId, ctx, []);
       if (first === undefined) throw new HttpError(404, "not-found", "no such model in the catalog");
       const since = new Date(now().getTime() - HISTORY_DAYS * 86_400_000);
-      return { ...first, history: priceHistory(db, params.modelId, first.offers.map((x) => x.provider), since) };
+      return { ...first, history: priceHistory(db, first.offers, since) };
     },
     addAccount: ({ session, body }) => {
       // The setting is enforced here, not only in the list the page shows.

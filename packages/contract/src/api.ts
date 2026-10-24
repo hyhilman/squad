@@ -225,6 +225,8 @@ export interface CatalogProviderView {
 /** One model of one catalog provider. Embedding models are left out. */
 export interface CatalogModelView {
   readonly id: string;
+  /** The catalog's canonical id, such as `meta/muse-wonder-1.0`, when it gives one. */
+  readonly canonical?: string;
   /** The catalog name, or the id when it has none. */
   readonly name: string;
   readonly reasoning: boolean;
@@ -235,7 +237,7 @@ export interface CatalogModelView {
   readonly inputs: readonly string[];
   /** null when the catalog has no price (the saved copy keeps only priced models, so it is rare). */
   readonly price: CatalogPrice | null;
-  /** How many other catalog providers list a model with exactly this id. */
+  /** How many other catalog providers list the same model: the same canonical id, or the same id when one of the two has no canonical id. */
   readonly otherProviders: number;
 }
 
@@ -248,6 +250,8 @@ export interface CatalogProviderDetail {
 /** One provider that lists a model, for the compare page. */
 export interface CatalogOffer {
   readonly provider: string;
+  /** The model's id at this provider. It can differ from the asked id when the canonical id matched. */
+  readonly modelId: string;
   readonly providerName: string;
   readonly runner: Runner;
   readonly offered: boolean;
@@ -263,17 +267,23 @@ export interface CatalogOffer {
 /** One price_history row: the price a provider asked from this time on. */
 export interface CatalogPricePoint {
   readonly provider: string;
+  /** The model's id at this provider. */
+  readonly modelId: string;
   readonly at: string;
   readonly input: number;
   readonly output: number;
 }
 
 /**
- * One model id across the catalog. Providers match by the exact model id: the saved copy keeps no
- * canonical id, so the same model under another id (such as `muse-wonder-1-0`) is not in the list.
+ * One model across the catalog. The asked id is a model id or a canonical id. Models match by their
+ * canonical id (so kenari's `muse-wonder-1-0` meets opencode's `muse-wonder-1.0`), or by the exact
+ * id when one of the two has no canonical id.
  */
 export interface CatalogModelCompare {
+  /** The id that was asked for. */
   readonly modelId: string;
+  /** The canonical id the offers share, when they have one. */
+  readonly canonical?: string;
   readonly name: string;
   /** Sorted by input price, then output price, then provider id. */
   readonly offers: readonly CatalogOffer[];
@@ -456,7 +466,7 @@ export interface Api {
   /** Every provider of the saved catalog, sorted by name. Empty when squad has no saved copy. */
   catalogProviders: { params: void; query: void; body: void; res: readonly CatalogProviderView[] };
   catalogProvider: { params: { readonly provider: string }; query: void; body: void; res: CatalogProviderDetail };
-  /** `modelId`: 1 to 200 visible characters; it may hold dots, colons and slashes (pathOf encodes them). */
+  /** `modelId`: a model id or a canonical id, 1 to 200 visible characters; it may hold dots, colons and slashes (pathOf encodes them). */
   catalogModel: { params: { readonly modelId: string }; query: void; body: void; res: CatalogModelCompare };
 }
 

@@ -33,7 +33,8 @@ function Status({ o, alone }: { o: CatalogOffer; alone: boolean }) {
   );
 }
 
-function ProviderName({ o }: { o: CatalogOffer }) {
+/** `asked`: the page's model id; an offer under another id shows its own. */
+function ProviderName({ o, asked }: { o: CatalogOffer; asked: string }) {
   return (
     <HStack gap="3" minW="0">
       <ProviderLogo logoId={o.provider} name={o.providerName} />
@@ -42,8 +43,8 @@ function ProviderName({ o }: { o: CatalogOffer }) {
           <RouterLink to={providerPath(o.provider)}>{o.providerName}</RouterLink>
         </Link>
         <HStack gap="1.5">
-          <Text fontSize="xs" color="fg.subtle" fontFamily="mono" truncate>
-            {o.provider}
+          <Text fontSize="xs" color="fg.subtle" fontFamily="mono" truncate title={`${o.provider}/${o.modelId}`}>
+            {o.modelId === asked ? o.provider : `${o.provider}/${o.modelId}`}
           </Text>
           <RunnerBadge runner={o.runner} />
         </HStack>
@@ -88,7 +89,7 @@ export function CatalogModel() {
         description={
           <>
             <Text as="span" fontFamily="mono">
-              {m.modelId}
+              {m.canonical ?? m.modelId}
             </Text>
             {` · ${m.offers.length} provider${m.offers.length === 1 ? "" : "s"}`}
             {best?.price == null ? "" : ` · from ${perMillionText(best.price.input)}${best.price.input === 0 ? "" : " / 1M in"} at ${best.providerName}`}
@@ -98,8 +99,8 @@ export function CatalogModel() {
       <Panel title="Providers" description="Cheapest input price first. Prices in dollars per 1M tokens." flush overflow="hidden" mb="6">
         <Stack hideFrom="md" gap="0">
           {m.offers.map((o) => (
-            <Box key={o.provider} px="4" py="3.5" borderTopWidth="1px" borderColor="border.subtle" bg={o.cheapest && !alone ? "green.subtle/40" : undefined}>
-              <ProviderName o={o} />
+            <Box key={`${o.provider}/${o.modelId}`} px="4" py="3.5" borderTopWidth="1px" borderColor="border.subtle" bg={o.cheapest && !alone ? "green.subtle/40" : undefined}>
+              <ProviderName o={o} asked={m.modelId} />
               <Flex mt="2" gap="4" rowGap="1" wrap="wrap" fontSize="sm" color="fg.muted">
                 <Text>
                   In <PriceCell v={o.price?.input} cheapest={false} />
@@ -130,9 +131,9 @@ export function CatalogModel() {
             </Table.Header>
             <Table.Body>
               {m.offers.map((o) => (
-                <Table.Row key={o.provider} bg={o.cheapest && !alone ? "green.subtle/40" : undefined}>
+                <Table.Row key={`${o.provider}/${o.modelId}`} bg={o.cheapest && !alone ? "green.subtle/40" : undefined}>
                   <Table.Cell ps="5" py="3">
-                    <ProviderName o={o} />
+                    <ProviderName o={o} asked={m.modelId} />
                   </Table.Cell>
                   {(["input", "output", "cacheRead", "cacheWrite"] as const).map((k) => (
                     <Table.Cell key={k} textAlign="end" fontSize="sm" fontVariantNumeric="tabular-nums" fontWeight={o.cheapest && !alone && k === "input" ? "600" : undefined} color={o.price?.[k] === undefined ? "fg.subtle" : undefined}>
@@ -158,7 +159,7 @@ export function CatalogModel() {
       ) : null}
       {m.offers.length === 1 ? (
         <Text fontSize="sm" color="fg.muted">
-          Only one provider lists this exact model id. squad matches models by their exact id, so the same model under another id is not shown here.
+          Only one provider lists this model. squad matches models by the catalog's canonical id, or by the exact id when the catalog gives none.
         </Text>
       ) : null}
     </>

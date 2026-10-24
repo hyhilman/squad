@@ -1211,7 +1211,7 @@ test("catalogProvider: the models of one provider; 404 for an unknown id, 400 fo
   assert.equal(res.status, 200);
   assert.equal(findForbidden(res.body), undefined);
   assert.equal(res.body.provider.name, "OpenCode");
-  assert.deepEqual(res.body.models.map((m) => [m.id, m.otherProviders]), [["claude-sonnet-4-6", 1], ["muse-wonder-1.0", 0], ["qwen3.8-max", 3]]);
+  assert.deepEqual(res.body.models.map((m) => [m.id, m.otherProviders]), [["claude-sonnet-4-6", 1], ["muse-wonder-1.0", 1], ["qwen3.8-max", 3]]);
   const nope = await api<ApiError>(r, c, "GET", "/api/catalog/providers/nope");
   assert.deepEqual([nope.status, nope.body.error], [404, "not-found"]);
   for (const bad of ["-x", "a%20b", "x".repeat(65)]) assert.equal((await api(r, c, "GET", `/api/catalog/providers/${bad}`)).status, 400, bad);
@@ -1219,7 +1219,7 @@ test("catalogProvider: the models of one provider; 404 for an unknown id, 400 fo
   await r.close();
 });
 
-test("catalogModel: one exact model id across providers, cheapest first, with the price history of the last 90 days", async () => {
+test("catalogModel: one model across providers, cheapest first, with the price history of the last 90 days", async () => {
   const r = await rig();
   await withCatalog(r);
   recordPriceHistory(r.store.db, new Map([["sumopod/qwen3.8-max", { input: 1.5, output: 4 }]]), new Date("2026-05-01T00:00:00Z"));
@@ -1231,9 +1231,14 @@ test("catalogModel: one exact model id across providers, cheapest first, with th
   assert.equal(findForbidden(res.body), undefined);
   assert.deepEqual(res.body.offers.map((o) => [o.provider, o.cheapest]), [["sumopod", true], ["alibaba-token-plan", false], ["opencode", false], ["opencode-go", false]]);
   assert.deepEqual(res.body.history, [
-    { provider: "sumopod", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
-    { provider: "sumopod", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
+    { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
+    { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
   ]);
+  // By canonical id: kenari's muse-wonder-1-0 is opencode's muse-wonder-1.0, and the URL may hold either id.
+  for (const id of ["muse-wonder-1-0", encodeURIComponent("meta/muse-wonder-1.0")]) {
+    const mw = await api<CatalogModelCompare>(r, c, "GET", `/api/catalog/models/${id}`);
+    assert.deepEqual([mw.status, mw.body.canonical, mw.body.offers.map((o) => [o.provider, o.modelId])], [200, "meta/muse-wonder-1.0", [["kenari", "muse-wonder-1-0"], ["opencode", "muse-wonder-1.0"]]], id);
+  }
   const colon = await api<CatalogModelCompare>(r, c, "GET", `/api/catalog/models/${encodeURIComponent("solar-mini4:free")}`);
   assert.deepEqual([colon.status, colon.body.offers.map((o) => o.provider)], [200, ["kenari"]]);
   for (const id of ["nope", "text-embedding-3-large", encodeURIComponent("a/b")]) assert.equal((await api(r, c, "GET", `/api/catalog/models/${id}`)).status, 404, id);

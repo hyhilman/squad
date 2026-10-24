@@ -69,9 +69,9 @@ test("paths: a model id with a slash, a colon or a dot stays one path part", () 
 
 test("historyRows: one row per time, one input price per provider, carried forward; the providers in order", () => {
   const h = historyRows([
-    { provider: "sumopod", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
-    { provider: "opencode", at: "2026-09-01T00:00:00.000Z", input: 2, output: 6 },
-    { provider: "sumopod", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
+    { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
+    { provider: "opencode", modelId: "qwen3.8-max", at: "2026-09-01T00:00:00.000Z", input: 2, output: 6 },
+    { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
   ]);
   assert.deepEqual(h.providers, ["opencode", "sumopod"]);
   assert.deepEqual(h.rows, [

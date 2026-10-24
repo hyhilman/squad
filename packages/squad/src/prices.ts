@@ -60,6 +60,8 @@ const FETCH_TIMEOUT_MS = 20_000;
 /** What the saved copy keeps of one model: the price, and what a models.json entry needs. */
 export interface CatalogModel {
   readonly id: string;
+  /** `canonical_model_id`: one id for the same model across providers, such as `meta/muse-wonder-1.0`. */
+  readonly canonical?: string;
   readonly name?: string;
   /** `embedding` models are priced but never offered to pi. */
   readonly type?: string;
@@ -97,6 +99,7 @@ export function parseProviders(json: unknown): CatalogProvider[] {
       const input = isObj(m.modalities) && Array.isArray(m.modalities.input) ? m.modalities.input.filter((x): x is string => str(x)) : [];
       models.push({
         id: mid,
+        ...(str(m.canonical_model_id) ? { canonical: m.canonical_model_id } : {}),
         ...(str(m.name) ? { name: m.name } : {}),
         ...(str(m.type) ? { type: m.type } : {}),
         ...(typeof m.reasoning === "boolean" ? { reasoning: m.reasoning } : {}),
@@ -119,6 +122,7 @@ function trim(providers: readonly CatalogProvider[]): Record<string, unknown> {
     const models: Record<string, unknown> = {};
     for (const m of p.models) {
       models[m.id] = {
+        ...(m.canonical === undefined ? {} : { canonical_model_id: m.canonical }),
         ...(m.name === undefined ? {} : { name: m.name }),
         ...(m.type === undefined ? {} : { type: m.type }),
         ...(m.reasoning === undefined ? {} : { reasoning: m.reasoning }),
@@ -136,9 +140,9 @@ function trim(providers: readonly CatalogProvider[]): Record<string, unknown> {
   return out;
 }
 
-/** Version 1 held prices only. It still loads, but a refresh renews it, so the new fields arrive. */
-const SAVED_VERSION = 2;
-const LOADABLE_VERSIONS: readonly unknown[] = [1, SAVED_VERSION];
+/** Version 1 held prices only; version 2 had no canonical id. Both still load, but a refresh renews them, so the new fields arrive. */
+const SAVED_VERSION = 3;
+const LOADABLE_VERSIONS: readonly unknown[] = [1, 2, SAVED_VERSION];
 
 /** The saved file, or undefined when it is missing, broken or of another shape. Never throws. */
 function readSaved(home: HomeLayout): { readonly v: number; readonly fetchedAt: number; readonly catalog: unknown } | undefined {

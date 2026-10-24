@@ -45,13 +45,37 @@ test("a provider's models: sorted by name, embedding left out, with the price pe
   const d = catalogProviderDetail(LOCAL, "opencode", ALL)!;
   assert.equal(findForbidden(d), undefined);
   assert.equal(d.provider.id, "opencode");
-  assert.deepEqual(d.models.map((m) => [m.name, m.id, m.otherProviders]), [["Claude Sonnet 4.6", "claude-sonnet-4-6", 1], ["Muse Wonder", "muse-wonder-1.0", 0], ["Qwen3.8 Max", "qwen3.8-max", 3]]);
-  assert.deepEqual(d.models[2], { id: "qwen3.8-max", name: "Qwen3.8 Max", reasoning: true, context: 262144, maxOutput: 131072, inputs: ["text", "image"], price: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 }, otherProviders: 3 });
+  // kenari lists Muse Wonder as muse-wonder-1-0: the same canonical id, so it counts.
+  assert.deepEqual(d.models.map((m) => [m.name, m.id, m.otherProviders]), [["Claude Sonnet 4.6", "claude-sonnet-4-6", 1], ["Muse Wonder", "muse-wonder-1.0", 1], ["Qwen3.8 Max", "qwen3.8-max", 3]]);
+  assert.deepEqual(d.models[2], { id: "qwen3.8-max", canonical: "alibaba/qwen3.8-max", name: "Qwen3.8 Max", reasoning: true, context: 262144, maxOutput: 131072, inputs: ["text", "image"], price: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 }, otherProviders: 3 });
   const sumo = catalogProviderDetail(LOCAL, "sumopod", ALL)!;
   assert.deepEqual(sumo.models.map((m) => m.id), ["mimo-v2.6-flash", "qwen3.8-max"]);
   assert.deepEqual(sumo.models[1]!.price, { input: 1, output: 3, cacheRead: 0.125 }, "no cache write price: unset, not the input price");
   assert.equal(catalogProviderDetail(LOCAL, "nope", ALL), undefined);
   assert.equal(catalogProviderDetail([], "opencode", ALL), undefined);
+});
+
+test("compare: models match by canonical id, so another id at another provider is linked; the URL may hold either id", () => {
+  for (const asked of ["muse-wonder-1.0", "muse-wonder-1-0", "meta/muse-wonder-1.0"]) {
+    const q = catalogModelCompare(LOCAL, asked, ALL, [])!;
+    assert.equal(findForbidden(q), undefined);
+    assert.equal(q.modelId, asked);
+    assert.equal(q.canonical, "meta/muse-wonder-1.0");
+    assert.deepEqual(q.offers.map((o) => [o.provider, o.modelId]), [["kenari", "muse-wonder-1-0"], ["opencode", "muse-wonder-1.0"]], asked);
+  }
+  assert.deepEqual(catalogModelCompare(LOCAL, "alibaba/qwen3.8-max", ALL, [])!.offers.map((o) => o.provider), ["sumopod", "alibaba-token-plan", "opencode", "opencode-go"]);
+  assert.equal(catalogModelCompare(LOCAL, "meta/nope", ALL, []), undefined);
+});
+
+test("compare: a model with no canonical id matches by its exact id only", () => {
+  const cat = parseProviders({ a: { models: { m: { cost: { input: 1, output: 2 } } } }, b: { models: { m: { cost: { input: 2, output: 2 } }, "m-1": { cost: { input: 1, output: 1 } } } } });
+  const ctx = catalogCtx(providerEntries(cat, undefined), new Map());
+  const q = catalogModelCompare(cat, "m", ctx, [])!;
+  assert.equal(q.canonical, undefined);
+  assert.deepEqual(q.offers.map((o) => [o.provider, o.modelId]), [["a", "m"], ["b", "m"]]);
+  // The maker often lists its own model with no canonical id: <provider>/<id> meets another's canonical id.
+  const maker = parseProviders({ anthropic: { models: { x: { cost: { input: 3, output: 3 } } } }, b: { models: { "x-alias": { cost: { input: 1, output: 1 }, canonical_model_id: "anthropic/x" } } } });
+  assert.deepEqual(catalogModelCompare(maker, "x", catalogCtx(providerEntries(maker, undefined), new Map()), [])!.offers.map((o) => o.modelId), ["x-alias", "x"]);
 });
 
 test("compare: the exact model id across providers, by input then output price then id; the cheapest flagged, ties all cheapest", () => {
@@ -61,31 +85,32 @@ test("compare: the exact model id across providers, by input then output price t
   assert.deepEqual(q.offers.map((o) => [o.provider, o.price?.input, o.price?.output, o.cheapest]), [
     ["sumopod", 1, 3, true], ["alibaba-token-plan", 2, 6, false], ["opencode", 2, 6, false], ["opencode-go", 2, 6, false],
   ]);
-  assert.deepEqual(q.offers[0], { provider: "sumopod", providerName: "SumoPod", runner: "pi", offered: true, addAs: "sumopod", accounts: 0, price: { input: 1, output: 3, cacheRead: 0.125 }, context: 991808, maxOutput: 131072, cheapest: true });
+  assert.deepEqual(q.offers[0], { provider: "sumopod", modelId: "qwen3.8-max", providerName: "SumoPod", runner: "pi", offered: true, addAs: "sumopod", accounts: 0, price: { input: 1, output: 3, cacheRead: 0.125 }, context: 991808, maxOutput: 131072, cheapest: true });
   const s = catalogModelCompare(LOCAL, "claude-sonnet-4-6", ALL, [])!;
   assert.deepEqual(s.offers.map((o) => [o.provider, o.runner, o.cheapest]), [["anthropic", "claude", true], ["opencode", "pi", true]]);
   // Two names for one id: the most common one, then the one of the first provider by id.
   assert.equal(catalogModelCompare(LOCAL, "deepseek-v4-pro", ALL, [])!.name, "DeepSeek V4 Pro");
-  // The saved copy has no canonical id: kenari's muse-wonder-1-0 is not opencode's muse-wonder-1.0.
-  assert.deepEqual(catalogModelCompare(LOCAL, "muse-wonder-1.0", ALL, [])!.offers.map((o) => o.provider), ["opencode"]);
   assert.equal(catalogModelCompare(LOCAL, "text-embedding-3-large", ALL, []), undefined, "embedding models are left out");
   assert.equal(catalogModelCompare(LOCAL, "QWEN3.8-MAX", ALL, []), undefined, "exact, case and all");
 });
 
-test("priceHistory: the rows of the last 90 days for one model id and the given providers, oldest first", () => {
+test("priceHistory: the rows of the last 90 days for the given provider and model id pairs, oldest first", () => {
   const dir = mkdtempSync(join(tmpdir(), "catalog-"));
   const store = openStore({ dbPath: join(dir, "squad.db"), spoolDir: join(dir, "spool") });
   try {
     recordPriceHistory(store.db, new Map([["sumopod/qwen3.8-max", { input: 1.5, output: 4 }]]), new Date("2026-05-01T00:00:00Z"));
     recordPriceHistory(store.db, new Map([["sumopod/qwen3.8-max", { input: 1.2, output: 3.5 }], ["opencode/qwen3.8-max", { input: 2, output: 6 }], ["engy/glm-5.2", { input: 0.68, output: 1.5 }], ["kenari/qwen3.8-max", { input: 9, output: 9 }]]), new Date("2026-09-01T00:00:00Z"));
-    recordPriceHistory(store.db, new Map([["sumopod/qwen3.8-max", { input: 1, output: 3 }]]), new Date("2026-10-10T00:00:00Z"));
-    const h = priceHistory(store.db, "qwen3.8-max", ["opencode", "sumopod", "opencode-go"], new Date("2026-07-26T12:00:00Z"));
+    recordPriceHistory(store.db, new Map([["sumopod/qwen3.8-max", { input: 1, output: 3 }], ["kenari/muse-wonder-1-0", { input: 0, output: 0 }], ["kenari/muse-wonder-1.0", { input: 7, output: 7 }]]), new Date("2026-10-10T00:00:00Z"));
+    const q = [{ provider: "opencode", modelId: "qwen3.8-max" }, { provider: "sumopod", modelId: "qwen3.8-max" }, { provider: "opencode-go", modelId: "qwen3.8-max" }];
+    const h = priceHistory(store.db, q, new Date("2026-07-26T12:00:00Z"));
     assert.deepEqual(h, [
-      { provider: "opencode", at: "2026-09-01T00:00:00.000Z", input: 2, output: 6 },
-      { provider: "sumopod", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
-      { provider: "sumopod", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
+      { provider: "opencode", modelId: "qwen3.8-max", at: "2026-09-01T00:00:00.000Z", input: 2, output: 6 },
+      { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-09-01T00:00:00.000Z", input: 1.2, output: 3.5 },
+      { provider: "sumopod", modelId: "qwen3.8-max", at: "2026-10-10T00:00:00.000Z", input: 1, output: 3 },
     ]);
-    assert.deepEqual(priceHistory(store.db, "qwen3.8-max", [], new Date(0)), []);
+    // Each provider with its own id: kenari's muse-wonder-1.0 row is not asked for.
+    assert.deepEqual(priceHistory(store.db, [{ provider: "kenari", modelId: "muse-wonder-1-0" }], new Date(0)).map((r) => [r.provider, r.modelId, r.input]), [["kenari", "muse-wonder-1-0", 0]]);
+    assert.deepEqual(priceHistory(store.db, [], new Date(0)), []);
   } finally {
     store.close();
   }

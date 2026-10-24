@@ -200,16 +200,16 @@ test("the settings rows", () => {
 
 const LOCAL = readFileSync(new URL("../test/fixtures/captures/prices/local-models-dev-excerpt.json", import.meta.url), "utf8");
 
-test("refresh keeps the base URL, names, limits, reasoning and input kinds, and the saved version is 2", async () => {
+test("refresh keeps the base URL, names, limits, reasoning, input kinds and the canonical id, and the saved version is 3", async () => {
   const home = tmpHome();
   assert.equal(await run(home, { fetch: answer(LOCAL) }), "refreshed");
-  assert.equal(JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8")).v, 2);
+  assert.equal(JSON.parse(readFileSync(join(home.state, PRICES_FILE), "utf8")).v, 3);
   const engy = loadProviders(home).find((p) => p.id === "engy")!;
   assert.equal(engy.api, "https://api.engy.ai/v1");
   assert.equal(engy.name, "engy");
   assert.equal(engy.npm, "@ai-sdk/openai-compatible");
   const glm = engy.models.find((m) => m.id === "glm-5.2")!;
-  assert.deepEqual({ ...glm }, { id: "glm-5.2", name: "GLM-5.2", reasoning: true, context: 262144, output: 32768, input: ["text"], price: { input: 0.68, output: 1.5, cacheRead: 0.18 } });
+  assert.deepEqual({ ...glm }, { id: "glm-5.2", name: "GLM-5.2", canonical: "zhipuai/glm-5.2", reasoning: true, context: 262144, output: 32768, input: ["text"], price: { input: 0.68, output: 1.5, cacheRead: 0.18 } });
   assert.equal(loadProviders(home).find((p) => p.id === "anthropic")!.api, undefined);
   assert.ok(readFileSync(join(home.state, PRICES_FILE)).length < LOCAL.length / 2, "no description or other bulk is kept");
   assert.equal(loadPrices(home).size, parseCatalog(JSON.parse(LOCAL)).size);
@@ -220,6 +220,19 @@ test("an old version-1 file still loads its prices, but a refresh renews it at o
   writeFileSync(join(home.state, PRICES_FILE), JSON.stringify({ v: 1, fetchedAt: NOW, catalog: CATALOG }));
   assert.equal(loadPrices(home).size, 3);
   assert.equal(await run(home, { fetch: answer(LOCAL) }), "refreshed");
+});
+
+test("an old version-2 file (no canonical ids) still loads, but a refresh renews it at once", async () => {
+  const home = tmpHome();
+  writeFileSync(join(home.state, PRICES_FILE), JSON.stringify({ v: 2, fetchedAt: NOW, catalog: { kenari: { models: { "muse-wonder-1-0": { cost: { input: 0, output: 0 } } } } } }));
+  assert.deepEqual(loadProviders(home).map((p) => [p.id, p.models.map((m) => [m.id, m.canonical])]), [["kenari", [["muse-wonder-1-0", undefined]]]]);
+  assert.equal(await run(home, { fetch: answer(LOCAL) }), "refreshed");
+  assert.equal(loadProviders(home).find((p) => p.id === "kenari")!.models.find((m) => m.id === "muse-wonder-1-0")!.canonical, "meta/muse-wonder-1.0");
+});
+
+test("parseProviders keeps a canonical id only when it is a usable string", () => {
+  const ps = parseProviders({ a: { models: { m: { cost: { input: 1, output: 2 }, canonical_model_id: "x/m" }, n: { cost: { input: 1, output: 2 }, canonical_model_id: 7 }, o: { cost: { input: 1, output: 2 }, canonical_model_id: "" } } } });
+  assert.deepEqual(ps[0]!.models.map((m) => [m.id, m.canonical]), [["m", "x/m"], ["n", undefined], ["o", undefined]]);
 });
 
 test("parseProviders takes junk without throwing", () => {
