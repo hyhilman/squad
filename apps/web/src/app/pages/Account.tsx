@@ -1,6 +1,6 @@
 import { useOne } from "@refinedev/core";
 import type { AccountView, Runner } from "@squad/contract";
-import { Card, Descriptions, Flex, Skeleton, Space, Tag, Typography } from "antd";
+import { Card, Col, Descriptions, Flex, Row, Skeleton, Space, Tag, Typography } from "antd";
 import { Link, useParams } from "react-router";
 import { ErrorNote } from "../components/ErrorNote.tsx";
 import { AccountActions } from "../components/AccountActions.tsx";
@@ -20,6 +20,9 @@ export function Account() {
   return <AccountBody a={result} />;
 }
 
+// One label width in both cards, so their values line up.
+const LABEL = { width: 110 } as const;
+
 function AccountBody({ a }: { a: AccountView }) {
   const room = useRoomSeries(a.runner as Runner, a.name, "7d");
   const passes = usePasses(a.account, undefined, 10);
@@ -36,31 +39,54 @@ function AccountBody({ a }: { a: AccountView }) {
         </Flex>
       </div>
 
-      <Card title="Facts">
-        <Descriptions column={{ xs: 1, sm: 1, md: 2 }} bordered size="small">
-          <Descriptions.Item label="Kind">{a.kind}</Descriptions.Item>
-          <Descriptions.Item label="Owner">{a.ownerEmail}</Descriptions.Item>
-          <Descriptions.Item label="Login email">{a.loginEmail ?? "none"}</Descriptions.Item>
-          <Descriptions.Item label="Pools">{a.pools.length === 0 ? "none" : a.pools.map((p) => <Tag key={p}>{p}</Tag>)}</Descriptions.Item>
-          <Descriptions.Item label="Health">
-            <Tag color={healthColor(a.health)}>{a.health}</Tag>
-            {a.busy ? <Tag color="processing">busy</Tag> : null}
-          </Descriptions.Item>
-          <Descriptions.Item label="Last failure code">{a.lastCode ?? "none"}</Descriptions.Item>
-          <Descriptions.Item label="Cooling until">{a.coolUntil === undefined ? "not cooling" : new Date(a.coolUntil).toLocaleString()}</Descriptions.Item>
-          <Descriptions.Item label="Last read">{agoText(a.readAt, new Date())}</Descriptions.Item>
-          <Descriptions.Item label="5-hour left">
-            <Room value={a.left5h} floor={a.floor5h} />
-          </Descriptions.Item>
-          <Descriptions.Item label="Week left">
-            <Room value={a.leftWeek} floor={a.floorWeek} />
-          </Descriptions.Item>
-          <Descriptions.Item label="Floors">
-            5-hour {a.floor5h}%, week {a.floorWeek}% ({a.floorSource})
-          </Descriptions.Item>
-          <Descriptions.Item label="Consent">{a.consentAt === undefined ? "not given" : new Date(a.consentAt).toLocaleString()}</Descriptions.Item>
-        </Descriptions>
-      </Card>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={8}>
+          <Card title="Room left" size="small" style={{ height: "100%" }}>
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <div>
+                <Typography.Text type="secondary">5-hour window</Typography.Text>
+                <Room value={a.left5h} floor={a.floor5h} />
+              </div>
+              <div>
+                <Typography.Text type="secondary">Week window</Typography.Text>
+                <Room value={a.leftWeek} floor={a.floorWeek} />
+              </div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Floors {a.floorSource === "owner" ? "set by the owner" : "are the default"}. Last read {agoText(a.readAt, new Date())}.
+              </Typography.Text>
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} lg={8}>
+          <Card title="Status" size="small" style={{ height: "100%" }}>
+            <Descriptions column={1} size="small" labelStyle={LABEL}>
+              <Descriptions.Item label="Health">
+                <Space size={4}>
+                  <Tag color={healthColor(a.health)}>{a.health}</Tag>
+                  {a.busy ? <Tag color="processing">busy</Tag> : null}
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="Last failure">{a.lastCode ?? "none"}</Descriptions.Item>
+              <Descriptions.Item label="Cooling until">{a.coolUntil === undefined ? "not cooling" : new Date(a.coolUntil).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Kind">{a.kind}</Descriptions.Item>
+            </Descriptions>
+          </Card>
+        </Col>
+        <Col xs={24} lg={8}>
+          <Card title="Owner" size="small" style={{ height: "100%" }}>
+            <Descriptions column={1} size="small" labelStyle={LABEL}>
+              <Descriptions.Item label="Owner">
+                <Typography.Text ellipsis={{ tooltip: a.ownerEmail }}>{a.ownerEmail || "none"}</Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Login email">
+                <Typography.Text ellipsis={{ tooltip: a.loginEmail }}>{a.loginEmail ?? "none"}</Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Consent">{a.consentAt === undefined ? "not given" : new Date(a.consentAt).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Pools">{a.pools.length === 0 ? "none" : a.pools.map((p) => <Tag key={p}>{p}</Tag>)}</Descriptions.Item>
+            </Descriptions>
+          </Card>
+        </Col>
+      </Row>
 
       <Card title="Room left, last 7 days">
         {room.isError ? <ErrorNote error={room.error} /> : <RoomChart points={room.data ?? []} floor5h={a.floor5h} floorWeek={a.floorWeek} />}
