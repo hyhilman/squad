@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { identityOf, loginFilesOf } from "./accounts/identity.ts";
-import { addAccount, getAccount, reviveByLogin, setLoginEmail, setOwnerEmail, ACCOUNT_NAME } from "./accounts/store.ts";
+import { addAccount, clearAfterLogin, liveAccount, reviveByLogin, setLoginEmail, setOwnerEmail, setSharing, ACCOUNT_NAME } from "./accounts/store.ts";
 import { dockerRunArgv, type AccountKind, type PassPlan, type Runner } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
 import { IMAGES } from "./images.ts";
@@ -91,6 +91,8 @@ export interface FinishParams {
    * seat's own email is stored apart. The login must still hold an identity.
    */
   readonly addFor?: string;
+  /** A re-login by the owner from the web: it is their consent, at this moment. */
+  readonly consentBy?: string;
   readonly now: Date;
 }
 
@@ -120,7 +122,7 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   }
 
   const found = identityOf(runner, "login", staging);
-  const before = getAccount(store.db, id);
+  const before = liveAccount(store.db, id);
   if (p.addFor !== undefined && before !== undefined) {
     drop();
     return { ok: false, reason: "exists" };
@@ -168,14 +170,21 @@ export async function finishLogin(p: FinishParams): Promise<FinishResult> {
   }
   if (aside.old !== null) rmSync(aside.old, { recursive: true, force: true });
 
-  const existing = getAccount(store.db, id);
+  const existing = liveAccount(store.db, id);
   // A pi login that holds only API keys is a key account: no lock, many passes. A dead login account
   // that is logged in again keeps its kind, so a re-login never changes how its row is locked.
   const kind = files === "keys" ? "key" : "login";
-  if (existing === undefined) addAccount(store.db, { runner, name, kind, ...(ownerEmail === null ? {} : { ownerEmail }), ...(found === null ? {} : { loginEmail: found.email }) }, p.now);
+  // The web (`addFor`, `consentBy`) records the owner's consent; `--owner` on the host does not, since
+  // an admin may run it for someone else; a host login for oneself is shared by `cli`.
+  const consent = p.addFor !== undefined ? { by: p.addFor.toLowerCase() } : p.owner !== undefined ? false : undefined;
+  if (existing === undefined) addAccount(store.db, { runner, name, kind, ...(ownerEmail === null ? {} : { ownerEmail }), ...(found === null ? {} : { loginEmail: found.email }), ...(consent === undefined ? {} : { consent }) }, p.now);
   else {
     // The state may have changed while the login ran. Only a dead account is revived.
     if (existing.state === "dead") reviveByLogin(store.db, id);
+    if (p.consentBy !== undefined) {
+      clearAfterLogin(store.db, id);
+      setSharing(store.db, id, p.consentBy.toLowerCase(), p.now);
+    }
     // The owner of a row with a known seat never changes by a login.
     if (seat === null) {
       if (ownerEmail !== null) setOwnerEmail(store.db, id, ownerEmail);
@@ -218,7 +227,7 @@ export async function runLogin(p: LoginParams): Promise<number> {
     out.stderr(`squad login: account name ${JSON.stringify(name)} is not safe for a folder name\n`);
     return 2;
   }
-  const existing = getAccount(store.db, id);
+  const existing = liveAccount(store.db, id);
   if (existing !== undefined && (existing.state !== "dead" || existing.kind !== "login")) {
     out.stderr(`${id} exists (${existing.kind}, ${existing.state}): use a new name or wait until it is dead\n`);
     return 2;

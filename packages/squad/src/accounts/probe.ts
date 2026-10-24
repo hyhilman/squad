@@ -11,7 +11,7 @@ export function dueProbes(accounts: readonly AccountRow[], health: ReadonlyMap<s
   if (envOn(SQUAD_NO_AUTO_PROBE_ENV, env)) return [];
   return accounts.filter((a) => {
     const h = health.get(a.id) ?? emptyHealth(a.id);
-    if (healthOf(a, h, now) !== "suspect") return false;
+    if (a.consentAt === null || healthOf(a, h, now) !== "suspect") return false;
     const used = h.lastUsedAt === null ? NaN : Date.parse(h.lastUsedAt);
     return !Number.isFinite(used) || now.getTime() - used >= PROBE_AFTER_MS;
   });

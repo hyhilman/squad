@@ -83,7 +83,7 @@ export interface StepDeps {
   readonly now: () => Date;
   readonly fetch: typeof globalThis.fetch;
   /** Runs one probe pass. The same code as `squad probe`; it is the caller's to give. */
-  readonly probe: (account: AccountRow, model: string) => Promise<void>;
+  readonly probe: (account: AccountRow, model: string) => Promise<unknown>;
   /** Replaceable for tests. */
   readonly readUsage?: (account: AccountRow) => Promise<unknown>;
   readonly refreshPrices?: (o: RefreshPrices) => Promise<unknown>;

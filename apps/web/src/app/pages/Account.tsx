@@ -1,4 +1,4 @@
-import { Box, Button, Flex, Grid, HStack, Link, Skeleton, Stack, Tabs, Text } from "@chakra-ui/react";
+import { Badge, Box, Button, Flex, Grid, HStack, Link, Skeleton, Stack, Tabs, Text } from "@chakra-ui/react";
 import type { AccountView, Runner } from "@squad/contract";
 import { ChevronRight } from "lucide-react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router";
@@ -20,7 +20,7 @@ function OverviewTab({ a }: { a: AccountView }) {
       <Panel title="Room left" description={a.readAt === undefined ? "No usage read yet." : `Read ${agoText(a.readAt, new Date())}. The grey part is the floor the owner keeps.`}>
         <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6" mb="6">
           <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour window" />
-          <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week window" />
+          <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week window" resetsWeek={a.resetsWeek} />
         </Grid>
         <Text fontSize="xs" fontWeight="600" color="fg.muted" textTransform="uppercase" letterSpacing="0.06em" mb="2">
           Last 7 days
@@ -56,7 +56,7 @@ function OverviewTab({ a }: { a: AccountView }) {
         <Panel title="Owner">
           <Fact label="Owner">{a.ownerEmail === "" ? "-" : a.ownerEmail}</Fact>
           {a.loginEmail === undefined ? null : <Fact label="Seat email">{a.loginEmail}</Fact>}
-          <Fact label="Consent">{a.consentAt === undefined ? "Not given" : at(a.consentAt)}</Fact>
+          <Fact label="Shared">{a.sharing ? `Since ${at(a.consentAt)}${a.consentBy === undefined ? "" : ` (by ${a.consentBy})`}` : "No: squad refuses every pass"}</Fact>
           <Fact label="Floors">{`${a.floor5h}% · ${a.floorWeek}% (${a.floorSource === "owner" ? "set by the owner" : "the default"})`}</Fact>
         </Panel>
       </Stack>
@@ -68,9 +68,15 @@ function SettingsTab({ a }: { a: AccountView }) {
   const { actions, dialogs } = useAccountActions(a);
   const more = actions.filter((x) => x.key !== "floors");
   const text: Record<string, string> = {
-    login: "The login is dead. Sign in again with the same seat.",
-    consent: "Agree that squad may run passes on your account.",
+    login: a.runner === "claude" ? "Get a new token for this account. It replaces the old one." : "Sign in again with the same seat. It replaces the login squad holds.",
+    key: "Give a new API key. It replaces the old one.",
+    share: "Let squad run passes on your account again.",
+    unshare: "squad refuses every pass on this account until you share it again.",
+    test: "Run one tiny real pass to check the account. It spends a few tokens.",
+    reset: "Clear the cooling, suspect state and last error code.",
+    limit: "Spend one of your Claude limit resets now.",
     enable: a.health === "disabled" ? "Let passes use this account again." : "Stop passes from using this account. You can enable it again at any time.",
+    remove: "Delete the account folder. The pass history stays.",
   };
   return (
     <Stack gap="6" maxW="2xl">
@@ -157,6 +163,11 @@ export function Account() {
                 {a.name}
               </Text>
               <HealthBadge health={a.health} />
+              {a.sharing || a.health === "removed" ? null : (
+                <Badge colorPalette="orange" variant="outline" size="sm" rounded="full">
+                  not shared
+                </Badge>
+              )}
             </HStack>
             <Text fontSize="sm" color="fg.muted" mt="0.5">
               {a.runner} · {a.kind} · {isOwnerOf(a, me) ? "yours" : `owned by ${a.ownerEmail === "" ? "nobody" : a.ownerEmail}`}

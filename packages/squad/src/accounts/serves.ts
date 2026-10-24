@@ -6,6 +6,8 @@ import { join } from "node:path";
 import type { HomeLayout } from "../home.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
 import type { Store } from "../store/db.ts";
+import type { CatalogProvider } from "../prices.ts";
+import { offeredModels, runnerOf } from "../providers.ts";
 import { getHealth, healthOf, listAccounts, type AccountRow } from "./store.ts";
 
 export interface ServedProvider {
@@ -69,6 +71,8 @@ export interface AccountInfo {
   /** Percent left in each window and when it resets; a field is unset when nothing was read. */
   readonly room: { readonly left5h?: number; readonly leftWeek?: number; readonly resets5h?: string; readonly resetsWeek?: string; readonly readAt?: string };
   readonly serves: readonly ServedProvider[];
+  /** False: the owner stopped sharing it, and squad refuses every pass on it. */
+  readonly sharing: boolean;
 }
 
 export interface InfoDeps {
@@ -98,6 +102,20 @@ export function listAccountsWithServes(deps: InfoDeps, runner?: string): Account
         ...(h.readAt === null ? {} : { readAt: h.readAt }),
       },
       serves: servesOf(deps.home, a),
+      sharing: a.consentAt !== null,
     };
+  });
+}
+
+/**
+ * The model ids a pass on this account may name: pi's own models.json first, else the catalog's
+ * models of its providers (`<provider>/<id>`); codex and claude take the catalog of their runner.
+ */
+export function servedModels(home: HomeLayout, account: AccountRow, catalog: readonly CatalogProvider[]): string[] {
+  const byId = new Map(catalog.map((p) => [p.id, p]));
+  if (account.runner !== "pi") return [...new Set(catalog.filter((p) => runnerOf(p.id) === account.runner).flatMap((p) => offeredModels(p).map((m) => m.id)))].sort();
+  return servesOf(home, account).flatMap((s) => {
+    const ids = s.models ?? (byId.has(s.provider) ? offeredModels(byId.get(s.provider)!).map((m) => m.id) : []);
+    return ids.map((id) => `${s.provider}/${id}`);
   });
 }

@@ -1,5 +1,5 @@
 // A host-side lock for the moves that need one: a login that swaps a folder, an import that moves a
-// login out of another home. A pass never takes its account lock here: that one lives in the
+// login out of another home, a remove that deletes an account folder. A pass never takes its account lock here: that one lives in the
 // container (see images/entry.sh). This lock is held for a few milliseconds by a small `flock`
 // child, and it is taken without waiting. A running pass holds the same file in its container, so
 // the `-n` fails while one runs.

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { pick } from "../pool/pick.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { emptyHealth } from "./health.ts";
-import { addAccount, candidates, getAccount, getHealth, listAccounts, putHealth, reviveByLogin, setConsent, setOwnerFloors, setState } from "./store.ts";
+import { addAccount, candidates, getAccount, getHealth, liveAccount, listAccounts, markRemoved, putHealth, resetHealth, reviveByLogin, setConsent, setOwnerFloors, setSharing, setState } from "./store.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const mk = (): Store => {
@@ -122,10 +122,94 @@ test("setOwnerFloors sets both floors or clears each back to the default (null)"
 
 test("setConsent stamps the time once and keeps the first stamp", () => {
   const s = mk();
-  addAccount(s.db, { runner: "pi", name: "c", kind: "key" }, NOW);
+  addAccount(s.db, { runner: "pi", name: "c", kind: "key", consent: false }, NOW);
   assert.equal(getAccount(s.db, "pi/c")!.consentAt, null);
   setConsent(s.db, "pi/c", NOW);
   setConsent(s.db, "pi/c", new Date(NOW.getTime() + 1000));
   assert.equal(getAccount(s.db, "pi/c")!.consentAt, NOW.toISOString());
   assert.throws(() => setConsent(s.db, "pi/none", NOW), /unknown account/);
+});
+
+// ---- account care ----
+
+test("a new account is shared unless the caller says no; the web gives the owner's email, the host says cli", () => {
+  const s = mk();
+  const host = addAccount(s.db, { runner: "pi", name: "h", kind: "key" }, NOW);
+  assert.deepEqual([host.consentAt, host.consentBy], [NOW.toISOString(), "cli"]);
+  const web = addAccount(s.db, { runner: "pi", name: "w", kind: "key", ownerEmail: "o@x.test", consent: { by: "o@x.test" } }, NOW);
+  assert.equal(web.consentBy, "o@x.test");
+  const forOther = addAccount(s.db, { runner: "pi", name: "o", kind: "key", ownerEmail: "o@x.test", consent: false }, NOW);
+  assert.deepEqual([forOther.consentAt, forOther.consentBy], [null, null]);
+});
+
+test("setSharing stops and starts sharing at that moment; the pool skips an account that is not shared", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "a", kind: "key" }, NOW);
+  addAccount(s.db, { runner: "pi", name: "b", kind: "key" }, NOW);
+  setSharing(s.db, "pi/a", null, NOW);
+  assert.deepEqual([getAccount(s.db, "pi/a")!.consentAt, getAccount(s.db, "pi/a")!.consentBy], [null, null]);
+  const c = candidates(s.db, "pi", NOW, never, {});
+  assert.equal(c.find((x) => x.account === "pi/a")!.sharing, false);
+  assert.equal(c.find((x) => x.account === "pi/b")!.sharing, true);
+  const r = pick(c, NOW.getTime());
+  assert.deepEqual(r.order, ["pi/b"]);
+  assert.equal(r.skipped["pi/a"], "no-consent");
+  const later = new Date(NOW.getTime() + 60_000);
+  setSharing(s.db, "pi/a", "o@x.test", later);
+  assert.deepEqual([getAccount(s.db, "pi/a")!.consentAt, getAccount(s.db, "pi/a")!.consentBy], [later.toISOString(), "o@x.test"]);
+  assert.throws(() => setSharing(s.db, "pi/none", null, NOW), /unknown account/);
+});
+
+test("a removed account keeps its row but leaves every list, the pool and the health table; its name can be used again", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "r", kind: "key", ownerEmail: "o@x.test" }, NOW);
+  addAccount(s.db, { runner: "pi", name: "k", kind: "key" }, NOW);
+  putHealth(s.db, { ...emptyHealth("pi/r"), coolUntil: "2026-10-24T13:00:00.000Z", coolKind: "rate-limit" });
+  s.db.prepare("INSERT INTO sessions (id, runner, account, created_at, last_used_at) VALUES ('s1', 'pi', 'pi/r', ?, ?)").run(NOW.toISOString(), NOW.toISOString());
+  markRemoved(s.db, "pi/r");
+  const row = getAccount(s.db, "pi/r")!;
+  assert.equal(row.state, "removed");
+  assert.equal(row.consentAt, null);
+  assert.equal(liveAccount(s.db, "pi/r"), undefined);
+  assert.equal(liveAccount(s.db, "pi/k")!.id, "pi/k");
+  assert.deepEqual(listAccounts(s.db).map((a) => a.id), ["pi/k"]);
+  assert.deepEqual(listAccounts(s.db, undefined, { withRemoved: true }).map((a) => a.id), ["pi/k", "pi/r"]);
+  assert.deepEqual(candidates(s.db, "pi", NOW, never, {}).map((c) => c.account), ["pi/k"]);
+  assert.equal(getHealth(s.db, "pi/r").coolUntil, null, "no stale cooling for a name used again");
+  assert.equal((s.db.prepare("SELECT count(*) AS n FROM sessions WHERE account = 'pi/r'").get() as { n: number }).n, 0);
+  assert.throws(() => setState(s.db, "pi/r", "active"), /removed/);
+  const again = addAccount(s.db, { runner: "pi", name: "r", kind: "key", ownerEmail: "p@x.test" }, NOW);
+  assert.equal(again.state, "active");
+  assert.equal(again.ownerEmail, "p@x.test");
+  // A live row is never replaced.
+  assert.throws(() => addAccount(s.db, { runner: "pi", name: "k", kind: "key" }, NOW));
+});
+
+test("resetHealth clears cooling and suspect, revives a dead account with a passing code, and refuses a permanent code", () => {
+  const s = mk();
+  for (const n of ["cool", "sus", "dead2", "revoked"]) addAccount(s.db, { runner: "codex", name: n, kind: "login" }, NOW);
+  putHealth(s.db, { ...emptyHealth("codex/cool"), coolUntil: "2026-10-24T13:00:00.000Z", coolKind: "quota", lastFailKind: "quota", lastFailCode: "usage_limit_reached", left5h: 0, readAt: NOW.toISOString() });
+  putHealth(s.db, { ...emptyHealth("codex/sus"), suspectSince: NOW.toISOString(), authFails: 1, lastFailCode: "401" });
+  setState(s.db, "codex/dead2", "dead", "401", NOW);
+  setState(s.db, "codex/revoked", "dead", "token_revoked", NOW);
+  assert.equal(resetHealth(s.db, "codex/cool"), "reset");
+  const h = getHealth(s.db, "codex/cool");
+  assert.deepEqual([h.coolUntil, h.coolKind, h.lastFailCode, h.lastFailKind], [null, null, null, null]);
+  assert.equal(h.left5h, 0, "the room read stays: it is a fact, not a state");
+  assert.equal(resetHealth(s.db, "codex/sus"), "reset");
+  assert.deepEqual([getHealth(s.db, "codex/sus").suspectSince, getHealth(s.db, "codex/sus").authFails], [null, 0]);
+  assert.equal(resetHealth(s.db, "codex/dead2"), "reset");
+  assert.deepEqual([getAccount(s.db, "codex/dead2")!.state, getAccount(s.db, "codex/dead2")!.deadCode], ["active", null]);
+  assert.equal(resetHealth(s.db, "codex/revoked"), "log-in-again");
+  assert.equal(getAccount(s.db, "codex/revoked")!.state, "dead");
+  assert.throws(() => resetHealth(s.db, "codex/none"), /unknown account/);
+});
+
+test("the README's list of codes that Reset health refuses is exactly PERMANENT_AUTH_CODES", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { PERMANENT_AUTH_CODES } = await import("../classify.ts");
+  const readme = readFileSync(new URL("../../../../README.md", import.meta.url), "utf8");
+  const line = readme.slice(readme.indexOf("- **Reset health**"), readme.indexOf("- **Log in again**"));
+  const listed = [...line.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]).sort();
+  assert.deepEqual(listed, [...PERMANENT_AUTH_CODES].sort());
 });

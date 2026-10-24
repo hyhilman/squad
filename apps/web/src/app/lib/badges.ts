@@ -10,6 +10,7 @@ const HEALTH: Readonly<Record<Health, BadgeColor>> = {
   dead: "error",
   disabled: "default",
   moved: "default",
+  removed: "default",
 };
 
 export const healthColor = (h: Health): BadgeColor => HEALTH[h];

@@ -8,6 +8,7 @@ import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
 import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
+import { weekResetBadge, type WeekTone } from "../lib/weekReset.ts";
 
 export function PageHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
@@ -235,7 +236,22 @@ function Legend({ color, text, hint }: { color: string; text: string; hint: stri
  * takes the state colour; a tick marks the floor. Under the bar, the floor sits on the left and what
  * is available sits on the right, each in its own colour.
  */
-export function RoomBar({ left, floor, width = "100%", label }: { left: number | undefined; floor: number; width?: string; label?: string }) {
+const WEEK_PALETTE: Readonly<Record<WeekTone, string>> = { red: "red", yellow: "yellow", grey: "gray" };
+
+/** When the week window resets: red under a day, yellow under three, grey after. The hover says the exact time. */
+export function WeekResetBadge({ resetsWeek }: { resetsWeek: string | undefined }) {
+  const b = weekResetBadge(resetsWeek, new Date());
+  if (b === undefined) return null;
+  return (
+    <Hint text={b.title}>
+      <Badge colorPalette={WEEK_PALETTE[b.tone]} variant={b.tone === "grey" ? "outline" : "subtle"} size="sm" rounded="full" fontWeight="500" tabIndex={0} cursor="help" w="fit-content" whiteSpace="nowrap">
+        {b.text}
+      </Badge>
+    </Hint>
+  );
+}
+
+export function RoomBar({ left, floor, width = "100%", label, resetsWeek }: { left: number | undefined; floor: number; width?: string; label?: string; resetsWeek?: string }) {
   const l = Math.max(0, Math.min(100, left ?? 0));
   const f = Math.max(0, Math.min(100, floor));
   const color = left === undefined ? "room.track" : ROOM_COLOR[roomState(l, f)];
@@ -260,6 +276,7 @@ export function RoomBar({ left, floor, width = "100%", label }: { left: number |
           <Legend color={color} text={`${parts.available}% available`} hint={availableHint(parts)} />
         )}
       </Flex>
+      <WeekResetBadge resetsWeek={resetsWeek} />
     </Stack>
   );
 }

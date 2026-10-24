@@ -6,7 +6,7 @@ import type { Candidate } from "../pool/pick.ts";
 
 export type ScopeState = "open" | "closed";
 
-const OUT: ReadonlySet<string> = new Set(["cooling", "dead", "disabled", "moved"]);
+const OUT: ReadonlySet<string> = new Set(["cooling", "dead", "disabled", "moved", "removed"]);
 
 /** `open` when the pool has accounts and every one is cooling, dead, disabled or moved. An empty pool is `closed`. */
 export function scopeState(candidates: readonly Candidate[]): ScopeState {

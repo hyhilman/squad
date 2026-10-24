@@ -67,3 +67,9 @@ test("most room on the tighter window first; ties go to the least recently used"
 test("no account left gives an empty order, never a wait", () => {
   assert.deepEqual(pick([base("codex/a", { busy: true })], NOW).order, []);
 });
+
+test("a removed account and one its owner does not share are left out with a reason", () => {
+  const r = pick([base("codex/a", { health: "removed" }), base("codex/b", { sharing: false }), base("codex/c", { sharing: true })], NOW);
+  assert.deepEqual(r.order, ["codex/c"]);
+  assert.deepEqual(r.skipped, { "codex/a": "removed", "codex/b": "no-consent" });
+});

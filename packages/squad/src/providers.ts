@@ -54,7 +54,7 @@ export interface ProviderEntry {
   readonly source?: CatalogProvider;
 }
 
-const offeredModels = (p: CatalogProvider): readonly CatalogModel[] => p.models.filter((m) => m.type !== "embedding");
+export const offeredModels = (p: CatalogProvider): readonly CatalogModel[] => p.models.filter((m) => m.type !== "embedding");
 
 /** Every provider the web may offer, seats first, then pi's built-ins, then the catalog's custom ones. */
 export function providerEntries(catalog: readonly CatalogProvider[], allow: ReadonlySet<string> | undefined): ProviderEntry[] {

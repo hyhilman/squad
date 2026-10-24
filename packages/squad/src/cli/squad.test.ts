@@ -604,3 +604,60 @@ test("the usage text lists owner and the --owner flags", async () => {
   assert.match(u, /add-key .*--owner/);
   assert.match(u, /add-token .*--owner/);
 });
+
+// ---- account care ----
+
+const consentOf = (r: Rig, id: string): [string | null, string | null] | undefined => {
+  let v: [string | null, string | null] | undefined;
+  seed(r, (s) => {
+    const a = getAccount(s.db, id);
+    v = a === undefined ? undefined : [a.consentAt, a.consentBy];
+  });
+  return v;
+};
+
+test("add-key and add-token with --owner do not share the account (an admin may add it for someone else); without --owner the host shares it", async () => {
+  const r = rig();
+  const key = join(r.root, "key.json");
+  const tok = join(r.root, "tok");
+  writeFileSync(key, KEY_BODY);
+  writeFileSync(tok, "tok-value\n");
+  assert.equal(await r.run("add-key", "pi/k1", "--from", key, "--owner", "bob@example.test"), 0);
+  assert.equal(await r.run("add-token", "claude/t1", "--from", tok, "--owner", "bob@example.test"), 0);
+  assert.equal(await r.run("add-key", "pi/k2", "--from", key), 0);
+  assert.deepEqual(consentOf(r, "pi/k1"), [null, null]);
+  assert.deepEqual(consentOf(r, "claude/t1"), [null, null]);
+  assert.deepEqual(consentOf(r, "pi/k2"), [NOW.toISOString(), "cli"]);
+  assert.match(r.out.join(""), /not shared until bob@example\.test agrees in the web app/);
+});
+
+test("remove: needs --yes; removes the folder, keeps the row as removed, prints where to revoke; a removed name can be added again", async () => {
+  const r = rig();
+  const key = join(r.root, "key.json");
+  writeFileSync(key, KEY_BODY);
+  assert.equal(await r.run("add-key", "pi/k1", "--from", key), 0);
+  const home = layoutOf(join(r.root, "home"), r.io.env);
+  assert.equal(await r.run("remove", "pi/k1"), 2);
+  assert.match(r.err.join(""), /--yes/);
+  assert.ok(existsSync(join(home.accounts, "pi", "k1")));
+  r.out.length = 0;
+  assert.equal(await r.run("remove", "pi/k1", "--yes"), 0);
+  assert.equal(existsSync(join(home.accounts, "pi", "k1")), false);
+  assert.match(r.out.join(""), /removed pi\/k1/);
+  assert.match(r.out.join(""), /API keys page/);
+  let state: string | undefined;
+  seed(r, (s) => { state = getAccount(s.db, "pi/k1")?.state; });
+  assert.equal(state, "removed");
+  assert.equal(await r.run("remove", "pi/k1", "--yes"), 1, "already removed");
+  assert.equal(await r.run("remove", "pi/none", "--yes"), 2);
+  assert.equal(await r.run("add-key", "pi/k1", "--from", key), 0, "the name is free again");
+  r.out.length = 0;
+  assert.equal(await r.run("list"), 0);
+  assert.match(r.out.join(""), /pi\/k1/);
+});
+
+test("the usage text lists remove", async () => {
+  const r = rig();
+  await r.run();
+  assert.match(r.err.join(""), /\n {2}remove <account> --yes/);
+});

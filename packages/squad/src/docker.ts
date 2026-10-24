@@ -56,6 +56,12 @@ export interface PassPlan {
   readonly tty?: boolean;
   /** Replaces the image's ENTRYPOINT, such as `squad-entry` to run `bash` behind the lock. */
   readonly entrypoint?: string;
+  /**
+   * A throwaway config folder at /claude, for an interactive claude on a token account (the limit
+   * reset): a token account has no folder of its own there, and a fresh one would show the first-run
+   * screens. It must be outside the home.
+   */
+  readonly claudeConfig?: string;
 }
 
 const ACCOUNT_PATH: Readonly<Record<Runner, string>> = { pi: "/pi", codex: "/codex", claude: "/claude" };
@@ -152,8 +158,13 @@ export function dockerRunArgv(plan: PassPlan): string[] {
   }
 
   // Exactly one account mount per pass.
+  if (plan.claudeConfig !== undefined && (runner !== "claude" || account.kind !== "token")) throw new Error("a scratch config is for a claude token account only");
   if (account.kind === "token") {
     argv.push("--mount", mountArg(`${account.dir}/token`, "/squad/token", true), "-e", "SQUAD_TOKEN_FILE=/squad/token");
+    if (plan.claudeConfig !== undefined) {
+      checkHome(plan.claudeConfig, plan.home);
+      argv.push("--mount", mountArg(plan.claudeConfig, ACCOUNT_PATH.claude, false));
+    }
   } else {
     argv.push("--mount", mountArg(account.dir, ACCOUNT_PATH[runner], false));
   }

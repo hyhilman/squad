@@ -123,7 +123,8 @@ export function resolveCandidates(req: PassRequest, deps: RunDeps, now: Date) {
   const db = deps.store.db;
   const busyFn = deps.busy ?? ((a: AccountRow, lock: string) => a.kind === "login" && flockBusy(lock));
   const named = req.account === undefined ? undefined : req.account.includes("/") ? req.account : `${req.runner}/${req.account}`;
-  if (named !== undefined && getAccount(db, named)?.runner !== req.runner) throw new Error(`unknown ${req.runner} account ${named}`);
+  const namedRow = named === undefined ? undefined : getAccount(db, named);
+  if (named !== undefined && (namedRow?.runner !== req.runner || namedRow.state === "removed")) throw new Error(`unknown ${req.runner} account ${named}`);
   const all = candidates(db, req.runner, now, (id) => {
     if (named !== undefined && id !== named) return false;
     const a = getAccount(db, id)!;
@@ -279,6 +280,11 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: `session ${req.session} is pinned to ${pinned.account}; it cannot run on ${named}` });
   }
   const picked = pick(pinned === undefined ? list : list.filter((c) => c.account === pinned.account), nowFn().getTime());
+  // The owner stopped sharing: a fixed code, so a caller can tell it from a full pool.
+  const unshared = named ?? pinned?.account;
+  if (picked.order.length === 0 && unshared !== undefined && picked.skipped[unshared] === "no-consent") {
+    return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "no-consent", message: `${unshared} is not shared by its owner` });
+  }
   if (picked.order.length === 0) {
     if (pinned !== undefined && req.conversation === true && picked.skipped[pinned.account] === "busy") return noAccount(store, req, deps, nowFn(), { kind: "busy", code: "", message: `${pinned.account} is busy` });
     if (pinned !== undefined) return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: `session ${req.session} is pinned to ${pinned.account}, which cannot run: ${picked.skipped[pinned.account] ?? "not in the pool"}` });

@@ -3,33 +3,39 @@
 //
 // A person sees only the accounts whose owner email is theirs; any other id is a 404, so ids do not
 // leak. An admin (the ID token's groups hold SQUAD_OIDC_ADMIN_GROUP) sees every account and may set
-// floors and enable or disable any of them; consent and login stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
+// floors, enable or disable, test, reset the health of and remove any of them; consent, login, a new
+// secret and a limit reset stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { NO_SESSION_ROUTES, ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
 import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
-import { getAccount, getHealth, healthOf, listAccounts, roomSince, setConsent, setOwnerFloors, setState, type AccountRow } from "../accounts/store.ts";
+import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
+import { removeAccount, replacePiKey, replaceToken, revokeNote } from "../accounts/care.ts";
+import { servedModels } from "../accounts/serves.ts";
+import { TOKEN_EXACT } from "../claude-token.ts";
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
 import { ACCOUNT_NAME } from "../accounts/store.ts";
-import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, envNum, envOn, envOptional } from "../settings.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV, envNum, envOn, envOptional, type EnvSpec } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
-import { ConnectPairs, squadVersion } from "./connect.ts";
+import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { passDetail, passViews } from "./passes.ts";
 import { allowedProviders, loadWebConfig } from "./settings.ts";
 import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
+import { LimitResets } from "./limit-reset.ts";
 import { startTicker, type Timers } from "./ticker.ts";
+import type { ProbeOutcome } from "../cli/squad.ts";
 
 type NoSession = (typeof NO_SESSION_ROUTES)[number];
 export interface Ctx<N extends RouteName> {
@@ -38,7 +44,10 @@ export interface Ctx<N extends RouteName> {
   readonly body: Api[N]["body"];
   /** A route in NO_SESSION_ROUTES has none. */
   readonly session: N extends NoSession ? undefined : Session;
-  /** The client address of the connection (never a forwarded header, which a client can forge). */
+  /**
+   * Who the client is, for a rate limit: the peer address, or the tunnel's `cf-connecting-ip` when the
+   * peer is loopback (clientKeyOf). Never used to grant anything.
+   */
   readonly ip: string;
 }
 export type Handlers = { [N in RouteName]: (c: Ctx<N>) => Api[N]["res"] | Promise<Api[N]["res"]> };
@@ -60,11 +69,13 @@ export interface WebOpts {
    * Runs one probe pass on an account (the same code as `squad probe`). The background loop starts only
    * when this is given, so a caller that does not want real passes never gets them.
    */
-  readonly probe?: (account: AccountRow, model: string) => Promise<void>;
+  readonly probe?: (account: AccountRow, model: string) => Promise<ProbeOutcome | void>;
   /** Replaces the loop's timers. For tests only. */
   readonly ticker?: { readonly timers?: Timers };
   /** Replaces the docker calls of a web login, and its timers. For tests only. */
   readonly login?: Partial<LoginRunner> & { readonly timers?: LoginTimers; readonly pty?: PtyRunner };
+  /** Replaces the terminal of the limit reset. For tests only. */
+  readonly limitPty?: PtyRunner;
   /** Replaces handlers. For tests only. */
   readonly handlers?: Partial<Handlers>;
 }
@@ -110,11 +121,11 @@ const floor = (v: unknown): number | null => {
 
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
-  me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {}, connectStatus: {},
+  me: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {}, connectStatus: {},
   startConnect: {
     body: (b) => {
-      if (!isObj(b) || !onlyKeys(b, ["runner", "name"]) || b.runner !== "claude" || typeof b.name !== "string") throw bad('body must be {runner: "claude", name}');
-      return { runner: "claude", name: b.name };
+      if (!isObj(b) || !onlyKeys(b, ["runner", "name", "replace"]) || b.runner !== "claude" || typeof b.name !== "string" || (b.replace !== undefined && b.replace !== true)) throw bad('body must be {runner: "claude", name[, replace: true]}');
+      return { runner: "claude", name: b.name, ...(b.replace === true ? { replace: true as const } : {}) };
     },
   },
   connectToken: {
@@ -188,8 +199,37 @@ const INPUTS: Inputs = {
   },
   consent: {
     body: (b) => {
-      if (!isObj(b) || !onlyKeys(b, ["agree"]) || b.agree !== true) throw bad("body must be {agree: true}");
-      return { agree: true };
+      if (!isObj(b) || !onlyKeys(b, ["agree"]) || typeof b.agree !== "boolean") throw bad("body must be {agree: boolean}");
+      return { agree: b.agree };
+    },
+  },
+  // ---- account care ----
+  listAccounts: { query: (q) => (q.get("all") === "1" ? { all: "1" as const } : {}) },
+  accountModels: {},
+  resetHealth: {},
+  testAccount: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["model"]) || (b.model !== undefined && (typeof b.model !== "string" || b.model.length > 200))) throw bad("body must be {model?: string}");
+      return b.model === undefined ? {} : { model: b.model };
+    },
+  },
+  removeAccount: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["confirm"]) || typeof b.confirm !== "string") throw bad("body must be {confirm: \"<runner>/<name>\"}");
+      return { confirm: b.confirm };
+    },
+  },
+  replaceSecret: {
+    // The secret may be in the body: the messages are fixed, nothing from it is echoed.
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["secret", "provider"]) || typeof b.secret !== "string" || (b.provider !== undefined && typeof b.provider !== "string")) throw bad("body must be {secret[, provider]}");
+      return { secret: b.secret, ...(typeof b.provider === "string" ? { provider: b.provider } : {}) };
+    },
+  },
+  limitReset: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["which"]) || !(LIMIT_RESET_WHICH as readonly unknown[]).includes(b.which)) throw bad(`body must be {which}, one of ${LIMIT_RESET_WHICH.join(", ")}`);
+      return { which: b.which as LimitResetWhich };
     },
   },
   usage: {
@@ -205,7 +245,11 @@ const INPUTS: Inputs = {
 
 // ---- the handlers ----
 
-function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, connects: ConnectPairs, adminGroup: string | undefined): Handlers {
+const PROBE_MODEL: Readonly<Record<string, EnvSpec>> = { codex: SQUAD_PROBE_MODEL_CODEX_ENV, claude: SQUAD_PROBE_MODEL_CLAUDE_ENV, pi: SQUAD_PROBE_MODEL_PI_ENV };
+/** One test pass per account in this time. */
+export const TEST_EVERY_MS = 60_000;
+
+function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, connects: ConnectPairs, resets: LimitResets, adminGroup: string | undefined): Handlers {
   const db = o.store.db;
   const now = o.now ?? (() => new Date());
   const busyOf = o.busy ?? ((a: AccountRow): boolean => {
@@ -221,7 +265,8 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     if (Number.isNaN(at.getTime())) throw bad("since must look like 7d, 12h or 2026-10-01");
     return at;
   };
-  const mine = (s: Session): AccountRow[] => listAccounts(db).filter((a) => a.ownerEmail !== null && a.ownerEmail.toLowerCase() === s.email.toLowerCase());
+  // A removed account's history is still the owner's to read.
+  const mine = (s: Session): AccountRow[] => listAccounts(db, undefined, { withRemoved: true }).filter((a) => a.ownerEmail !== null && a.ownerEmail.toLowerCase() === s.email.toLowerCase());
   /** The person's own account, or a 404 that looks the same as "no such account". */
   const owned = (s: Session, runner: string, name: string): AccountRow => {
     const a = getAccount(db, `${runner}/${name}`);
@@ -235,7 +280,9 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     if (a === undefined) throw NOT_FOUND;
     return a;
   };
-  const visible = (s: Session): AccountRow[] => (isAdmin(s) ? listAccounts(db) : mine(s));
+  const visible = (s: Session, withRemoved = false): AccountRow[] => (isAdmin(s) ? listAccounts(db, undefined, { withRemoved }) : mine(s).filter((a) => withRemoved || a.state !== "removed"));
+  /** Marks the passes of an account that was removed since. */
+  const marked = <V extends { readonly account?: string }>(v: V): V => (v.account !== undefined && getAccount(db, v.account)?.state === "removed" ? { ...v, accountRemoved: true as const } : v);
   /** The account ids a query may cover: undefined = every account, also the passes that found none (an admin). */
   const scope = (s: Session, account: string | undefined): string[] | undefined => {
     if (account !== undefined) {
@@ -259,8 +306,19 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       floor5h: a.floor5h ?? dflt, floorWeek: a.floorWeek ?? dflt, floorSource: a.floor5h !== null || a.floorWeek !== null ? "owner" : "default",
       ...(a.consentAt === null ? {} : { consentAt: a.consentAt }),
       busy: busyOf(a),
+      sharing: a.consentAt !== null,
+      ...(a.consentAt === null || a.consentBy === null ? {} : { consentBy: a.consentBy }),
+      ...(h.resets5h === null ? {} : { resets5h: h.resets5h }),
+      ...(h.resetsWeek === null ? {} : { resetsWeek: h.resetsWeek }),
+      canResetHealth: health === "cooling" || health === "suspect" || (a.state === "dead" && !needsLogin(a)),
     };
   };
+  /** A removed or moved account takes no act: it is history here. */
+  const live = (a: AccountRow): AccountRow => {
+    if (a.state === "removed" || a.state === "moved") throw new HttpError(409, "conflict", `the account is ${a.state}`);
+    return a;
+  };
+  const tested = new Map<string, number>();
   /** The login module's refusals carry their own status; the API error is built here. */
   const refuse = <T,>(fn: () => T): T => {
     try {
@@ -282,27 +340,29 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
 
   const real: Handlers = {
     me: ({ session }) => ({ email: session.email, name: session.name, admin: isAdmin(session) }),
-    listAccounts: ({ session }) => visible(session).map(view),
+    listAccounts: ({ session, query }) => visible(session, query.all === "1").map(view),
     getAccount: ({ session, params }) => view(managed(session, params.runner, params.name)),
     setFloor: ({ session, params, body }) => {
-      const a = managed(session, params.runner, params.name);
+      const a = live(managed(session, params.runner, params.name));
       setOwnerFloors(db, a.id, body.floor5h, body.floorWeek);
       return view(getAccount(db, a.id)!);
     },
     setEnabled: ({ session, params, body }) => {
-      const a = managed(session, params.runner, params.name);
+      const a = live(managed(session, params.runner, params.name));
       // A dead account comes back only through a fresh login; a moved one lives in another home.
       if (a.state === "dead" || a.state === "moved") throw new HttpError(409, "conflict", `the account is ${a.state}`);
       setState(db, a.id, body.enabled ? "active" : "disabled");
       return view(getAccount(db, a.id)!);
     },
-    consent: ({ session, params }) => {
-      const a = owned(session, params.runner, params.name);
-      setConsent(db, a.id, now());
+    consent: ({ session, params, body }) => {
+      const a = live(owned(session, params.runner, params.name));
+      setSharing(db, a.id, body.agree ? session.email.toLowerCase() : null, now());
       return view(getAccount(db, a.id)!);
     },
     startLogin: ({ session, params }) => {
-      const a = owned(session, params.runner, params.name);
+      const a = live(owned(session, params.runner, params.name));
+      if (a.runner === "claude" && a.kind === "token") return refuseAsync(() => setups.startReplace(session.email, a));
+      if (a.runner === "pi") throw bad("a pi key account takes a new key (Replace key); for a pi login run `squad login` on the host");
       return refuseAsync(() => logins.start(session.email, a));
     },
     loginStatus: ({ session, params }) => refuse(() => {
@@ -348,14 +408,14 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
         ...(query.since === undefined ? {} : { since: sinceOf(query.since, "7d") }),
         ...(query.before === undefined ? {} : { before: query.before }),
       });
-      return passViews(o.home, rows);
+      return passViews(o.home, rows).map(marked);
     },
     getPass: ({ session, params }) => {
       const row = PASS_ID.test(params.passId) ? getPassRow(db, params.passId) : undefined;
       // A pass that found no account has no owner: only an admin reads it.
       const owner = row?.account === null || row === undefined ? undefined : getAccount(db, row.account);
       if (row === undefined || !(isAdmin(session) || (owner !== undefined && owner.ownerEmail !== null && owner.ownerEmail.toLowerCase() === session.email.toLowerCase()))) throw new HttpError(404, "not-found", "no such pass");
-      return passDetail(o.home, row);
+      return marked(passDetail(o.home, row));
     },
     listProviders: ({ session }) => {
       const used = new Map<string, number>();
@@ -370,7 +430,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     },
     startConnect: ({ session, body }) => {
       if (offered(body.runner, body.runner) === undefined) throw bad("this provider is not offered");
-      return refuse(() => connects.start(session.email, body.name));
+      return refuse(() => connects.start(session.email, body.name, body.replace === true));
     },
     connectStatus: ({ session, params }) => refuse(() => connects.status(session.email, params.connectId)),
     connectToken: ({ ip, params, body }) => refuse(() => connects.redeem(ip, params.pairCode, body.token)),
@@ -385,7 +445,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       const secret = body.runner === "claude" ? body.token! : body.key;
       const why = secretShapeError(secret);
       if (why !== undefined) throw bad(why);
-      const spec = { runner: body.runner, name: body.name, kind: entry.kind, ownerEmail: session.email.toLowerCase() };
+      const spec = { runner: body.runner, name: body.name, kind: entry.kind, ownerEmail: session.email.toLowerCase(), consent: { by: session.email.toLowerCase() } };
       const files = body.runner === "claude"
         ? [{ name: "token", body: secret }]
         : [{ name: "auth.json", body: authJsonFor(body.provider, secret) }, ...(entry.source === undefined ? [] : [{ name: "models.json", body: modelsJsonFor(entry.source) }])];
@@ -395,6 +455,67 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
         if (e instanceof AccountExists) throw new HttpError(409, "conflict", e.message);
         throw e;
       }
+    },
+    // ---- account care ----
+    accountModels: ({ session, params }) => {
+      const a = managed(session, params.runner, params.name);
+      const dflt = PROBE_MODEL[a.runner] === undefined ? undefined : envOptional(PROBE_MODEL[a.runner]!, o.env);
+      return { models: servedModels(o.home, a, loadProviders(o.home)), ...(dflt === undefined ? {} : { defaultModel: dflt }) };
+    },
+    testAccount: async ({ session, params, body }) => {
+      const a = live(managed(session, params.runner, params.name));
+      if (o.probe === undefined || envOn(SQUAD_DRY_RUN_ENV, o.env)) throw new HttpError(501, "disabled", "this server runs no test pass");
+      const served = servedModels(o.home, a, loadProviders(o.home));
+      const dflt = PROBE_MODEL[a.runner] === undefined ? undefined : envOptional(PROBE_MODEL[a.runner]!, o.env);
+      const model = body.model !== undefined && served.includes(body.model) ? body.model : dflt;
+      if (model === undefined) throw bad("pick a model: this account has no default test model");
+      const t = now().getTime();
+      const last = tested.get(a.id);
+      if (last !== undefined && t - last < TEST_EVERY_MS) throw new HttpError(429, "too-many", "one test per account per minute");
+      // Counted when it starts, so a second click while the first runs is refused too.
+      tested.set(a.id, t);
+      const res = await o.probe(a, model);
+      if (res === undefined) throw new HttpError(501, "disabled", "this server runs no test pass");
+      const h = getHealth(db, a.id);
+      return {
+        ok: res.failure === undefined, model: res.model, ms: res.ms,
+        ...(res.failure === undefined ? {} : { failureKind: res.failure.kind, ...(res.failure.code === "" ? {} : { failureCode: res.failure.code }) }),
+        ...(h.left5h === null ? {} : { left5h: h.left5h }), ...(h.leftWeek === null ? {} : { leftWeek: h.leftWeek }),
+      };
+    },
+    removeAccount: async ({ session, params, body }) => {
+      const a = live(managed(session, params.runner, params.name));
+      if (body.confirm !== a.id) throw bad("confirm must be the account id, <runner>/<name>");
+      if (envOn(SQUAD_DRY_RUN_ENV, o.env)) throw new HttpError(501, "disabled", "nothing is removed while SQUAD_DRY_RUN=1");
+      if ((await removeAccount(o.store, o.home, a, now())) === "busy") throw new HttpError(409, "conflict", "a pass is using this account: try again when it ends");
+      return { account: a.id, revoke: revokeNote(a) };
+    },
+    resetHealth: ({ session, params }) => {
+      const a = live(managed(session, params.runner, params.name));
+      if (resetHealth(db, a.id) === "log-in-again") throw new HttpError(409, "conflict", `the login was revoked (${a.deadCode}): log in again`);
+      return view(getAccount(db, a.id)!);
+    },
+    replaceSecret: ({ session, params, body }) => {
+      const a = live(owned(session, params.runner, params.name));
+      if (envOn(SQUAD_DRY_RUN_ENV, o.env)) throw new HttpError(501, "disabled", "no account is written while SQUAD_DRY_RUN=1");
+      const why = secretShapeError(body.secret);
+      if (why !== undefined) throw bad(why);
+      const by = session.email.toLowerCase();
+      if (a.runner === "claude" && a.kind === "token") {
+        if (!TOKEN_EXACT.test(body.secret)) throw bad("a claude token is the sk-ant-oat01- token that `claude setup-token` prints");
+        replaceToken(o.store, o.home, a, body.secret, by, now());
+      } else if (a.runner === "pi" && a.kind === "key") {
+        const r = replacePiKey(o.store, o.home, a, body.provider, body.secret, by, now());
+        if (r === "pick-provider") throw bad("this account has keys for several providers: say which one");
+        if (r === "unknown-provider") throw bad("this account has no key for that provider");
+      } else throw bad("only a claude token account or a pi key account takes a new secret here; log in again instead");
+      return view(getAccount(db, a.id)!);
+    },
+    limitReset: async ({ session, params, body }) => {
+      const a = live(owned(session, "claude", params.name));
+      const r = await refuseAsync(() => resets.run(a, body.which));
+      if (r === "busy") throw new HttpError(409, "conflict", "a pass is using this account: try again when it ends");
+      return r;
     },
   };
   return { ...real, ...o.handlers };
@@ -490,7 +611,12 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
   const connects = new ConnectPairs({ env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), origin: cfg.origin, version: squadVersion() });
-  const handlers = makeHandlers(opts, logins, setups, connects, cfg.adminGroup);
+  const resets = new LimitResets({
+    env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
+    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    start: opts.limitPty?.start ?? realPty.start, stop: opts.limitPty?.stop ?? realPty.stop,
+  });
+  const handlers = makeHandlers(opts, logins, setups, connects, resets, cfg.adminGroup);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
@@ -575,7 +701,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
       }
       const query = input.query?.(url.searchParams);
       const handler = handlers[name] as (c: { params: unknown; query: unknown; body: unknown; session: Session | undefined; ip: string }) => unknown;
-      const out = await handler({ params: hit.params, query, body, session, ip: req.socket.remoteAddress ?? "" });
+      const out = await handler({ params: hit.params, query, body, session, ip: clientKeyOf(req.socket.remoteAddress ?? "", req.headers["cf-connecting-ip"]) });
       sendJson(res, name, 200, out);
     } catch (e) {
       if (e instanceof HttpError) return apiError(res, name, e);
@@ -727,6 +853,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
         }),
         logins.close(),
         setups.close(),
+        resets.close(),
       ]);
     },
   };

@@ -248,3 +248,13 @@ test("caller mounts: --mount, closed targets, absolute paths, never the home; la
   assert.throws(() => dockerRunArgv(plan({ callerMounts: [{ host: `${HOME}/locks`, container: "/t", ro: true }] })), /home/);
   assert.throws(() => dockerRunArgv(plan({ labels: { "squad.pass": "x" } })), /squad\./);
 });
+
+test("a scratch claude config (the limit reset) mounts at /claude for a claude token account only, never from the home", () => {
+  const tok = { runner: "claude" as const, account: { name: "t", kind: "token" as const, dir: `${HOME}/accounts/claude/t` }, lockFile: null };
+  const argv = dockerRunArgv(plan({ ...tok, claudeConfig: "/tmp/squad-cfg-1" }));
+  assert.ok(mountsOf(argv).includes("/tmp/squad-cfg-1:/claude"));
+  assert.ok(mountsOf(argv).includes(`${HOME}/accounts/claude/t/token:/squad/token:ro`));
+  assert.throws(() => dockerRunArgv(plan({ claudeConfig: "/tmp/squad-cfg-1" })), /claude token/);
+  assert.throws(() => dockerRunArgv(plan({ runner: "claude", account: { name: "l", kind: "login", dir: `${HOME}/accounts/claude/l` }, claudeConfig: "/tmp/x" })), /claude token/);
+  assert.throws(() => dockerRunArgv(plan({ ...tok, claudeConfig: `${HOME}/accounts/claude/other` })), /home/);
+});

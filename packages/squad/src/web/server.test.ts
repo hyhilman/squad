@@ -144,7 +144,7 @@ test("a person sees only the accounts they own; email case does not matter; othe
     assert.equal(res.status, 404, path);
   }
   const bobRow = getAccount(r.store.db, "pi/bob")!;
-  assert.deepEqual([bobRow.floor5h, bobRow.state, bobRow.consentAt], [null, "active", null], "nothing changed");
+  assert.deepEqual([bobRow.floor5h, bobRow.state, bobRow.consentAt], [null, "active", NOW.toISOString()], "nothing changed");
   await r.close();
 });
 
@@ -156,6 +156,7 @@ test("the account view carries health, floors, usage left and busy", async () =>
   assert.deepEqual(v, {
     account: "codex/alice", runner: "codex", name: "alice", kind: "login", ownerEmail: "Alice@Example.Test", pools: [], health: "ok", lastCode: "rate_limited",
     left5h: 80, leftWeek: 60, readAt: NOW.toISOString(), floor5h: 10, floorWeek: 10, floorSource: "default", busy: true,
+    consentAt: NOW.toISOString(), consentBy: "cli", sharing: true, canResetHealth: false,
   });
   assert.equal((await api<AccountView>(r, c, "GET", "/api/accounts/pi/alice-key")).body.busy, false);
   await r.close();
@@ -191,13 +192,16 @@ test("setEnabled disables and enables; a dead account stays dead (409)", async (
   await r.close();
 });
 
-test("consent stamps the time; agree must be true", async () => {
+test("consent: agree false stops sharing, agree true shares again, each at that moment and by the owner; agree must be a boolean", async () => {
   const r = await rig();
   seed(r);
   const c = await signIn(r, "alice@example.test");
-  assert.equal((await api<ApiError>(r, c, "POST", "/api/accounts/pi/alice-key/consent", { agree: false })).status, 400);
+  assert.equal((await api<ApiError>(r, c, "POST", "/api/accounts/pi/alice-key/consent", { agree: "no" })).status, 400);
+  assert.equal((await api<ApiError>(r, c, "POST", "/api/accounts/pi/alice-key/consent", {})).status, 400);
+  const off = await api<AccountView>(r, c, "POST", "/api/accounts/pi/alice-key/consent", { agree: false });
+  assert.deepEqual([off.body.sharing, off.body.consentAt, off.body.consentBy], [false, undefined, undefined]);
   const ok = await api<AccountView>(r, c, "POST", "/api/accounts/pi/alice-key/consent", { agree: true });
-  assert.equal(ok.body.consentAt, NOW.toISOString());
+  assert.deepEqual([ok.body.sharing, ok.body.consentAt, ok.body.consentBy], [true, NOW.toISOString(), "alice@example.test"]);
   await r.close();
 });
 
@@ -713,9 +717,9 @@ test("an admin may set floors and enable or disable any account; consent and log
   assert.deepEqual([floor.status, floor.body.floor5h, floor.body.floorWeek, floor.body.floorSource], [200, 30, 40, "owner"]);
   assert.equal((await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/enabled", { enabled: false })).body.health, "disabled");
   assert.equal((await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/enabled", { enabled: true })).body.health, "ok");
-  const consent = await api<ApiError>(r, admin, "POST", "/api/accounts/pi/bob/consent", { agree: true });
+  const consent = await api<ApiError>(r, admin, "POST", "/api/accounts/pi/bob/consent", { agree: false });
   assert.deepEqual([consent.status, consent.body.error], [404, "not-found"]);
-  assert.equal(getAccount(r.store.db, "pi/bob")!.consentAt, null);
+  assert.equal(getAccount(r.store.db, "pi/bob")!.consentAt, NOW.toISOString());
   const login = await api<ApiError>(r, admin, "POST", "/api/accounts/codex/alice/login");
   assert.equal(login.status, 404);
   assert.equal(f.procs.length, 0, "no container for another person's login");
@@ -1360,7 +1364,7 @@ test("the token route: no session or csrf needed, no CORS ever, 8 KB cap; it mak
   await r.close();
 });
 
-test("the token route refuses a bad body with a fixed message, and holds an address after 10 wrong codes", async () => {
+test("the token route refuses a bad body with a fixed message, and holds an address after 30 wrong codes", async () => {
   const r = await rig();
   await withCatalog(r);
   const alice = await signIn(r, "alice@example.test");
@@ -1370,9 +1374,249 @@ test("the token route refuses a bad body with a fixed message, and holds an addr
     assert.equal(res.status, 400, JSON.stringify(body));
     assert.ok(!JSON.stringify(await res.json()).includes("CONNECT"));
   }
-  for (let i = 0; i < 10; i++) assert.equal((await postToken(r, `${"V".repeat(42)}${i}`, { token: CONNECT_TOKEN })).status, 404);
+  for (let i = 0; i < 30; i++) assert.equal((await postToken(r, `${"V".repeat(42)}${i}`, { token: CONNECT_TOKEN })).status, 404);
   const held = await postToken(r, s.pairCode, { token: CONNECT_TOKEN });
   assert.deepEqual([held.status, (await held.json() as { error: string }).error], [429, "too-many"]);
   assert.equal(getAccount(r.store.db, "claude/c1"), undefined);
+  await r.close();
+});
+
+// ---- account care: consent gate, test, remove, reset health, log in again, limit reset ----
+
+const okProbe = (calls: string[]) => async (a: { id: string }, model: string) => {
+  calls.push(`${a.id} ${model}`);
+  return { account: a.id, model, input: 10, output: 2, ms: 1234 };
+};
+
+test("a web add records the owner's consent; listAccounts hides removed accounts unless all=1, and the view shows removed", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const c = await signIn(r, "alice@example.test");
+  const added = await api<AccountView>(r, c, "POST", "/api/accounts", { runner: "claude", name: "t1", token: FAKE_TOKEN });
+  assert.deepEqual([added.body.sharing, added.body.consentBy, added.body.consentAt], [true, "alice@example.test", NOW.toISOString()]);
+  await api<AccountView>(r, c, "DELETE", "/api/accounts/claude/t1", { confirm: "claude/t1" });
+  assert.deepEqual((await api<AccountView[]>(r, c, "GET", "/api/accounts")).body.map((a) => a.account), []);
+  const all = await api<AccountView[]>(r, c, "GET", "/api/accounts?all=1");
+  assert.deepEqual(all.body.map((a) => [a.account, a.health, a.sharing]), [["claude/t1", "removed", false]]);
+  await r.close();
+});
+
+test("removeAccount: owner or admin, a typed confirm that equals the id, 409 while a pass holds it; the history stays and says removed", async () => {
+  const r = await rig({}, ADMIN);
+  seed(r);
+  mkdirSync(join(r.home.accounts, "pi", "bob"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "pi", "bob", "auth.json"), "{}");
+  storePass(r, "Z1", { account: "pi/bob" });
+  const alice = await signIn(r, "alice@example.test");
+  const admin = await signIn(r, "boss@example.test", ["squad-admins"]);
+  assert.equal((await api<ApiError>(r, alice, "DELETE", "/api/accounts/pi/bob", { confirm: "pi/bob" })).status, 404, "not hers");
+  for (const bad of [{}, { confirm: "pi/bo" }, { confirm: "bob" }, { confirm: "pi/bob", extra: 1 }]) assert.equal((await api<ApiError>(r, admin, "DELETE", "/api/accounts/pi/bob", bad)).status, 400, JSON.stringify(bad));
+  assert.ok(existsSync(join(r.home.accounts, "pi", "bob")));
+  const gone = await api<{ account: string; revoke: string }>(r, admin, "DELETE", "/api/accounts/pi/bob", { confirm: "pi/bob" });
+  assert.equal(gone.status, 200);
+  assert.equal(gone.body.account, "pi/bob");
+  assert.match(gone.body.revoke, /API keys page/);
+  assert.equal(existsSync(join(r.home.accounts, "pi", "bob")), false);
+  assert.equal(getAccount(r.store.db, "pi/bob")!.state, "removed");
+  const hist = await api<PassView[]>(r, admin, "GET", "/api/passes");
+  assert.deepEqual(hist.body.map((x) => [x.passId, x.account, x.accountRemoved]), [["Z1", "pi/bob", true]]);
+  assert.equal((await api<ApiError>(r, admin, "DELETE", "/api/accounts/pi/bob", { confirm: "pi/bob" })).status, 409, "already removed");
+  for (const [m, path, body] of [["PUT", "/api/accounts/pi/bob/floor", { floor5h: 1, floorWeek: 1 }], ["PUT", "/api/accounts/pi/bob/enabled", { enabled: false }], ["POST", "/api/accounts/pi/bob/reset", undefined]] as const) {
+    assert.equal((await api<ApiError>(r, admin, m, path, body)).status, 409, `${m} ${path} on a removed account`);
+  }
+  // A login whose lock a pass holds: 409, and nothing changes.
+  const r2 = await rig({ busy: () => true }, ADMIN);
+  seed(r2);
+  const lock = join(r2.home.locks, "codex", "alice.lock");
+  mkdirSync(join(r2.home.locks, "codex"), { recursive: true });
+  writeFileSync(lock, "");
+  const { spawn } = await import("node:child_process");
+  const holder = spawn("flock", [lock, "sh", "-c", "echo held; read x"], { stdio: ["pipe", "pipe", "ignore"] });
+  await new Promise<void>((done) => holder.stdout.once("data", () => done()));
+  try {
+    const a2 = await signIn(r2, "alice@example.test");
+    const busy = await api<ApiError>(r2, a2, "DELETE", "/api/accounts/codex/alice", { confirm: "codex/alice" });
+    assert.deepEqual([busy.status, busy.body.error], [409, "conflict"]);
+    assert.equal(getAccount(r2.store.db, "codex/alice")!.state, "active");
+  } finally {
+    holder.stdin.end();
+  }
+  await r.close();
+  await r2.close();
+});
+
+test("resetHealth: owner or admin; clears cooling; 409 'log in again' for a permanent code; canResetHealth says when it applies", async () => {
+  const r = await rig({}, ADMIN);
+  seed(r);
+  putHealth(r.store.db, { ...emptyHealth("pi/bob"), coolUntil: "2026-10-24T13:00:00.000Z", coolKind: "rate-limit", lastFailCode: "429" });
+  const admin = await signIn(r, "boss@example.test", ["squad-admins"]);
+  const alice = await signIn(r, "alice@example.test");
+  const before = await api<AccountView>(r, admin, "GET", "/api/accounts/pi/bob");
+  assert.deepEqual([before.body.health, before.body.canResetHealth], ["cooling", true]);
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/pi/bob/reset")).status, 404);
+  const done = await api<AccountView>(r, admin, "POST", "/api/accounts/pi/bob/reset");
+  assert.deepEqual([done.status, done.body.health, done.body.lastCode, done.body.canResetHealth], [200, "ok", undefined, false]);
+  setState(r.store.db, "codex/alice", "dead", "refresh_token_reused", NOW);
+  const dead = await api<AccountView>(r, alice, "GET", "/api/accounts/codex/alice");
+  assert.equal(dead.body.canResetHealth, false);
+  const refused = await api<ApiError>(r, alice, "POST", "/api/accounts/codex/alice/reset");
+  assert.deepEqual([refused.status, refused.body.error], [409, "conflict"]);
+  assert.match(refused.body.message, /log in again/);
+  await r.close();
+});
+
+test("testAccount: owner or admin; a served model or the probe default, else 400; one per account per minute; 501 with no probe or in a dry run", async () => {
+  const calls: string[] = [];
+  const r = await rig({ probe: okProbe(calls) }, { ...ADMIN, SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(r);
+  mkdirSync(join(r.home.accounts, "pi", "alice-key"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "pi", "alice-key", "models.json"), JSON.stringify({ providers: { zai: { models: [{ id: "glm-a" }, { id: "glm-b" }] } } }));
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  const models = await api<{ models: string[]; defaultModel?: string }>(r, alice, "GET", "/api/accounts/pi/alice-key/models");
+  assert.deepEqual(models.body, { models: ["zai/glm-a", "zai/glm-b"], defaultModel: "zai/glm-fake" });
+  assert.equal((await api<ApiError>(r, bob, "POST", "/api/accounts/pi/alice-key/test", {})).status, 404);
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/pi/alice-key/test", { model: 5 })).status, 400);
+  const t = await api<{ ok: boolean; model: string; ms: number }>(r, alice, "POST", "/api/accounts/pi/alice-key/test", { model: "zai/glm-b" });
+  assert.deepEqual([t.status, t.body.ok, t.body.model, t.body.ms], [200, true, "zai/glm-b", 1234]);
+  assert.deepEqual(calls, ["pi/alice-key zai/glm-b"]);
+  const again = await api<ApiError>(r, alice, "POST", "/api/accounts/pi/alice-key/test", { model: "zai/glm-b" });
+  assert.deepEqual([again.status, again.body.error], [429, "too-many"]);
+  // A model it does not serve falls back to the probe default.
+  const admin = await signIn(r, "boss@example.test", ["squad-admins"]);
+  const t2 = await api<{ ok: boolean; model: string }>(r, admin, "POST", "/api/accounts/pi/bob/test", { model: "not/served" });
+  assert.equal(t2.body.model, "zai/glm-fake");
+  // No default and no served model: pick one.
+  const r2 = await rig({ probe: okProbe(calls) });
+  seed(r2);
+  const a2 = await signIn(r2, "alice@example.test");
+  const pickOne = await api<ApiError>(r2, a2, "POST", "/api/accounts/pi/alice-key/test", {});
+  assert.equal(pickOne.status, 400);
+  assert.match(pickOne.body.message, /pick a model/);
+  const r3 = await rig({}, { SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(r3);
+  const a3 = await signIn(r3, "alice@example.test");
+  assert.equal((await api<ApiError>(r3, a3, "POST", "/api/accounts/pi/alice-key/test", {})).status, 501);
+  await r.close();
+  await r2.close();
+  await r3.close();
+});
+
+test("testAccount answers a failure with its kind and code and the room after it; never a reason text", async () => {
+  const r = await rig({ probe: async (a, model) => ({ account: a.id, model, input: 0, output: 0, ms: 50, failure: { kind: "auth", code: "401:AuthError", reason: "Invalid API key." } }) }, { SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(r);
+  putHealth(r.store.db, { ...emptyHealth("pi/alice-key"), left5h: 40, leftWeek: 70 });
+  const alice = await signIn(r, "alice@example.test");
+  const t = await api<Record<string, unknown>>(r, alice, "POST", "/api/accounts/pi/alice-key/test", {});
+  assert.deepEqual(t.body, { ok: false, model: "zai/glm-fake", failureKind: "auth", failureCode: "401:AuthError", ms: 50, left5h: 40, leftWeek: 70 });
+  await r.close();
+});
+
+test("replaceSecret: the owner only; a claude token or a pi key by shape; health cleared and consent given; nothing echoed", async () => {
+  const r = await rig({}, ADMIN);
+  seed(r);
+  addAccount(r.store.db, { runner: "claude", name: "t", kind: "token", ownerEmail: "alice@example.test", consent: false }, NOW);
+  mkdirSync(join(r.home.accounts, "claude", "t"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "claude", "t", "token"), "sk-ant-oat01-OLDOLDOLDOLDOLDOLDOLDOLDOLDOLD");
+  setState(r.store.db, "claude/t", "dead", "401", NOW);
+  mkdirSync(join(r.home.accounts, "pi", "alice-key"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "pi", "alice-key", "auth.json"), JSON.stringify({ zai: { type: "api_key", key: "old-fake" } }));
+  const alice = await signIn(r, "alice@example.test");
+  const admin = await signIn(r, "boss@example.test", ["squad-admins"]);
+  assert.equal((await api<ApiError>(r, admin, "PUT", "/api/accounts/claude/t/secret", { secret: FAKE_TOKEN })).status, 404, "not the admin's");
+  const bad = await api<ApiError>(r, alice, "PUT", "/api/accounts/claude/t/secret", { secret: "has space" });
+  assert.equal(bad.status, 400);
+  assert.ok(!JSON.stringify(bad.body).includes("has space"));
+  assert.equal((await api<ApiError>(r, alice, "PUT", "/api/accounts/claude/t/secret", { secret: "sk-ant-api03-notasetuptoken" })).status, 400, "a claude token must be a setup-token");
+  const ok = await api<AccountView>(r, alice, "PUT", "/api/accounts/claude/t/secret", { secret: FAKE_TOKEN });
+  assert.deepEqual([ok.status, ok.body.health, ok.body.sharing, ok.body.consentBy], [200, "ok", true, "alice@example.test"]);
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "t", "token"), "utf8"), FAKE_TOKEN);
+  const key = await api<AccountView>(r, alice, "PUT", "/api/accounts/pi/alice-key/secret", { secret: FAKE_KEY });
+  assert.equal(key.status, 200);
+  assert.equal(JSON.parse(readFileSync(join(r.home.accounts, "pi", "alice-key", "auth.json"), "utf8")).zai.key, FAKE_KEY);
+  assert.equal((await api<ApiError>(r, alice, "PUT", "/api/accounts/codex/alice/secret", { secret: FAKE_KEY })).status, 400, "a codex login takes no secret");
+  assert.ok(!JSON.stringify([ok.body, key.body]).includes("FAKEFAKE") && !r.logs.join("\n").includes("FAKEFAKE"));
+  await r.close();
+});
+
+test("startLogin: a codex login of any state but removed may log in again (the owner); a claude token account gets a setup-token sign-in that replaces its token", async () => {
+  const f = fakeLogin();
+  const pty = fakePty();
+  const r = await rig({ login: { ...f.opts, pty: pty.pty } });
+  seed(r);
+  await withCatalog(r);
+  addAccount(r.store.db, { runner: "claude", name: "t", kind: "token", ownerEmail: "alice@example.test" }, NOW);
+  mkdirSync(join(r.home.accounts, "claude", "t"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "claude", "t", "token"), "sk-ant-oat01-OLDOLDOLDOLDOLDOLDOLDOLDOLDOLD");
+  putHealth(r.store.db, { ...emptyHealth("claude/t"), suspectSince: NOW.toISOString(), authFails: 1 });
+  const alice = await signIn(r, "alice@example.test");
+  const codex = await api<{ userCode: string }>(r, alice, "POST", "/api/accounts/codex/alice/login");
+  assert.equal(codex.status, 200, "an active codex login may log in again now");
+  const claude = await api<{ loginId: string; needsCode?: true }>(r, alice, "POST", "/api/accounts/claude/t/login");
+  assert.deepEqual([claude.status, claude.body.needsCode], [200, true]);
+  await api(r, alice, "POST", `/api/logins/${claude.body.loginId}/code`, { code: "PAGE-CODE" });
+  await new Promise((ok) => setTimeout(ok, 400));
+  const proc = pty.procs.at(-1)!;
+  proc.say(`\r\n${SETUP_TOKEN}\r\n`);
+  for (let i = 0; i < 10; i++) await new Promise((res) => setImmediate(res));
+  assert.deepEqual((await api(r, alice, "GET", `/api/logins/${claude.body.loginId}`)).body, { loginId: claude.body.loginId, state: "done" });
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "t", "token"), "utf8"), SETUP_TOKEN);
+  const v = await api<AccountView>(r, alice, "GET", "/api/accounts/claude/t");
+  assert.deepEqual([v.body.health, v.body.consentBy], ["ok", "alice@example.test"]);
+  await r.close();
+});
+
+test("startConnect replace: a new token for the person's own claude token account, by the pair code; any other account is refused", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  seed(r);
+  addAccount(r.store.db, { runner: "claude", name: "t", kind: "token", ownerEmail: "alice@example.test" }, NOW);
+  mkdirSync(join(r.home.accounts, "claude", "t"), { recursive: true });
+  writeFileSync(join(r.home.accounts, "claude", "t", "token"), "sk-ant-oat01-OLDOLDOLDOLDOLDOLDOLDOLDOLDOLD");
+  addAccount(r.store.db, { runner: "claude", name: "bobs", kind: "token", ownerEmail: "bob@example.test" }, NOW);
+  const alice = await signIn(r, "alice@example.test");
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/connect", { runner: "claude", name: "bobs", replace: true })).status, 404);
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/connect", { runner: "claude", name: "new", replace: true })).status, 404);
+  const start = await api<{ pairCode: string; connectId: string }>(r, alice, "POST", "/api/connect", { runner: "claude", name: "t", replace: true });
+  assert.equal(start.status, 200);
+  const sent = await fetch(`${r.base}/api/connect/${start.body.pairCode}/token`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: SETUP_TOKEN }) });
+  assert.equal(sent.status, 200);
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "t", "token"), "utf8"), SETUP_TOKEN);
+  await r.close();
+});
+
+test("limitReset: the owner of a claude account only; a bad which is 400; the kill switch is 501", async () => {
+  const r = await rig({}, { ...ADMIN, SQUAD_NO_LIMIT_RESET: "1" });
+  seed(r);
+  addAccount(r.store.db, { runner: "claude", name: "t", kind: "token", ownerEmail: "alice@example.test" }, NOW);
+  const alice = await signIn(r, "alice@example.test");
+  const admin = await signIn(r, "boss@example.test", ["squad-admins"]);
+  assert.equal((await api<ApiError>(r, admin, "POST", "/api/accounts/claude/t/limit-reset", { which: "5-hour" })).status, 404);
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/claude/t/limit-reset", { which: "all" })).status, 400);
+  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/claude/t/limit-reset", { which: "5-hour" })).status, 501);
+  await r.close();
+});
+
+test("every account care answer passes findForbidden", async () => {
+  const r = await rig({ probe: okProbe([]) }, { SQUAD_PROBE_MODEL_PI: "zai/glm-fake" });
+  seed(r);
+  const c = await signIn(r, "alice@example.test");
+  for (const [m, path, body] of [["GET", "/api/accounts/pi/alice-key/models", undefined], ["POST", "/api/accounts/pi/alice-key/test", {}], ["POST", "/api/accounts/pi/alice-key/reset", undefined], ["GET", "/api/accounts?all=1", undefined], ["DELETE", "/api/accounts/pi/alice-key", { confirm: "pi/alice-key" }]] as const) {
+    const res = await api(r, c, m, path, body);
+    assert.equal(res.status, 200, path);
+    assert.equal(findForbidden(res.body), undefined, path);
+  }
+  await r.close();
+});
+
+test("behind the tunnel (a loopback peer) the wrong-code limit keys on cf-connecting-ip, so one bad client does not hold everyone", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const s = (await api<ConnectStart>(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" })).body;
+  const post = (code: string, ip: string) => fetch(`${r.base}/api/connect/${code}/token`, { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": ip }, body: JSON.stringify({ token: CONNECT_TOKEN }) });
+  for (let i = 0; i < 30; i++) assert.equal((await post(`${"V".repeat(42)}${i}`, "203.0.113.7")).status, 404);
+  assert.equal((await post("V".repeat(43), "203.0.113.7")).status, 429, "the bad client is held");
+  assert.equal((await post(s.pairCode, "198.51.100.2")).status, 200, "another client behind the same tunnel is not");
   await r.close();
 });

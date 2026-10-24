@@ -18,7 +18,7 @@ export interface Me {
 
 export type Runner = "claude" | "codex" | "pi" | "dsh";
 export type AccountKind = "login" | "key" | "token";
-export type Health = "ok" | "suspect" | "cooling" | "dead" | "disabled" | "moved";
+export type Health = "ok" | "suspect" | "cooling" | "dead" | "disabled" | "moved" | "removed";
 
 /** One account as the web app shows it. */
 export interface AccountView {
@@ -46,6 +46,16 @@ export interface AccountView {
   readonly consentAt?: string;
   /** A pass holds it now. */
   readonly busy: boolean;
+  // ---- account care (consent, reset, week badge) ----
+  /** The owner shares it: the pool may run passes on it. False = squad refuses every pass on it. */
+  readonly sharing: boolean;
+  /** Who gave the consent: an email, `cli` or `migration`. Unset while not sharing. */
+  readonly consentBy?: string;
+  /** When each window resets, from the latest read. */
+  readonly resets5h?: string;
+  readonly resetsWeek?: string;
+  /** "Reset health" would be taken: cooling, suspect, or dead without a permanent code. */
+  readonly canResetHealth: boolean;
 }
 
 export type UsageBy = "project" | "flow" | "action" | "task" | "session" | "account" | "model" | "day" | "window";
@@ -124,6 +134,8 @@ export interface PassView {
   readonly catalogCostUsd?: number;
   /** The stored stream is still on disk. */
   readonly hasTranscript: boolean;
+  /** The account was removed after this pass. */
+  readonly accountRemoved?: true;
 }
 
 /** What the assistant said, parsed from the stored stream; never the raw stream. Secrets are `[hidden]`. */
@@ -220,6 +232,48 @@ export interface ApiError {
   readonly message: string;
 }
 
+// ---- account care ----
+
+export interface AccountModels {
+  /** Model ids the account serves, as a pass names them. */
+  readonly models: readonly string[];
+  /** SQUAD_PROBE_MODEL_<RUNNER>, used when no model is picked. */
+  readonly defaultModel?: string;
+}
+
+export interface TestResult {
+  readonly ok: boolean;
+  readonly model: string;
+  readonly failureKind?: string;
+  readonly failureCode?: string;
+  readonly ms: number;
+  readonly left5h?: number;
+  readonly leftWeek?: number;
+}
+
+export interface RemoveResult {
+  readonly account: string;
+  /** Where to revoke the login or key at the provider. Text only. */
+  readonly revoke: string;
+}
+
+/** A claude token (`secret`), or a pi key with the provider it is for. */
+export interface ReplaceSecretBody {
+  readonly secret: string;
+  readonly provider?: string;
+}
+
+/** The arguments the CLI's `/limit-reset` takes (its argument hint). */
+export const LIMIT_RESET_WHICH = ["5-hour", "weekly", "full", "fable"] as const;
+export type LimitResetWhich = (typeof LIMIT_RESET_WHICH)[number];
+
+export interface LimitResetResult {
+  /** `unknown`: the CLI said nothing squad knows; a reset may or may not have been used. */
+  readonly outcome: "done" | "not-available" | "needs-login" | "unknown";
+  /** squad's own words for the outcome; never the screen. */
+  readonly message: string;
+}
+
 /** The routes. A path param is `:name`. */
 export const ROUTES = {
   me: { method: "GET", path: "/api/me" },
@@ -241,6 +295,13 @@ export const ROUTES = {
   startConnect: { method: "POST", path: "/api/connect" },
   connectStatus: { method: "GET", path: "/api/connect/:connectId" },
   connectToken: { method: "POST", path: "/api/connect/:pairCode/token" },
+  // ---- account care ----
+  accountModels: { method: "GET", path: "/api/accounts/:runner/:name/models" },
+  testAccount: { method: "POST", path: "/api/accounts/:runner/:name/test" },
+  removeAccount: { method: "DELETE", path: "/api/accounts/:runner/:name" },
+  resetHealth: { method: "POST", path: "/api/accounts/:runner/:name/reset" },
+  replaceSecret: { method: "PUT", path: "/api/accounts/:runner/:name/secret" },
+  limitReset: { method: "POST", path: "/api/accounts/claude/:name/limit-reset" },
 } as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
 
 export type RouteName = keyof typeof ROUTES;
@@ -256,11 +317,14 @@ type AccountParams = { readonly runner: Runner; readonly name: string };
 /** What each route takes and gives. `void` = nothing. */
 export interface Api {
   me: { params: void; query: void; body: void; res: Me };
-  listAccounts: { params: void; query: void; body: void; res: readonly AccountView[] };
+  /** `all=1` also lists removed accounts. */
+  listAccounts: { params: void; query: { readonly all?: "1" }; body: void; res: readonly AccountView[] };
   getAccount: { params: AccountParams; query: void; body: void; res: AccountView };
   setFloor: { params: AccountParams; query: void; body: SetFloorBody; res: AccountView };
   setEnabled: { params: AccountParams; query: void; body: { readonly enabled: boolean }; res: AccountView };
-  consent: { params: AccountParams; query: void; body: { readonly agree: true }; res: AccountView };
+  /** The owner only. `agree: false` stops sharing: squad then refuses every pass on the account. */
+  consent: { params: AccountParams; query: void; body: { readonly agree: boolean }; res: AccountView };
+  /** The owner only. codex login: a device login (the seat must match). claude token: a setup-token sign-in that replaces the token. */
   startLogin: { params: AccountParams; query: void; body: void; res: LoginStart };
   loginStatus: { params: { readonly loginId: string }; query: void; body: void; res: LoginStatus };
   /** Gives a claude setup-token login the code the sign-in page showed. One try. The code is never echoed or logged. */
@@ -278,8 +342,8 @@ export interface Api {
    */
   addAccount: { params: void; query: void; body: AddAccountBody; res: LoginStart | AccountView };
   listProviders: { params: void; query: void; body: void; res: readonly ProviderView[] };
-  /** Starts a "use my computer" claude sign-in for a NEW account the person will own. */
-  startConnect: { params: void; query: void; body: { readonly runner: "claude"; readonly name: string }; res: ConnectStart };
+  /** Starts a "use my computer" claude sign-in for a NEW account the person will own, or (`replace`) a new token for their own token account. */
+  startConnect: { params: void; query: void; body: { readonly runner: "claude"; readonly name: string; readonly replace?: true }; res: ConnectStart };
   /** The owner only; anyone else gets 404. */
   connectStatus: { params: { readonly connectId: string }; query: void; body: void; res: ConnectStatus };
   /**
@@ -287,6 +351,19 @@ export interface Api {
    * used or expired code is a 404 with no detail. The token is checked by shape, never echoed.
    */
   connectToken: { params: { readonly pairCode: string }; query: void; body: { readonly token: string }; res: { readonly account: string } };
+  // ---- account care ----
+  /** The models a test may use: what the account serves, and the probe default. Owner or admin. */
+  accountModels: { params: AccountParams; query: void; body: void; res: AccountModels };
+  /** One tiny real pass, the same as `squad probe`. Owner or admin; one per account per minute (429). */
+  testAccount: { params: AccountParams; query: void; body: { readonly model?: string }; res: TestResult };
+  /** Owner or admin. `confirm` must be the account id. A running pass is a 409. The history stays. */
+  removeAccount: { params: AccountParams; query: void; body: { readonly confirm: string }; res: RemoveResult };
+  /** Owner or admin. Clears cooling and suspect. A dead account with a permanent code is a 409: log in again. */
+  resetHealth: { params: AccountParams; query: void; body: void; res: AccountView };
+  /** The owner only: a new claude token or a new pi key. Checked by shape, never echoed. */
+  replaceSecret: { params: AccountParams; query: void; body: ReplaceSecretBody; res: AccountView };
+  /** The owner only: the real claude CLI's `/limit-reset <which>` on the account. It spends a reset. */
+  limitReset: { params: { readonly name: string }; query: void; body: { readonly which: LimitResetWhich }; res: LimitResetResult };
 }
 
 // Every route has a type entry, and every type entry a route.

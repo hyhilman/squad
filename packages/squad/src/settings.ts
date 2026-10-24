@@ -47,6 +47,11 @@ export const SQUAD_NO_WEB_LOGIN_ENV: EnvSpec = {
   default: "0",
   why: "1 = `squad web` refuses to start, so nobody can sign in to the web view (fail safe)",
 };
+export const SQUAD_NO_LIMIT_RESET_ENV: EnvSpec = {
+  key: "SQUAD_NO_LIMIT_RESET",
+  default: "0",
+  why: "1 = the web app's \"Use limit reset\" starts no claude CLI and spends no reset",
+};
 export const SQUAD_NO_USAGE_EXPORT_ENV: EnvSpec = {
   key: "SQUAD_NO_USAGE_EXPORT",
   default: "0",
@@ -144,6 +149,7 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_NO_USAGE_READ_ENV,
   SQUAD_NO_AUTO_PROBE_ENV,
   SQUAD_NO_WEB_LOGIN_ENV,
+  SQUAD_NO_LIMIT_RESET_ENV,
   SQUAD_NO_GC_ENV,
   SQUAD_NO_USAGE_EXPORT_ENV,
   SQUAD_STOP_GRACE_S_ENV,

@@ -44,6 +44,7 @@ function NameCell({ a }: { a: AccountView }) {
         <Text fontSize="xs" color="fg.muted" truncate>
           {a.runner} · {a.kind}
           {a.busy ? " · busy" : ""}
+          {a.sharing ? "" : " · not shared"}
         </Text>
       </Box>
     </HStack>
@@ -139,7 +140,7 @@ export function Accounts() {
                   </Flex>
                   <Stack gap="3" mt="3" pl="11">
                     <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour" />
-                    <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" />
+                    <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
                     <Text fontSize="xs" color="fg.subtle">
                       {admin ? `${a.ownerEmail} · ` : ""}last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
                     </Text>
@@ -181,7 +182,7 @@ export function Accounts() {
                         <RoomBar left={a.left5h} floor={a.floor5h} width="200px" />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" />
+                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" resetsWeek={a.resetsWeek} />
                       </Table.Cell>
                       <Table.Cell hideBelow="lg" textAlign="end" color="fg.muted" fontSize="sm" whiteSpace="nowrap">
                         {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}

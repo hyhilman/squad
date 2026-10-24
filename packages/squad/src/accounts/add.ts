@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } f
 import { join } from "node:path";
 import type { AccountKind, Runner } from "../docker.ts";
 import type { HomeLayout } from "../home.ts";
-import { addAccount, getAccount, accountId, type AccountRow } from "./store.ts";
+import { addAccount, liveAccount, accountId, type AccountRow } from "./store.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 /** The account (or its folder) is already there. */
@@ -18,6 +18,8 @@ export interface NewFileAccount {
   readonly name: string;
   readonly kind: AccountKind;
   readonly ownerEmail?: string;
+  /** As NewAccount: unset = `cli`, false = not shared until the owner agrees. */
+  readonly consent?: { readonly by: string } | false;
 }
 
 export interface AccountFile {
@@ -39,7 +41,7 @@ export function secretShapeError(v: unknown): string | undefined {
 /** Row first (it checks the runner, the name and the kind), then the folder (mode 0700) and its files (mode 0600, tmp + rename). Undoes both on failure. */
 export function createFileAccount(db: DatabaseSync, home: HomeLayout, a: NewFileAccount, files: readonly AccountFile[], now: Date): AccountRow {
   const dir = join(home.accounts, a.runner, a.name);
-  if (getAccount(db, accountId(a.runner, a.name)) !== undefined) throw new AccountExists("an account with this name exists");
+  if (liveAccount(db, accountId(a.runner, a.name)) !== undefined) throw new AccountExists("an account with this name exists");
   const row = addAccount(db, a, now);
   // The row check above also proved the name is safe for a folder name.
   if (existsSync(dir)) {

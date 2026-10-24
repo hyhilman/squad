@@ -1,14 +1,18 @@
 // Accounts and their health in the database. The state machine has one rule worth a name: a dead
-// account is alive again only through `reviveByLogin`, which a person's fresh login calls. Nothing
-// else, no retry and no timer, can bring it back.
+// account is alive again only through `reviveByLogin`, which a person's fresh login calls, or
+// `resetHealth`, which a person asks for and which refuses a permanent code. Nothing else, no retry
+// and no timer, can bring it back.
+//
+// A removed account keeps its row, so its passes still name it; it leaves every list and the pool.
 
 import type { DatabaseSync } from "node:sqlite";
+import { PERMANENT_AUTH_CODES } from "../classify.ts";
 import type { AccountKind, Runner } from "../docker.ts";
 import type { Candidate, Health } from "../pool/pick.ts";
 import { envNum, SQUAD_FLOOR_DEFAULT_ENV } from "../settings.ts";
 import { emptyHealth, type HealthRow } from "./health.ts";
 
-export type AccountState = "active" | "dead" | "disabled" | "moved";
+export type AccountState = "active" | "dead" | "disabled" | "moved" | "removed";
 
 export interface AccountRow {
   readonly id: string;
@@ -26,6 +30,8 @@ export interface AccountRow {
   readonly consentAt: string | null;
   /** The email of the seat that is logged in; it can differ from the owner. null = unknown. */
   readonly loginEmail: string | null;
+  /** Who consented: an email, `cli`, or `migration`. null while not shared. */
+  readonly consentBy: string | null;
 }
 
 export interface NewAccount {
@@ -34,6 +40,11 @@ export interface NewAccount {
   readonly kind: AccountKind;
   readonly ownerEmail?: string;
   readonly loginEmail?: string;
+  /**
+   * Who shares it from the start. Unset = `cli`: a person on the host made it for themselves. false =
+   * not shared until the owner agrees (`--owner`: an admin may add an account for someone else).
+   */
+  readonly consent?: { readonly by: string } | false;
 }
 
 const RUNNERS: readonly string[] = ["claude", "codex", "pi"];
@@ -47,11 +58,12 @@ export const accountId = (runner: string, name: string): string => `${runner}/${
 interface Raw {
   id: string; runner: string; name: string; kind: string; owner_email: string | null; state: string;
   dead_code: string | null; dead_at: string | null; floor_5h: number | null; floor_week: number | null; created_at: string; consent_at: string | null; login_email: string | null;
+  consent_by: string | null;
 }
 
 const toAccount = (r: Raw): AccountRow => ({
   id: r.id, runner: r.runner as Runner, name: r.name, kind: r.kind as AccountKind, ownerEmail: r.owner_email, state: r.state as AccountState,
-  deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at, loginEmail: r.login_email,
+  deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at, loginEmail: r.login_email, consentBy: r.consent_by,
 });
 
 export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date()): AccountRow {
@@ -61,7 +73,12 @@ export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date
   if (a.kind === "token" && a.runner !== "claude") throw new Error(`a token account is for claude only, not ${a.runner}`);
   if (a.kind === "key" && a.runner === "claude") throw new Error("claude has no key account kind here: use a token or a login");
   const id = accountId(a.runner, a.name);
-  db.prepare("INSERT INTO accounts (id, runner, name, kind, owner_email, login_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, a.runner, a.name, a.kind, a.ownerEmail ?? null, a.loginEmail ?? null, now.toISOString());
+  // A removed row gives its name back: the new account replaces it. Its passes keep the id.
+  if (getAccount(db, id)?.state === "removed") db.prepare("DELETE FROM accounts WHERE id = ? AND state = 'removed'").run(id);
+  const consent = a.consent === undefined ? { by: "cli" } : a.consent;
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, owner_email, login_email, created_at, consent_at, consent_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    id, a.runner, a.name, a.kind, a.ownerEmail ?? null, a.loginEmail ?? null, now.toISOString(), consent === false ? null : now.toISOString(), consent === false ? null : consent.by,
+  );
   return getAccount(db, id)!;
 }
 
@@ -70,9 +87,16 @@ export function getAccount(db: DatabaseSync, id: string): AccountRow | undefined
   return r === undefined ? undefined : toAccount(r);
 }
 
-export function listAccounts(db: DatabaseSync, runner?: string): AccountRow[] {
+/** The account, or undefined when there is none or it was removed: an "exists?" check for a new one. */
+export function liveAccount(db: DatabaseSync, id: string): AccountRow | undefined {
+  const a = getAccount(db, id);
+  return a === undefined || a.state === "removed" ? undefined : a;
+}
+
+/** The accounts; a removed one only with `withRemoved`. */
+export function listAccounts(db: DatabaseSync, runner?: string, opts: { readonly withRemoved?: boolean } = {}): AccountRow[] {
   const rows = (runner === undefined ? db.prepare("SELECT * FROM accounts ORDER BY id").all() : db.prepare("SELECT * FROM accounts WHERE runner = ? ORDER BY id").all(runner)) as unknown as Raw[];
-  return rows.map(toAccount);
+  return rows.map(toAccount).filter((a) => opts.withRemoved === true || a.state !== "removed");
 }
 
 /** Any change of state but dead -> active. A dead account gets `dead_code` and `dead_at`. */
@@ -80,6 +104,7 @@ export function setState(db: DatabaseSync, id: string, state: AccountState, code
   const cur = getAccount(db, id);
   if (cur === undefined) throw new Error(`unknown account ${id}`);
   if (cur.state === "dead" && state === "active") throw new Error(`${id} is dead: only reviveByLogin can make it active`);
+  if (cur.state === "removed" || state === "removed") throw new Error(`${id}: only markRemoved removes an account, and a removed one stays removed`);
   if (state === "dead") {
     db.prepare("UPDATE accounts SET state = 'dead', dead_code = ?, dead_at = ? WHERE id = ?").run(code ?? null, now.toISOString(), id);
   } else {
@@ -173,6 +198,48 @@ export function setConsent(db: DatabaseSync, id: string, now: Date): void {
   db.prepare("UPDATE accounts SET consent_at = COALESCE(consent_at, ?) WHERE id = ?").run(now.toISOString(), id);
 }
 
+/** Starts sharing (`by` = who agreed) or stops it (null), at that moment. */
+export function setSharing(db: DatabaseSync, id: string, by: string | null, now: Date): void {
+  if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
+  db.prepare("UPDATE accounts SET consent_at = ?, consent_by = ? WHERE id = ?").run(by === null ? null : now.toISOString(), by, id);
+}
+
+/**
+ * The row stays, so its passes still name it. Its health and session pins go: a name used again must
+ * not start cooling, or on another key's pi session. The caller removes the folder and conversations.
+ */
+export function markRemoved(db: DatabaseSync, id: string): void {
+  if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
+  db.prepare("UPDATE accounts SET state = 'removed', dead_code = NULL, dead_at = NULL, consent_at = NULL, consent_by = NULL WHERE id = ?").run(id);
+  db.prepare("DELETE FROM health WHERE account = ?").run(id);
+  db.prepare("DELETE FROM sessions WHERE account = ?").run(id);
+}
+
+/**
+ * After a fresh login or a new token or key from the owner: alive again, with no cooling, suspicion or
+ * last failure. The old ones were about the old secret.
+ */
+export function clearAfterLogin(db: DatabaseSync, id: string): void {
+  if (getAccount(db, id)?.state === "dead") reviveByLogin(db, id);
+  db.prepare("UPDATE health SET cool_until = NULL, cool_kind = NULL, suspect_since = NULL, auth_fails = 0, last_fail_kind = NULL, last_fail_code = NULL WHERE account = ?").run(id);
+}
+
+/** A dead account with one of these codes comes back only through a fresh login. */
+export const needsLogin = (a: Pick<AccountRow, "state" | "deadCode">): boolean => a.state === "dead" && a.deadCode !== null && PERMANENT_AUTH_CODES.has(a.deadCode);
+
+/**
+ * A person's "reset health": clears cooling, suspicion and the last failure, and brings back a dead
+ * account whose code was not permanent (such as two 401s in a row). The room read stays.
+ */
+export function resetHealth(db: DatabaseSync, id: string): "reset" | "log-in-again" {
+  const cur = getAccount(db, id);
+  if (cur === undefined) throw new Error(`unknown account ${id}`);
+  if (needsLogin(cur)) return "log-in-again";
+  if (cur.state === "dead") db.prepare("UPDATE accounts SET state = 'active', dead_code = NULL, dead_at = NULL WHERE id = ?").run(id);
+  db.prepare("UPDATE health SET cool_until = NULL, cool_kind = NULL, suspect_since = NULL, auth_fails = 0, last_fail_kind = NULL, last_fail_code = NULL WHERE account = ?").run(id);
+  return "reset";
+}
+
 /** Every account of a runner as `pick` sees it. Busy comes from the caller: it knows the locks. */
 export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (id: string) => boolean, env?: Readonly<Record<string, string | undefined>>): Candidate[] {
   const floor = envNum(SQUAD_FLOOR_DEFAULT_ENV, env);
@@ -190,6 +257,7 @@ export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (i
       floorWeek: a.floorWeek ?? floor,
       busy: busy(a.id),
       lastUsedAt: orUndef(h.lastUsedAt),
+      sharing: a.consentAt !== null,
     };
   });
 }

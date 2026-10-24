@@ -51,3 +51,15 @@ test("credentials default to same-origin; the caller may ask for include", async
   await call(fetchFn, "https://squad.example.test", "setEnabled", { params: { runner: "codex", name: "a" }, body: { enabled: true } }, { credentials: "include" });
   assert.deepEqual(seen, ["same-origin", "include", "same-origin", "include"]);
 });
+
+test("a query of only optional fields may be left out (listAccounts as before), or given (all=1)", async () => {
+  const seen: string[] = [];
+  const fetchFn: FetchLike = async (url) => {
+    seen.push(url);
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  await call(fetchFn, "", "listAccounts", {});
+  await call(fetchFn, "", "listAccounts", { query: { all: "1" } });
+  await call(fetchFn, "", "removeAccount", { params: { runner: "pi", name: "a" }, body: { confirm: "pi/a" } });
+  assert.deepEqual(seen, ["/api/accounts", "/api/accounts?all=1", "/api/accounts/pi/a"]);
+});

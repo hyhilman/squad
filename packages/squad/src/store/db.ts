@@ -147,6 +147,10 @@ export const MIGRATIONS: readonly string[] = [
      seen_at TEXT NOT NULL
    ) STRICT`,
   `CREATE INDEX price_history_model ON price_history (provider, model, seen_at)`,
+  // Consent now gates the pool: an account with none is refused. Who gave it: an email, `cli`, or
+  // `migration` for every account that was in use before the gate, so none of them stops.
+  `ALTER TABLE accounts ADD COLUMN consent_by TEXT`,
+  `UPDATE accounts SET consent_at = created_at, consent_by = 'migration' WHERE consent_at IS NULL`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

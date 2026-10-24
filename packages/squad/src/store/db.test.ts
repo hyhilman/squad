@@ -70,7 +70,7 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 22);
+  assert.equal(MIGRATIONS.length, 24);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
@@ -95,4 +95,19 @@ test("migration 11: login_email is set from owner_email for codex and claude log
     { id: "pi/k", login_email: null }, { id: "pi/p", login_email: null },
   ]);
   db.prepare("INSERT INTO room_reads (account, at, left_5h, left_week, source) VALUES ('codex/a', 't', 1, 2, 'read')").run();
+});
+
+test("migrations 23-24: every account that has no consent yet is marked shared by the migration, so nothing in use stops", () => {
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
+  db.exec("CREATE TABLE schema_version (n INTEGER NOT NULL) STRICT");
+  db.prepare("INSERT INTO schema_version (n) VALUES (0)").run();
+  for (let i = 0; i < 22; i++) {
+    db.exec(MIGRATIONS[i]!);
+    db.prepare("UPDATE schema_version SET n = ?").run(i + 1);
+  }
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at, consent_at) VALUES ('pi/b', 'pi', 'b', 'key', '2026-01-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z')").run();
+  assert.equal(migrate(db), 24);
+  const rows = db.prepare("SELECT id, consent_at, consent_by FROM accounts ORDER BY id").all() as { id: string; consent_at: string; consent_by: string | null }[];
+  assert.deepEqual(rows.map((r) => [r.id, r.consent_at, r.consent_by]), [["pi/a", "2026-01-01T00:00:00.000Z", "migration"], ["pi/b", "2026-02-02T00:00:00.000Z", null]]);
 });

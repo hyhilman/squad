@@ -9,7 +9,7 @@
 import { closeSync, cpSync, chmodSync, existsSync, readFileSync, statSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AccountExists, createFileAccount } from "./accounts/add.ts";
-import { ACCOUNT_NAME, addAccount, getAccount, listAccounts, setOwnerEmail, setState, type AccountRow } from "./accounts/store.ts";
+import { ACCOUNT_NAME, addAccount, getAccount, liveAccount, listAccounts, setOwnerEmail, setSharing, setState, type AccountRow } from "./accounts/store.ts";
 import type { HomeLayout } from "./home.ts";
 import { ulid } from "./ids.ts";
 import { withHostLock } from "./lock.ts";
@@ -52,7 +52,7 @@ function refusal(src: AccountRow | undefined, from: Side, to: Side): string | un
   if (src === undefined) return "not in the source home";
   if (src.state !== "active") return `is ${src.state}${src.state === "dead" ? ": log in again" : ""}`;
   if (!existsSync(accountDir(from.home, src))) return "has no folder in the source home";
-  const there = getAccount(to.store.db, src.id);
+  const there = liveAccount(to.store.db, src.id);
   const folder = accountDir(to.home, src);
   // A `moved` row is a login that left this home once. It may come home: its folder holds only MOVED-TO.
   if (there !== undefined) {
@@ -75,10 +75,13 @@ function place(src: AccountRow, from: Side, to: Side, now: Date): void {
     if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
     renameSync(staging, dest);
     renamed = true;
-    if (getAccount(to.store.db, src.id) === undefined) addAccount(to.store.db, { runner: src.runner, name: src.name, kind: src.kind, ...(src.ownerEmail === null ? {} : { ownerEmail: src.ownerEmail }) }, now);
+    // The owner's consent moves with the account: an import neither gives nor takes it.
+    const consent = src.consentAt === null ? false : { by: src.consentBy ?? "cli" };
+    if (liveAccount(to.store.db, src.id) === undefined) addAccount(to.store.db, { runner: src.runner, name: src.name, kind: src.kind, ...(src.ownerEmail === null ? {} : { ownerEmail: src.ownerEmail }), consent }, now);
     else {
       setState(to.store.db, src.id, "active");
       setOwnerEmail(to.store.db, src.id, src.ownerEmail);
+      setSharing(to.store.db, src.id, consent === false ? null : consent.by, now);
     }
   } catch (e) {
     rmSync(staging, { recursive: true, force: true });
@@ -215,7 +218,7 @@ export function runImportDoppelganger(p: DoppelgangerImport): number {
     } else {
       try {
         const files = [{ name: "auth.json", body: readFileSync(auth) }, ...(existsSync(join(dir, "models.json")) ? [{ name: "models.json", body: readFileSync(join(dir, "models.json")) }] : [])];
-        createFileAccount(p.to.store.db, p.to.home, { runner: "pi", name, kind: "key", ...(p.ownerEmail === undefined ? {} : { ownerEmail: p.ownerEmail }) }, files, p.now);
+        createFileAccount(p.to.store.db, p.to.home, { runner: "pi", name, kind: "key", ...(p.ownerEmail === undefined ? {} : { ownerEmail: p.ownerEmail, consent: false }) }, files, p.now);
         p.to.store.event({ at: p.now.toISOString(), kind: "import", account: id, detail: "copy" });
         p.out.stdout(`copied ${id}\n`);
       } catch (e) {

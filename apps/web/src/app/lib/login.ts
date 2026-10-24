@@ -3,11 +3,6 @@ import type { AccountView, LoginState, LoginStatus } from "@squad/contract";
 /** How often the page asks for the login state. */
 export const POLL_MS = 3000;
 
-// The server takes a web login only for a dead codex login account (like `squad login`), so the
-// page offers it only then.
-export const canLogInAgain = (a: Pick<AccountView, "runner" | "kind" | "health">): boolean =>
-  a.runner === "codex" && a.kind === "login" && a.health === "dead";
-
 // Consent and a new login are the owner's own acts; the server refuses them for anyone else, an
 // admin included, so the page offers them only to the owner.
 export const isOwnerOf = (a: Pick<AccountView, "ownerEmail">, me: { readonly email: string } | undefined): boolean =>
@@ -20,6 +15,7 @@ const REASONS: Readonly<Record<string, string>> = {
   busy: "A pass is using this account right now. Nothing was changed; try again later.",
   "login-failed": "The login did not finish. Nothing was changed.",
   "no-login": "The login stopped with no login saved. Nothing was changed.",
+  "seat-mismatch": "The login was for another seat than this account had. Nothing was changed.",
 };
 
 export function loginStateText(s: LoginStatus): string {

@@ -14,6 +14,7 @@ import { roomOf } from "../accounts/room.ts";
 import { dueReads, readIntervalMs, refreshUsage } from "../accounts/usage-read.ts";
 import type { UsageReadResult } from "../accounts/health.ts";
 import { createFileAccount } from "../accounts/add.ts";
+import { removeAccount, revokeNote } from "../accounts/care.ts";
 import { withKeyCopy } from "../accounts/keycopy.ts";
 import { getAccount, getHealth, healthOf, listAccounts, setFloors, setOwnerEmail } from "../accounts/store.ts";
 import type { Runner } from "../docker.ts";
@@ -58,7 +59,8 @@ const USAGE = `usage: squad <verb>
   usage [--by account|task|flow|day|model] [--since 7d]
                                            token use, grouped
   add-key <runner>/<name> --from <file> [--owner <email>]
-                                           make a key account from a file
+                                           make a key account from a file (with --owner: not shared until
+                                           that person agrees in the web app)
   add-token claude/<name> --from <file> [--owner <email>]
                                            make a claude token account from a file
   owner <account> [<email>]                set who owns an account (a codex login gives its own email)
@@ -67,9 +69,11 @@ const USAGE = `usage: squad <verb>
   image build <runner>                     build a runner image with docker (SQUAD_DRY_RUN=1 prints the argv)
   probe <runner>/<name> [--model <id>]     one tiny real pass on one account; pi, claude and codex need --model
   gc [--dry-run]                           remove orphan containers, lost passes, old files and sessions
-  login <runner>/<name> [--owner <email>]  log in to a new account (or a dead one) in a container
+  login <runner>/<name> [--owner <email>]  log in to a new account (or a dead one) in a container (with
+                                           --owner: not shared until that person agrees in the web app)
   import <home> [<account>...]             bring accounts from another home (a login is moved, a key copied); a doppelganger project: its pi keys are copied (--owner <email>)
   import --back <account> <home>           send one account to another home
+  remove <account> --yes                   remove an account: its folder goes, its pass history stays
   shell <account>                          a bash session in a container on one account
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
@@ -194,6 +198,14 @@ function usage(store: Store, io: Io, args: readonly string[]): number {
   return 0;
 }
 
+/**
+ * `--owner` may name someone else (an admin adds a seat for a colleague), so it is not their consent:
+ * the account is not shared until they agree in the web app. Without it, the person on the host adds
+ * their own, and the host shares it.
+ */
+const ownerAndConsent = (ownerEmail: string | undefined) => (ownerEmail === undefined ? {} : { ownerEmail, consent: false as const });
+const notShared = (ownerEmail: string | undefined): string => (ownerEmail === undefined ? "" : `not shared until ${ownerEmail} agrees in the web app\n`);
+
 /** Copies the file under the home, then registers the account. The content goes nowhere else. */
 function addKey(store: Store, io: Io, args: readonly string[]): number {
   const { rest, opts } = options(args, ["from", "owner"]);
@@ -211,12 +223,12 @@ function addKey(store: Store, io: Io, args: readonly string[]): number {
   const runner = id[1]!;
   const name = id[2]!;
   try {
-    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "key", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, [{ name: "auth.json", body }], (io.now ?? (() => new Date()))());
+    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "key", ...ownerAndConsent(ownerEmail) }, [{ name: "auth.json", body }], (io.now ?? (() => new Date()))());
   } catch (e) {
     io.stderr(`${e instanceof Error ? e.message : "cannot add the account"}\n`);
     return 1;
   }
-  io.stdout(`added key account ${runner}/${name}\n`);
+  io.stdout(`added key account ${runner}/${name}\n${notShared(ownerEmail)}`);
   return 0;
 }
 
@@ -242,12 +254,12 @@ function addToken(store: Store, io: Io, args: readonly string[]): number {
   const runner = id[1]!;
   const name = id[2]!;
   try {
-    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "token", ...(ownerEmail === undefined ? {} : { ownerEmail }) }, [{ name: "token", body: text }], (io.now ?? (() => new Date()))());
+    createFileAccount(store.db, layoutOf(homeRoot(io.cwd, io.env), io.env), { runner: runner as Runner, name, kind: "token", ...ownerAndConsent(ownerEmail) }, [{ name: "token", body: text }], (io.now ?? (() => new Date()))());
   } catch (e) {
     io.stderr(`${e instanceof Error ? e.message : "cannot add the account"}\n`);
     return 1;
   }
-  io.stdout(`added token account ${runner}/${name}\n`);
+  io.stdout(`added token account ${runner}/${name}\n${notShared(ownerEmail)}`);
   return 0;
 }
 
@@ -338,6 +350,35 @@ function passDeps(store: Store, io: Io): RunDeps {
 
 const PROBE_PROMPT = "Reply with the single word: ok";
 
+/** What one probe pass found. `reason` is the failure text with secret-looking lines dropped, cut at 200. */
+export interface ProbeOutcome {
+  readonly account: string;
+  readonly model: string;
+  readonly failure?: { readonly kind: string; readonly code: string; readonly reason: string };
+  readonly input: number;
+  readonly output: number;
+  readonly ms: number;
+}
+
+/** One tiny pass on one account: the probe of `squad probe`, the auto probe and the web app's Test. */
+export async function probeAccount(store: Store, io: Io, account: string, model: string): Promise<ProbeOutcome> {
+  const runner = account.split("/")[0]!;
+  const cwd = mkdtempSync(join(tmpdir(), "squad-probe-"));
+  const t0 = performance.now();
+  try {
+    if (spawnSync("git", ["init", "-q"], { cwd, stdio: "ignore" }).status !== 0) throw new Error("cannot make the probe folder a git repo");
+    const res = await runPass({ runner: runner as SupportedRunner, model, prompt: PROBE_PROMPT, account, cwd, caller: { flow: "cli", action: "probe" } }, passDeps(store, io));
+    const ms = Math.round(performance.now() - t0);
+    const base = { account: res.account ?? account, input: res.usage.input, output: res.usage.output, ms };
+    if (res.failure === undefined) return { ...base, model: res.model ?? model };
+    // The message can be the CLI's stderr: it says why when no stream came. Lines that look like secrets are dropped.
+    const reason = safeTail(res.failure.message).replace(/\s*\n\s*/g, " ").slice(0, 200);
+    return { ...base, model, failure: { kind: res.failure.kind, code: res.failure.code, reason } };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 /** One tiny pass on one account. Prints one line and never the stream text. */
 async function probe(store: Store, io: Io, args: readonly string[]): Promise<number> {
   const { rest, opts } = options(args, ["model"]);
@@ -347,27 +388,24 @@ async function probe(store: Store, io: Io, args: readonly string[]): Promise<num
   const model = opts.get("model");
   if (getAccount(store.db, rest[0]!) === undefined) throw new UsageError(`unknown account ${rest[0]}`);
   if ((runner === "pi" || runner === "claude" || runner === "codex") && model === undefined) throw new UsageError(`probe on ${runner} needs --model; there is no safe default`);
-  const cwd = mkdtempSync(join(tmpdir(), "squad-probe-"));
+  let res: ProbeOutcome;
   try {
-    if (spawnSync("git", ["init", "-q"], { cwd, stdio: "ignore" }).status !== 0) {
-      io.stderr("cannot make the probe folder a git repo\n");
+    res = await probeAccount(store, io, rest[0]!, model ?? "");
+  } catch (e) {
+    if (e instanceof Error && e.message === "cannot make the probe folder a git repo") {
+      io.stderr(`${e.message}\n`);
       return 1;
     }
-    const res = await runPass({ runner: runner as SupportedRunner, model: model ?? "", prompt: PROBE_PROMPT, account: rest[0]!, cwd, caller: { flow: "cli", action: "probe" } }, passDeps(store, io));
-    const account = res.account ?? rest[0]!;
-    if (res.failure !== undefined) {
-      io.stdout(`${account} fail ${res.failure.kind}${res.failure.code === "" ? "" : ` ${res.failure.code}`}\n`);
-      // The message can be the CLI's stderr: it says why when no stream came. Lines that look like secrets are dropped.
-      const reason = safeTail(res.failure.message).replace(/\s*\n\s*/g, " ").slice(0, 200);
-      if (reason !== "") io.stdout(`  reason: ${reason}\n`);
-      return 1;
-    }
-    const h = getHealth(store.db, account);
-    io.stdout(`${account} ok ${res.model ?? model} in=${res.usage.input} out=${res.usage.output} 5h=${pct(h.left5h)} week=${pct(h.leftWeek)}\n`);
-    return 0;
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    throw e;
   }
+  if (res.failure !== undefined) {
+    io.stdout(`${res.account} fail ${res.failure.kind}${res.failure.code === "" ? "" : ` ${res.failure.code}`}\n`);
+    if (res.failure.reason !== "") io.stdout(`  reason: ${res.failure.reason}\n`);
+    return 1;
+  }
+  const h = getHealth(store.db, res.account);
+  io.stdout(`${res.account} ok ${res.model} in=${res.input} out=${res.output} 5h=${pct(h.left5h)} week=${pct(h.leftWeek)}\n`);
+  return 0;
 }
 
 /** The cleanup job. `--dry-run` (or SQUAD_DRY_RUN=1) prints the plan and changes nothing. */
@@ -493,6 +531,31 @@ async function shell(store: Store, io: Io, args: readonly string[]): Promise<num
   }
 }
 
+/** `remove <account> --yes`: the folder goes under the account lock; the row stays, so the history does. */
+async function removeCmd(store: Store, io: Io, args: readonly string[]): Promise<number> {
+  const yes = args.includes("--yes");
+  const { rest } = options(args.filter((a) => a !== "--yes"), []);
+  if (rest.length !== 1) throw new UsageError("remove needs <account> and --yes");
+  if (!yes) throw new UsageError("remove deletes the account folder; say --yes to do it");
+  const a = getAccount(store.db, rest[0]!);
+  if (a === undefined) throw new UsageError(`unknown account ${rest[0]}`);
+  if (a.state === "removed" || a.state === "moved") {
+    io.stderr(`${a.id} is ${a.state}; nothing done\n`);
+    return 1;
+  }
+  const home = layoutOf(homeRoot(io.cwd, io.env), io.env);
+  if (envOn(SQUAD_DRY_RUN_ENV, io.env)) {
+    io.stdout(`would remove ${a.id}\n`);
+    return 0;
+  }
+  if ((await removeAccount(store, home, a, (io.now ?? (() => new Date()))())) === "busy") {
+    io.stderr(`${a.id}: account busy (a pass holds it); nothing done\n`);
+    return 1;
+  }
+  io.stdout(`removed ${a.id}\n${revokeNote(a)}\n`);
+  return 0;
+}
+
 const LOG_LINES = 50;
 
 /** A log line is safe to show when it, its JSON (if it is JSON) and each of its words pass findForbidden. */
@@ -529,7 +592,7 @@ async function web(store: Store, io: Io, args: readonly string[]): Promise<numbe
   if (args.some((a) => a !== "--api-only")) throw new UsageError("web takes only --api-only");
   const handle = await startWeb({
     // The loop's probes run the verb above, so there is one way to start a probe pass.
-    probe: async (a, model) => { await probe(store, { ...io, stdout: () => {}, stderr: () => {} }, [a.id, "--model", model]); },
+    probe: (a, model) => probeAccount(store, { ...io, stdout: () => {}, stderr: () => {} }, a.id, model),
     env: io.env, home: layoutOf(homeRoot(io.cwd, io.env), io.env), store, apiOnly: args.length > 0,
     ...(io.fetch === undefined ? {} : { fetch: io.fetch }), ...(io.now === undefined ? {} : { now: io.now }),
   });
@@ -559,6 +622,7 @@ const VERBS: Record<string, (store: Store, io: Io, args: readonly string[]) => n
   gc,
   login,
   import: importCmd,
+  remove: removeCmd,
   shell,
   log: logCmd,
   web,

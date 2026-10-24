@@ -915,3 +915,33 @@ test("codex login pass: no CLI cost, catalog cost under openai/<model>", async (
   assert.ok(Math.abs((p.catalog_cost_usd as number) - (14081 * 2 + 5 * 10) / 1e6) < 1e-12);
   assert.equal(p.cost_usd, null);
 });
+
+// ---- account care ----
+
+test("an account its owner does not share: a named pass, a pinned session and a conversation fail at once with no-consent; no container, no health change", async () => {
+  const { setSharing } = await import("./accounts/store.ts");
+  const r = rig(["k1", "k2"]);
+  await runPass(req(r, { session: "s1", pool: undefined, account: "pi/k1" }), r.deps);
+  setSharing(r.store.db, "pi/k1", null, NOW);
+  const healthBefore = getHealth(r.store.db, "pi/k1");
+  const runsBefore = r.fake.callsOf("run").length;
+  for (const more of [{ pool: undefined, account: "pi/k1" }, { session: "s1" }, { session: "s1", conversation: true }] as Partial<PassRequest>[]) {
+    const res = await runPass(req(r, more), r.deps);
+    assert.equal(res.failure?.kind, "no-account", JSON.stringify(more));
+    assert.equal(res.failure?.code, "no-consent", JSON.stringify(more));
+    assert.equal(res.account, null);
+  }
+  assert.equal(r.fake.callsOf("run").length, runsBefore, "no container");
+  assert.deepEqual(getHealth(r.store.db, "pi/k1"), healthBefore);
+  // The pool takes the other account.
+  const pooled = await runPass(req(r), r.deps);
+  assert.equal(pooled.account, "pi/k2");
+});
+
+test("a removed account is unknown to a named pass and never picked by the pool", async () => {
+  const { markRemoved } = await import("./accounts/store.ts");
+  const r = rig(["k1", "k2"]);
+  markRemoved(r.store.db, "pi/k1");
+  await assert.rejects(runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps), /unknown pi account/);
+  assert.equal((await runPass(req(r), r.deps)).account, "pi/k2");
+});

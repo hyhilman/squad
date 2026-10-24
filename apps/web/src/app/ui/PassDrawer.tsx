@@ -65,6 +65,13 @@ function Body({ p }: { p: PassDetail }) {
         <Fact label="Account">
           {p.account === undefined ? (
             <Text color="fg.subtle">none found</Text>
+          ) : p.accountRemoved === true ? (
+            <Text>
+              {p.account}{" "}
+              <Text as="span" color="fg.subtle">
+                (removed)
+              </Text>
+            </Text>
           ) : (
             <Link asChild color="brand.fg" fontWeight="500">
               <RouterLink to={`/accounts/${p.account}`}>{p.account}</RouterLink>

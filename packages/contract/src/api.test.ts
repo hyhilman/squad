@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { NO_SESSION_ROUTES, ROUTES, matchPath, pathOf } from "./api.ts";
+import { LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, matchPath, pathOf } from "./api.ts";
 
 test("every route path is under /api/ and unique per method", () => {
   const seen = new Set<string>();
@@ -37,4 +37,21 @@ test("the connect routes: start, status and the token do not shadow each other; 
   assert.equal(matchPath(ROUTES.startConnect.path, "/api/connect/abc"), undefined);
   assert.equal(ROUTES.connectToken.method, "POST");
   assert.deepEqual(NO_SESSION_ROUTES, ["connectToken"]);
+});
+
+test("no concrete path of a route is matched by another route of the same method", () => {
+  const entries = Object.entries(ROUTES);
+  for (const [name, r] of entries) {
+    const sample = r.path.replace(/:([a-zA-Z]+)/g, (_, k: string) => `x${k}`);
+    for (const [other, o] of entries) {
+      if (other === name || o.method !== r.method) continue;
+      assert.equal(matchPath(o.path, sample), undefined, `${other} also matches ${name}'s ${sample}`);
+    }
+  }
+});
+
+test("the limit reset takes exactly the CLI's argument hint, [fable|full|5-hour|weekly]", () => {
+  assert.deepEqual([...LIMIT_RESET_WHICH].sort(), ["5-hour", "fable", "full", "weekly"]);
+  assert.deepEqual(matchPath(ROUTES.limitReset.path, "/api/accounts/claude/alice/limit-reset"), { name: "alice" });
+  assert.equal(matchPath(ROUTES.limitReset.path, "/api/accounts/codex/alice/limit-reset"), undefined);
 });

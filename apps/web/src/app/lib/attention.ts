@@ -1,6 +1,7 @@
 import type { AccountView } from "@squad/contract";
+import { weekSoon } from "./weekReset.ts";
 
-type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "floorWeek">;
+type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "floorWeek"> & { readonly resetsWeek?: string; readonly sharing?: boolean };
 
 // The pool skips an account that is dead, cooling, or at or under its floor in either window
 // (packages/squad/src/pool/pick.ts), so those are the ones a person should look at. A disabled or
@@ -8,15 +9,20 @@ type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "f
 export function attentionOf(a: Facts): string | undefined {
   if (a.health === "dead") return "Login is dead";
   if (a.health === "cooling") return "Cooling down";
-  if (a.health === "disabled" || a.health === "moved") return undefined;
+  if (a.health === "disabled" || a.health === "moved" || a.health === "removed") return undefined;
+  if (a.sharing === false) return "Not shared";
   if (a.left5h !== undefined && a.left5h <= a.floor5h) return "5-hour room at the floor";
   if (a.leftWeek !== undefined && a.leftWeek <= a.floorWeek) return "Week room at the floor";
   return undefined;
 }
 
-export function needsAttention<A extends Facts>(list: readonly A[]): { account: A; reason: string }[] {
+/**
+ * The accounts to look at: those the pool skips, then those whose week resets within 3 days (the room
+ * comes back soon; worth knowing, but the pool still uses them, so countHealth does not count them).
+ */
+export function needsAttention<A extends Facts>(list: readonly A[], now: Date = new Date()): { account: A; reason: string }[] {
   return list.flatMap((account) => {
-    const reason = attentionOf(account);
+    const reason = attentionOf(account) ?? (account.health !== "disabled" && account.health !== "moved" && account.health !== "removed" && weekSoon(account.resetsWeek, now) ? "Week resets soon" : undefined);
     return reason === undefined ? [] : [{ account, reason }];
   });
 }

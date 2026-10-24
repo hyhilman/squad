@@ -96,3 +96,33 @@ test("listAccountsWithServes: health, busy, room with reset times, and no secret
   assert.deepEqual(listAccountsWithServes({ home: r.home, store: r.store, now: () => NOW, busy: () => false }, "pi").map((x) => x.account), ["pi/dev"]);
   assert.ok(getAccount(r.store.db, "pi/dev"));
 });
+
+test("listAccountsWithServes says whether the owner shares each account, and leaves removed ones out", async () => {
+  const { markRemoved, setSharing } = await import("./store.ts");
+  const r = rig();
+  for (const n of ["a", "b", "c"]) addAccount(r.store.db, { runner: "pi", name: n, kind: "key" }, NOW);
+  setSharing(r.store.db, "pi/b", null, NOW);
+  markRemoved(r.store.db, "pi/c");
+  const list = listAccountsWithServes({ home: r.home, store: r.store, now: () => NOW, busy: () => false });
+  assert.deepEqual(list.map((x) => [x.account, x.sharing]), [["pi/a", true], ["pi/b", false]]);
+});
+
+test("servedModels: pi from models.json, else from the catalog of its providers; codex and claude from the catalog of their runner", async () => {
+  const { servedModels } = await import("./serves.ts");
+  const r = rig();
+  const cat = [
+    { id: "openai", models: [{ id: "gpt-x", price: { input: 1, output: 1 } }, { id: "emb", type: "embedding", price: { input: 1, output: 1 } }] },
+    { id: "anthropic", models: [{ id: "claude-y", price: { input: 1, output: 1 } }] },
+    { id: "zai", models: [{ id: "glm-z", price: { input: 1, output: 1 } }] },
+  ];
+  const pi1 = addAccount(r.store.db, { runner: "pi", name: "one", kind: "key" }, NOW);
+  writeFileSync(join(r.dir("pi", "one"), "models.json"), JSON.stringify({ providers: { custom: { models: [{ id: "m1" }] } } }));
+  const pi2 = addAccount(r.store.db, { runner: "pi", name: "two", kind: "key" }, NOW);
+  writeFileSync(join(r.dir("pi", "two"), "auth.json"), JSON.stringify({ zai: { type: "api_key", key: "fake" } }));
+  const cx = addAccount(r.store.db, { runner: "codex", name: "c", kind: "login" }, NOW);
+  const cl = addAccount(r.store.db, { runner: "claude", name: "t", kind: "token" }, NOW);
+  assert.deepEqual(servedModels(r.home, pi1, cat), ["custom/m1"]);
+  assert.deepEqual(servedModels(r.home, pi2, cat), ["zai/glm-z"]);
+  assert.deepEqual(servedModels(r.home, cx, cat), ["gpt-x"]);
+  assert.deepEqual(servedModels(r.home, cl, cat), ["claude-y"]);
+});

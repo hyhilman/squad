@@ -1,21 +1,23 @@
-// The acts on one account: floors, disable or enable, consent, log in again. The accounts table shows
-// them in a "⋯" menu, the account page as buttons; both use this one hook.
+// The acts on one account (lib/accountActions.ts says which a person may take). The accounts table
+// shows them in a "⋯" menu; the account page shows the urgent ones and Test as buttons, the rest in a
+// "⋯" menu. Both use this one hook.
 import { Button, CloseButton, Dialog, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AccountView, LoginStart, Runner } from "@squad/contract";
-import { CirclePause, CirclePlay, LogIn, MoreHorizontal, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { CirclePause, CirclePlay, FlaskConical, KeyRound, LogIn, MoreHorizontal, RotateCcw, ShieldCheck, ShieldOff, SlidersHorizontal, TimerReset, Trash2, type LucideIcon } from "lucide-react";
+import { Fragment, useState, type ReactNode } from "react";
 import { api } from "../api.ts";
 import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
-import { canLogInAgain, isOwnerOf } from "../lib/login.ts";
+import { accountActions, splitActions, type ActionKey } from "../lib/accountActions.ts";
 import { useMe } from "../queries.ts";
 import { FloorEditor } from "./FloorEditor.tsx";
 import { LoginProgress } from "./LoginProgress.tsx";
+import { ClaudeLoginDialog, KeyDialog, LimitDialog, RemoveDialog, Shell, TestDialog } from "./careDialogs.tsx";
 import { toastError, toastOk } from "./toaster.tsx";
 
 export interface Action {
-  readonly key: string;
+  readonly key: ActionKey;
   readonly label: string;
   readonly icon: LucideIcon;
   readonly danger?: boolean;
@@ -92,14 +94,15 @@ function SimpleDialog({ open, onClose, title, children, footer, size = "md" }: {
   );
 }
 
+type DialogKey = "floors" | "enable" | "login" | "claude" | "key" | "test" | "limit" | "remove" | "unshare";
+
 export function useAccountActions(a: AccountView): { actions: Action[]; dialogs: ReactNode } {
   const qc = useQueryClient();
   const me = useMe().data;
-  const [dialog, setDialog] = useState<"floors" | "enable" | "login" | undefined>();
+  const [dialog, setDialog] = useState<DialogKey | undefined>();
   const [busy, setBusy] = useState(false);
   const [started, setStarted] = useState<LoginStart>();
   const disabled = a.health === "disabled";
-  const owner = isOwnerOf(a, me);
   const close = () => setDialog(undefined);
 
   const run = async (ok: string, act: () => Promise<unknown>): Promise<void> => {
@@ -125,14 +128,19 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
     }
   };
 
-  const actions: Action[] = [
-    ...(owner && canLogInAgain(a) ? [{ key: "login", label: "Log in again", icon: LogIn, primary: true, run: () => void startLogin() }] : []),
-    { key: "floors", label: "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
-    ...(owner && a.consentAt === undefined
-      ? [{ key: "consent", label: "Give consent", icon: ShieldCheck, run: () => void run("Consent recorded.", () => api("consent", { params: paramsOf(a), body: { agree: true } })) }]
-      : []),
-    { key: "enable", label: disabled ? "Enable" : "Disable", icon: disabled ? CirclePlay : CirclePause, danger: !disabled, run: () => setDialog("enable") },
-  ];
+  const ALL: Readonly<Record<ActionKey, Omit<Action, "key">>> = {
+    share: { label: "Share again", icon: ShieldCheck, primary: true, run: () => void run("Sharing again: squad may run passes on it.", () => api("consent", { params: paramsOf(a), body: { agree: true } })) },
+    unshare: { label: "Stop sharing", icon: ShieldOff, run: () => setDialog("unshare") },
+    login: { label: "Log in again", icon: LogIn, primary: a.health === "dead", run: () => (a.runner === "claude" ? setDialog("claude") : void startLogin()) },
+    key: { label: "Replace key", icon: KeyRound, run: () => setDialog("key") },
+    test: { label: "Test", icon: FlaskConical, run: () => setDialog("test") },
+    reset: { label: "Reset health", icon: RotateCcw, run: () => void run("Health reset.", () => api("resetHealth", { params: paramsOf(a) })) },
+    limit: { label: "Use limit reset", icon: TimerReset, run: () => setDialog("limit") },
+    floors: { label: "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
+    enable: { label: disabled ? "Enable" : "Disable", icon: disabled ? CirclePlay : CirclePause, danger: !disabled, run: () => setDialog("enable") },
+    remove: { label: "Remove", icon: Trash2, danger: true, run: () => setDialog("remove") },
+  };
+  const actions: Action[] = accountActions(a, me).map((key) => ({ key, ...ALL[key] }));
 
   const dialogs = (
     <>
@@ -167,52 +175,100 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
       <SimpleDialog open={dialog === "login"} onClose={close} title={`Log in again: ${a.account}`} size="lg">
         {started === undefined ? null : <LoginProgress start={started} />}
       </SimpleDialog>
+      {dialog === "unshare" ? (
+        <Shell
+          title={`Stop sharing ${a.account}?`}
+          onClose={close}
+          size="sm"
+          footer={
+            <>
+              <Button variant="outline" size="sm" onClick={close}>
+                Cancel
+              </Button>
+              <Button size="sm" colorPalette="red" loading={busy} onClick={() => void run("Stopped sharing: squad refuses every pass on it.", () => api("consent", { params: paramsOf(a), body: { agree: false } }))}>
+                Stop sharing
+              </Button>
+            </>
+          }
+        >
+          <Text fontSize="sm" color="fg.muted">
+            squad will refuse every pass on this account until you share it again. A pass that runs now goes on to its end.
+          </Text>
+        </Shell>
+      ) : null}
+      {dialog === "test" ? <TestDialog a={a} onClose={close} title={`Test ${a.account}`} /> : null}
+      {dialog === "limit" ? <LimitDialog a={a} onClose={close} title={`Use a limit reset: ${a.account}`} /> : null}
+      {dialog === "claude" ? <ClaudeLoginDialog a={a} onClose={close} title={`Log in again: ${a.account}`} /> : null}
+      {dialog === "key" ? <KeyDialog a={a} onClose={close} title={`Replace key: ${a.account}`} /> : null}
+      {dialog === "remove" ? <RemoveDialog a={a} onClose={close} title={`Remove ${a.account}?`} /> : null}
     </>
   );
   return { actions, dialogs };
 }
 
-/** The "⋯" menu in a table row. */
+function MenuItems({ actions }: { actions: readonly Action[] }) {
+  return (
+    <>
+      {actions.map(({ key, label, icon: Icon, danger, run }, i) => (
+        <Fragment key={key}>
+          {key === "remove" && i > 0 ? <Menu.Separator /> : null}
+          <Menu.Item value={key} onSelect={run} color={danger === true ? "fg.error" : undefined} _hover={danger === true ? { bg: "bg.error" } : undefined} fontSize="sm">
+            <Icon size={15} />
+            {label}
+          </Menu.Item>
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+function MoreMenu({ a, actions, size = "xs", variant = "ghost" }: { a: AccountView; actions: readonly Action[]; size?: "xs" | "sm"; variant?: "ghost" | "outline" }) {
+  if (actions.length === 0) return null;
+  return (
+    <Menu.Root positioning={{ placement: "bottom-end" }}>
+      <Menu.Trigger asChild>
+        <IconButton variant={variant} size={size} aria-label={`Actions for ${a.account}`} color="fg.muted">
+          <MoreHorizontal size={16} />
+        </IconButton>
+      </Menu.Trigger>
+      <Portal>
+        <Menu.Positioner>
+          <Menu.Content minW="48">
+            <MenuItems actions={actions} />
+          </Menu.Content>
+        </Menu.Positioner>
+      </Portal>
+    </Menu.Root>
+  );
+}
+
+/** The "⋯" menu in a table row: every act. */
 export function AccountMenu({ a }: { a: AccountView }) {
   const { actions, dialogs } = useAccountActions(a);
   return (
     <>
-      <Menu.Root positioning={{ placement: "bottom-end" }}>
-        <Menu.Trigger asChild>
-          <IconButton variant="ghost" size="xs" aria-label={`Actions for ${a.account}`} color="fg.muted">
-            <MoreHorizontal size={16} />
-          </IconButton>
-        </Menu.Trigger>
-        <Portal>
-          <Menu.Positioner>
-            <Menu.Content minW="44">
-              {actions.map(({ key, label, icon: Icon, danger, run }) => (
-                <Menu.Item key={key} value={key} onSelect={run} color={danger === true ? "fg.error" : undefined} _hover={danger === true ? { bg: "bg.error" } : undefined} fontSize="sm">
-                  <Icon size={15} />
-                  {label}
-                </Menu.Item>
-              ))}
-            </Menu.Content>
-          </Menu.Positioner>
-        </Portal>
-      </Menu.Root>
+      <MoreMenu a={a} actions={actions} />
       {dialogs}
     </>
   );
 }
 
-/** The same acts as buttons, for the account page header. */
+/** The account page header: the urgent acts and Test as buttons, the rest in a "⋯" menu. */
 export function AccountButtons({ a }: { a: AccountView }) {
   const { actions, dialogs } = useAccountActions(a);
+  const split = splitActions(actions.map((x) => x.key), a);
+  const primary = actions.filter((x) => split.primary.includes(x.key));
+  const menu = actions.filter((x) => split.menu.includes(x.key));
   return (
     <>
       <HStack gap="2" wrap="wrap">
-        {actions.map(({ key, label, icon: Icon, danger, primary, run }) => (
-          <Button key={key} size="sm" variant={primary === true ? "solid" : "outline"} colorPalette={primary === true ? "brand" : danger === true ? "red" : "gray"} onClick={run}>
+        {primary.map(({ key, label, icon: Icon, danger, primary: solid, run }) => (
+          <Button key={key} size="sm" variant={solid === true ? "solid" : "outline"} colorPalette={solid === true ? "brand" : danger === true ? "red" : "gray"} onClick={run}>
             <Icon size={15} />
             {label}
           </Button>
         ))}
+        <MoreMenu a={a} actions={menu} size="sm" variant="outline" />
       </HStack>
       {dialogs}
     </>

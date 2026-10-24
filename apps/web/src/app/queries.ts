@@ -62,3 +62,7 @@ export const useUsageByModel = (since: string) =>
 
 /** Only while the Add account dialog is open. */
 export const useProviders = (enabled: boolean) => useQuery({ queryKey: ["providers"], queryFn: () => api("listProviders", {}), enabled, staleTime: 60_000 });
+
+/** Only while the Test dialog is open. */
+export const useAccountModels = (runner: Runner, name: string, enabled: boolean) =>
+  useQuery({ queryKey: ["models", runner, name], queryFn: () => api("accountModels", { params: { runner, name } }), enabled, staleTime: 60_000 });

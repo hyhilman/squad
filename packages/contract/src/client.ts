@@ -19,7 +19,8 @@ export class ApiFailure extends Error {
 }
 
 type Input<N extends RouteName> = (Api[N]["params"] extends void ? {} : { params: Api[N]["params"] }) &
-  (Api[N]["query"] extends void ? {} : { query: Api[N]["query"] }) &
+  // A query whose fields are all optional may be left out, so adding one to a route breaks no caller.
+  (Api[N]["query"] extends void ? {} : {} extends Api[N]["query"] ? { query?: Api[N]["query"] } : { query: Api[N]["query"] }) &
   (Api[N]["body"] extends void ? {} : { body: Api[N]["body"] });
 
 const isApiError = (v: unknown): v is ApiError =>

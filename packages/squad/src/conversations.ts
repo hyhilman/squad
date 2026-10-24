@@ -219,6 +219,11 @@ export interface OpenConversation {
   readonly lastUsedAt: string;
 }
 
+/** Closes every open conversation on one account (it was removed). */
+export function closeForAccount(db: DatabaseSync, home: HomeLayout, account: string, now: Date): void {
+  for (const row of db.prepare("SELECT * FROM conversations WHERE account = ? AND closed_at IS NULL").all(account) as unknown as Raw[]) closeRow(db, home, row, "removed", now);
+}
+
 /** The open conversations, for gc. */
 export function listOpenConversations(db: DatabaseSync): OpenConversation[] {
   return (db.prepare("SELECT id, last_used_at FROM conversations WHERE closed_at IS NULL ORDER BY id").all() as { id: string; last_used_at: string }[]).map((r) => ({ id: r.id, lastUsedAt: r.last_used_at }));

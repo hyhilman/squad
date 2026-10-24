@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoginStart, LoginState, LoginStatus } from "@squad/contract";
 import { AccountExists, createFileAccount } from "../accounts/add.ts";
-import { ACCOUNT_NAME, accountId, getAccount } from "../accounts/store.ts";
+import { replaceToken } from "../accounts/care.ts";
+import { ACCOUNT_NAME, accountId, getAccount, liveAccount, type AccountRow } from "../accounts/store.ts";
 import { MAX_OPENED, codeShapeError, findToken, linkFromOpened, maskedTrace, parseSetupOutput } from "../claude-token.ts";
 import type { HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
@@ -132,8 +133,10 @@ interface Entry {
   readonly id: string;
   readonly owner: string;
   readonly ownerAs: string;
-  /** The account name; the account does not exist until the token comes. */
+  /** The account name; a new account does not exist until the token comes. */
   readonly name: string;
+  /** A new token for this existing account, in place of a new account. */
+  readonly replace: boolean;
   readonly accountId: string;
   readonly container: string;
   readonly staging: string;
@@ -178,15 +181,22 @@ export class SetupTokenLogins {
     for (const [id, e] of this.entries) if (e.finishedAt !== undefined && now - e.finishedAt > KEEP_MS) this.entries.delete(id);
   }
 
-  /** A login for a NEW claude token account. The person owns it. */
-  start(email: string, name: string): Promise<LoginStart> {
+  /** A new token for the owner's own claude token account. A good end clears its health and is their consent. */
+  startReplace(email: string, a: AccountRow): Promise<LoginStart> {
+    if (a.runner !== "claude" || a.kind !== "token") return Promise.reject(new LoginRefused(400, "bad-request", "a new token is for a claude token account only"));
+    if (a.state === "moved" || a.state === "removed") return Promise.reject(new LoginRefused(409, "conflict", `the account is ${a.state}`));
+    return this.start(email, a.name, true);
+  }
+
+  /** A login for a NEW claude token account (or, with `replace`, a new token for one). The person owns it. */
+  start(email: string, name: string, replace = false): Promise<LoginStart> {
     const { env, home, log } = this.d;
     if (envOn(SQUAD_NO_WEB_LOGIN_ENV, env)) return Promise.reject(new LoginRefused(501, "disabled", "web login is off (SQUAD_NO_WEB_LOGIN=1)"));
     if (envOn(SQUAD_DRY_RUN_ENV, env)) return Promise.reject(new LoginRefused(501, "disabled", "web login starts no container while SQUAD_DRY_RUN=1"));
     if (!ACCOUNT_NAME.test(name)) return Promise.reject(new LoginRefused(400, "bad-request", "the name must be lower-case letters, digits, dot, dash or underscore, and start with a letter or digit"));
     if (this.closed) return Promise.reject(new LoginRefused(501, "disabled", "the server is stopping"));
     const aid = accountId("claude", name);
-    if (getAccount(this.d.store.db, aid) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
+    if (!replace && liveAccount(this.d.store.db, aid) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
     this.sweep();
     const running = [...this.entries.values()].filter((e) => this.live(e));
     if (running.some((e) => e.accountId === aid)) return Promise.reject(new LoginRefused(409, "conflict", "a login is already running for this account"));
@@ -204,7 +214,7 @@ export class SetupTokenLogins {
     mkdirSync(staging, { recursive: true, mode: 0o700 });
     mkdirSync(cwd, { mode: 0o700 });
     const proc = this.d.start(argv, container);
-    const e: Entry = { id, owner: email.toLowerCase(), ownerAs: email, name, accountId: aid, container, staging, cwd, proc, state: "starting", sent: false, tail: "" };
+    const e: Entry = { id, owner: email.toLowerCase(), ownerAs: email, name, replace, accountId: aid, container, staging, cwd, proc, state: "starting", sent: false, tail: "" };
     this.entries.set(id, e);
     log.info("web_login_started", { account: aid, login: id });
 
@@ -329,7 +339,10 @@ export class SetupTokenLogins {
     this.clr(e.life);
     this.clr(e.step);
     try {
-      createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: e.name, kind: "token", ownerEmail: e.ownerAs.toLowerCase() }, [{ name: "token", body: token }], this.d.now());
+      const row = e.replace ? getAccount(this.d.store.db, e.accountId) : undefined;
+      if (e.replace && (row === undefined || row.state === "removed" || row.ownerEmail?.toLowerCase() !== e.owner)) throw new AccountExists("the account is gone");
+      if (row !== undefined) replaceToken(this.d.store, this.d.home, row, token, e.owner, this.d.now());
+      else createFileAccount(this.d.store.db, this.d.home, { runner: "claude", name: e.name, kind: "token", ownerEmail: e.ownerAs.toLowerCase(), consent: { by: e.ownerAs.toLowerCase() } }, [{ name: "token", body: token }], this.d.now());
       this.end(e, "done");
     } catch (err) {
       this.end(e, "failed", "login-failed");

@@ -82,6 +82,7 @@ current git repo, or the folder in `SQUAD_HOME`. It is mode 0700 and must never 
 | `probe <account> --model <id>` | one tiny real pass on one account |
 | `image build <runner>` | build a pinned runner image |
 | `import <home> [<account>...]` | bring accounts from another project's home |
+| `remove <account> --yes` | remove an account: its folder goes, its pass history stays |
 | `shell <account>` | a bash session in a container on one account |
 | `log <passId>` | the end of a pass log |
 | `gc [--dry-run]` | remove orphan containers, lost passes, old files and old sessions |
@@ -89,6 +90,23 @@ current git repo, or the folder in `SQUAD_HOME`. It is mode 0700 and must never 
 | `connect --url <origin> --pair <code>` | on your own computer: sign in to claude in your browser and send the token to squad web |
 
 `SQUAD_DRY_RUN=1` prints every Docker command and plan and runs nothing.
+
+## Consent
+
+squad runs a pass only on an account its owner shares. An account with no consent is never picked
+by the pool, and a pass or conversation that names it fails at once with failure kind `no-account`
+and code `no-consent` (no container starts, the health does not change).
+
+- The owner gives consent by adding or logging in to their own account in the web app (every way:
+  codex device login, the claude sign-ins, a pasted token, `squad connect`, a pi key), and by a web
+  re-login or a new token or key.
+- **Stop sharing** on the account page (the owner only) takes it back; **Share again** gives it again.
+- `add-key`, `add-token` and `login` on the host with `--owner` do **not** give consent: an admin may
+  run them for someone else. That person shares the account from the web app. Without `--owner`, the
+  person at the host adds their own account, and it is shared (`consent_by` is `cli`). An `import`
+  keeps the source account's consent; a doppelganger key import with `--owner` is not shared.
+- Every account that existed before consent was checked was marked shared by the migration
+  (`consent_by` is `migration`), so nothing in use stopped working.
 
 ## Library
 
@@ -208,6 +226,25 @@ ways to get one:
   As with a pasted token, a TLS-terminating proxy in between can see the token. Linux and macOS
   only for now.
 - **I already have a token.** Paste the output of `claude setup-token`.
+
+### Account actions
+
+The account page (and the ⋯ menu of each row in Accounts) offers:
+
+- **Stop sharing / Share again** (the owner): see Consent.
+- **Test** (the owner or an admin): one tiny real pass, the same as `squad probe`, with a model the
+  account serves or `SQUAD_PROBE_MODEL_<RUNNER>`. One per account per minute. It spends a few tokens.
+- **Reset health** (the owner or an admin): clears cooling, suspect and the last code. A login that
+  was revoked (`token_revoked`, `refresh_token_invalidated`, `refresh_token_reused`, `invalid_grant`)
+  needs a new login instead.
+- **Log in again** (the owner): a codex device login (the same seat only), a new claude token (any of
+  the three sign-in ways), or **Replace key** for a pi key. A good end clears the health. A claude
+  login made with `squad login` (a config folder, not a token) logs in again on the host.
+- **Use limit reset** (the owner, claude): runs the real claude CLI's `/limit-reset` on the account
+  and reports what the CLI said. It spends one of your limit resets. `SQUAD_NO_LIMIT_RESET=1` turns it off.
+- **Remove** (the owner or an admin, typed confirm): deletes the account folder under the account
+  lock (while a pass holds a login, it is refused: try again later). The pass history stays and shows the account as removed. The
+  name may be used again later. squad then says where to revoke the login or key at the provider.
 
 ### Two costs per pass
 

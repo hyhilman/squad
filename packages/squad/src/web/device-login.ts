@@ -1,4 +1,5 @@
-// Web logins: the owner re-logs in a codex account from the page. The server runs `codex login
+// Web logins: the owner logs in a codex account again from the page, in any state but moved or
+// removed (the swap is under the account lock, so a running pass makes it `busy`). The server runs `codex login
 // --device-auth` in a container with no terminal, reads the one-time code from its output, and shows
 // it. The owner types the code at OpenAI. When the CLI exits 0, the same checks and move as
 // `squad login` run (`finishLogin`).
@@ -13,7 +14,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ErrorCode, LoginStart, LoginState, LoginStatus } from "@squad/contract";
-import { ACCOUNT_NAME, accountId, getAccount, type AccountRow } from "../accounts/store.ts";
+import { ACCOUNT_NAME, accountId, liveAccount, type AccountRow } from "../accounts/store.ts";
 import { dockerKillArgv, dockerStopArgv, stopGraceS } from "../docker.ts";
 import type { HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
@@ -164,7 +165,7 @@ export class DeviceLogins {
     for (const [id, e] of this.entries) if (e.finishedAt !== undefined && now - e.finishedAt > KEEP_MS) this.entries.delete(id);
   }
 
-  /** A re-login of a dead account. */
+  /** A re-login of the owner's own account. A good end clears its health and is their consent. */
   start(email: string, a: AccountRow): Promise<LoginStart> {
     return this.begin(email, a, false);
   }
@@ -173,7 +174,7 @@ export class DeviceLogins {
   startAdd(email: string, name: string): Promise<LoginStart> {
     if (!ACCOUNT_NAME.test(name)) return Promise.reject(new LoginRefused(400, "bad-request", "the name must be lower-case letters, digits, dot, dash or underscore, and start with a letter or digit"));
     const id = accountId("codex", name);
-    if (getAccount(this.d.store.db, id) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
+    if (liveAccount(this.d.store.db, id) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
     return this.begin(email, { id, name, loginEmail: null }, true);
   }
 
@@ -185,8 +186,8 @@ export class DeviceLogins {
     if (!add) {
       const row = a as AccountRow;
       if (row.runner !== "codex" || row.kind !== "login") throw new LoginRefused(400, "bad-request", `web login is for codex login accounts only: run \`squad login ${a.name}\` on the host`);
-      // Like `squad login`: a login that works is only for a dead account. A live one has a pass or a refresh using it.
-      if (row.state !== "dead") throw new LoginRefused(409, "conflict", `the account is ${row.state}: a login is for a dead account`);
+      // A live login may be replaced: finishLogin swaps it under the account lock, so a pass makes it busy.
+      if (row.state === "moved" || row.state === "removed") throw new LoginRefused(409, "conflict", `the account is ${row.state}`);
     }
     if (this.closed) throw new LoginRefused(501, "disabled", "the server is stopping");
     this.sweep();
@@ -286,7 +287,7 @@ export class DeviceLogins {
       }
       try {
         // A row with a known seat is checked by seat; a legacy row with none keeps the owner check.
-        const check = e.add ? { addFor: e.ownerAs } : e.account.loginEmail === null ? { owner: e.owner } : {};
+        const check = e.add ? { addFor: e.ownerAs } : { ...(e.account.loginEmail === null ? { owner: e.owner } : {}), consentBy: e.owner };
         const r = await finishLogin({ store: this.d.store, home: this.d.home, runner: "codex", name: e.account.name, staging: e.staging, ...check, now: this.d.now() });
         if (r.ok) this.end(e, "done");
         else this.end(e, "failed", r.reason === "empty" ? "login-failed" : r.reason);

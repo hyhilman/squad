@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fakeIdToken } from "../../test/fake-jwt.ts";
-import { addAccount, getAccount, setState, type AccountRow } from "../accounts/store.ts";
+import { addAccount, getAccount, getHealth, putHealth, setState, type AccountRow } from "../accounts/store.ts";
+import { emptyHealth } from "../accounts/health.ts";
 import { ensureHome, layoutOf } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore } from "../store/db.ts";
@@ -286,12 +287,40 @@ test("only codex, only a login account: other runners get 400 and say to use the
   r.store.close();
 });
 
-test("a live account is a 409: a login is for a dead account, as with `squad login`", async () => {
+test("a live codex login may log in again from the web (the owner's own act); a moved or removed one is a 409", async () => {
   const r = rig();
   const live = addAccount(r.store.db, { runner: "codex", name: "live", kind: "login", ownerEmail: "alice@example.test" }, NOW);
-  const e = await refused(r.logins.start("alice@example.test", live), 409, "conflict");
-  assert.match(e.message, /dead/);
-  assert.equal(r.procs.length, 0);
+  const s = await begin(r, "alice@example.test", live);
+  assert.equal(s.userCode, "ABCD-EFGHJ");
+  for (const state of ["moved", "removed"] as const) {
+    const a = addAccount(r.store.db, { runner: "codex", name: state, kind: "login", ownerEmail: "alice@example.test" }, NOW);
+    r.store.db.prepare("UPDATE accounts SET state = ? WHERE id = ?").run(state, a.id);
+    const e = await refused(r.logins.start("alice@example.test", getAccount(r.store.db, a.id)!), 409, "conflict");
+    assert.match(e.message, new RegExp(state));
+  }
+  await r.logins.close();
+  r.store.close();
+});
+
+test("a re-login that ends well clears the health, records the owner's consent now, and keeps the seat check", async () => {
+  const r = rig();
+  const a = addAccount(r.store.db, { runner: "codex", name: "c", kind: "login", ownerEmail: "alice@example.test", loginEmail: "seat@example.test", consent: false }, NOW);
+  putHealth(r.store.db, { ...emptyHealth(a.id), suspectSince: NOW.toISOString(), authFails: 1, lastFailCode: "401", coolUntil: "2026-10-24T13:00:00.000Z" });
+  const s = await begin(r, "alice@example.test", a);
+  writeAuth(s.proc.staging, "seat@example.test");
+  s.proc.exit(0);
+  await waitFor(() => r.logins.status("alice@example.test", s.loginId).state !== "pending");
+  assert.equal(r.logins.status("alice@example.test", s.loginId).state, "done");
+  const h = getHealth(r.store.db, a.id);
+  assert.deepEqual([h.suspectSince, h.authFails, h.lastFailCode, h.coolUntil], [null, 0, null, null]);
+  assert.deepEqual([getAccount(r.store.db, a.id)!.consentAt, getAccount(r.store.db, a.id)!.consentBy], [NOW.toISOString(), "alice@example.test"]);
+  // Another seat's login is refused, and nothing changes.
+  const s2 = await begin(r, "alice@example.test", getAccount(r.store.db, a.id)!);
+  writeAuth(s2.proc.staging, "other@example.test");
+  s2.proc.exit(0);
+  await waitFor(() => r.logins.status("alice@example.test", s2.loginId).state !== "pending");
+  assert.deepEqual(r.logins.status("alice@example.test", s2.loginId), { loginId: s2.loginId, state: "failed", reason: "seat-mismatch" });
+  await r.logins.close();
   r.store.close();
 });
 

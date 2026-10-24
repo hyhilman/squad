@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { addAccount, getAccount } from "../accounts/store.ts";
 import { ensureHome, layoutOf } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore } from "../store/db.ts";
-import { CONNECT_LIFE_MS, ConnectPairs, PAIR_SHAPE, WRONG_PER_MINUTE, connectCommand, newPairCode, squadVersion } from "./connect.ts";
+import { CONNECT_LIFE_MS, ConnectPairs, PAIR_SHAPE, WRONG_ALL_PER_MINUTE, WRONG_PER_MINUTE, clientKeyOf, connectCommand, newPairCode, squadVersion } from "./connect.ts";
 import { LoginRefused } from "./device-login.ts";
 
 const T0 = new Date("2026-10-24T12:00:00.000Z").getTime();
@@ -129,18 +129,18 @@ test("a wrong code is a 404 with no detail; an expired one too, and its status s
   r.store.close();
 });
 
-test("after 10 wrong codes in a minute an address gets 429 for every code, the right one too; other addresses are not held", () => {
+test("after 30 wrong codes in a minute an address gets 429 for every code, the right one too; other addresses are not held", () => {
   const r = rig();
   const s = r.pairs.start("alice@example.test", "c1");
-  assert.equal(WRONG_PER_MINUTE, 10);
-  for (let i = 0; i < 10; i++) refused(() => r.pairs.redeem("10.0.0.9", `${"C".repeat(42)}${i}`, TOKEN), 404, "not-found");
+  assert.equal(WRONG_PER_MINUTE, 30);
+  for (let i = 0; i < 30; i++) refused(() => r.pairs.redeem("10.0.0.9", `${"C".repeat(42)}${i}`, TOKEN), 404, "not-found");
   refused(() => r.pairs.redeem("10.0.0.9", "D".repeat(43), TOKEN), 429, "too-many");
   refused(() => r.pairs.redeem("10.0.0.9", s.pairCode, TOKEN), 429, "too-many");
   assert.equal(r.pairs.status("alice@example.test", s.connectId).state, "pending", "a held try does not use the code");
   r.clock.now = T0 + 61_000;
   assert.deepEqual(r.pairs.redeem("10.0.0.9", s.pairCode, TOKEN), { account: "claude/c1" }, "the minute passed");
   const t = r.pairs.start("alice@example.test", "c2");
-  for (let i = 0; i < 10; i++) refused(() => r.pairs.redeem("10.0.0.9", `${"E".repeat(42)}${i}`, TOKEN), 404, "not-found");
+  for (let i = 0; i < 30; i++) refused(() => r.pairs.redeem("10.0.0.9", `${"E".repeat(42)}${i}`, TOKEN), 404, "not-found");
   assert.deepEqual(r.pairs.redeem("10.0.0.10", t.pairCode, TOKEN), { account: "claude/c2" });
   r.store.close();
 });
@@ -165,5 +165,41 @@ test("a token of the wrong shape uses up the code and fails the connect; an acco
 test("the token route is off with the kill switch or a dry run", () => {
   const r = rig({ SQUAD_NO_WEB_LOGIN: "1" });
   refused(() => r.pairs.redeem("10.0.0.1", "A".repeat(43), TOKEN), 501, "disabled");
+  r.store.close();
+});
+
+test("the client key: a loopback peer (the tunnel) with a valid cf-connecting-ip keys on that header; anything else keys on the peer", () => {
+  for (const lo of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) assert.equal(clientKeyOf(lo, "203.0.113.7"), "203.0.113.7", lo);
+  assert.equal(clientKeyOf("127.0.0.1", "2001:db8::1"), "2001:db8::1");
+  assert.equal(clientKeyOf("127.0.0.1", undefined), "127.0.0.1");
+  assert.equal(clientKeyOf("127.0.0.1", "not an ip"), "127.0.0.1");
+  assert.equal(clientKeyOf("127.0.0.1", `1.2.3.4${"x".repeat(100)}`), "127.0.0.1");
+  assert.equal(clientKeyOf("127.0.0.1", ["1.2.3.4", "5.6.7.8"]), "127.0.0.1", "a repeated header is not trusted");
+  assert.equal(clientKeyOf("10.0.0.5", "203.0.113.7"), "10.0.0.5", "a header from a non-loopback peer is forgeable: ignored");
+});
+
+test("past 300 wrong codes in a minute from all addresses together, every try is refused until the minute ends", () => {
+  const r = rig();
+  const s = r.pairs.start("alice@example.test", "c1");
+  assert.equal(WRONG_ALL_PER_MINUTE, 300);
+  for (let i = 0; i < 300; i++) refused(() => r.pairs.redeem(`10.1.${Math.floor(i / 20)}.${i % 20}`, `${"G".repeat(40)}${String(i).padStart(3, "0")}`, TOKEN), 404, "not-found");
+  refused(() => r.pairs.redeem("10.9.9.9", s.pairCode, TOKEN), 429, "too-many");
+  assert.equal(r.pairs.status("alice@example.test", s.connectId).state, "pending");
+  r.clock.now = T0 + 61_000;
+  assert.deepEqual(r.pairs.redeem("10.9.9.9", s.pairCode, TOKEN), { account: "claude/c1" });
+  r.store.close();
+});
+
+test("replace: a connect bound to the owner's own claude token account writes a new token into it; one for a missing account is refused", () => {
+  const r = rig();
+  addAccount(r.store.db, { runner: "claude", name: "t", kind: "token", ownerEmail: "alice@example.test", consent: false }, new Date(T0));
+  mkdirSync(join(r.home.accounts, "claude", "t"), { recursive: true, mode: 0o700 });
+  refused(() => r.pairs.start("alice@example.test", "missing", true), 404, "not-found");
+  refused(() => r.pairs.start("bob@example.test", "t", true), 404, "not-found");
+  const s = r.pairs.start("alice@example.test", "t", true);
+  assert.deepEqual(r.pairs.redeem("10.0.0.1", s.pairCode, TOKEN), { account: "claude/t" });
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "t", "token"), "utf8"), TOKEN);
+  assert.equal(getAccount(r.store.db, "claude/t")!.consentBy, "alice@example.test");
+  clean(r);
   r.store.close();
 });

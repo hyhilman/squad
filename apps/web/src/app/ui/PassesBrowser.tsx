@@ -59,6 +59,12 @@ function Rows({ rows, onOpen, showAccount }: { rows: readonly PassView[]; onOpen
               {showAccount ? (
                 <Table.Cell fontWeight="500" whiteSpace="nowrap">
                   {p.account ?? <Text as="span" color="fg.subtle">none</Text>}
+                  {p.accountRemoved === true ? (
+                    <Text as="span" color="fg.subtle" fontWeight="400">
+                      {" "}
+                      (removed)
+                    </Text>
+                  ) : null}
                 </Table.Cell>
               ) : null}
               <Table.Cell hideBelow="lg" maxW="52">

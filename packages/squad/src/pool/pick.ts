@@ -3,7 +3,7 @@
 //
 // This is pure: the caller reads health, usage, locks and live containers, and passes them in.
 
-export type Health = "ok" | "suspect" | "cooling" | "dead" | "disabled" | "moved";
+export type Health = "ok" | "suspect" | "cooling" | "dead" | "disabled" | "moved" | "removed";
 
 /** One account as the pick sees it. */
 export interface Candidate {
@@ -24,9 +24,11 @@ export interface Candidate {
   readonly busy: boolean;
   /** ISO time of the last pass; unset = never used. */
   readonly lastUsedAt?: string;
+  /** False: the owner stopped sharing it, so squad refuses every pass on it. Unset = shared. */
+  readonly sharing?: boolean;
 }
 
-export type Skip = "dead" | "disabled" | "moved" | "cooling" | "suspect" | "under-floor" | "busy";
+export type Skip = "dead" | "disabled" | "moved" | "removed" | "no-consent" | "cooling" | "suspect" | "under-floor" | "busy";
 
 export interface PickResult {
   /** Accounts to try in order. The caller starts the first; on exit 75 (lost the lock race) the next. */
@@ -49,8 +51,12 @@ export function pick(candidates: readonly Candidate[], now: number = Date.now(),
   const skipped: Record<string, Skip> = {};
   const left: { c: Candidate; room: number }[] = [];
   for (const c of candidates) {
-    if (c.health === "dead" || c.health === "disabled" || c.health === "moved") {
+    if (c.health === "dead" || c.health === "disabled" || c.health === "moved" || c.health === "removed") {
       skipped[c.account] = c.health;
+      continue;
+    }
+    if (c.sharing === false) {
+      skipped[c.account] = "no-consent";
       continue;
     }
     // A suspect account waits for a probe; a real pass must not be its test.

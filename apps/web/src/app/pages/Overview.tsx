@@ -70,7 +70,7 @@ export function Overview() {
       </SimpleGrid>
 
       <Stack gap="6">
-        <Panel title="Needs attention" description="Dead, cooling, or at the floor. The pool skips these accounts." flush>
+        <Panel title="Needs attention" description="Dead, cooling, not shared or at the floor (the pool skips these), or the week resets within 3 days." flush>
           {accounts.isPending ? (
             <Stack gap="3" px="5" pb="5">
               {[0, 1, 2].map((i) => (
@@ -82,7 +82,7 @@ export function Overview() {
               <ErrorBlock error={accounts.error} onRetry={() => void accounts.refetch()} />
             </Box>
           ) : attention.length === 0 ? (
-            <EmptyBlock compact icon={CheckCircle2} title="All accounts are fine" description="No account is dead, cooling or at its floor." />
+            <EmptyBlock compact icon={CheckCircle2} title="All accounts are fine" description="No account is dead, cooling, not shared or at its floor, and no week resets soon." />
           ) : (
             <Stack gap="0" borderTopWidth="1px" borderColor="border.subtle">
               {attention.map(({ account: a, reason }) => (
@@ -100,13 +100,17 @@ export function Overview() {
                           </Text>
                         </Box>
                       </HStack>
-                      <HStack gap="6" flexShrink={0} w={{ base: "full", md: "auto" }}>
-                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" label="5h" />
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" label="Week" />
+                      <Stack direction={{ base: "column", md: "row" }} gap={{ base: "3", md: "6" }} flexShrink={0} w={{ base: "full", md: "auto" }} align={{ base: "stretch", md: "flex-start" }}>
+                        <Box w={{ base: "full", md: "200px" }} minW="0">
+                          <RoomBar left={a.left5h} floor={a.floor5h} label="5h" />
+                        </Box>
+                        <Box w={{ base: "full", md: "200px" }} minW="0">
+                          <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
+                        </Box>
                         <Box w="20" textAlign="right" hideBelow="md">
                           <HealthBadge health={a.health} />
                         </Box>
-                      </HStack>
+                      </Stack>
                     </Flex>
                   </RouterLink>
                 </Link>
