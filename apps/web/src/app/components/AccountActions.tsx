@@ -2,7 +2,7 @@ import { useGetIdentity } from "@refinedev/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AccountView, LoginStart, Me, Runner } from "@squad/contract";
 import { EditOutlined, LoginOutlined, StopOutlined, CheckOutlined, SafetyOutlined } from "@ant-design/icons";
-import { App, Button, Form, Input, Modal, Popconfirm, Space, Tooltip, Typography } from "antd";
+import { App, Button, Checkbox, Flex, Form, InputNumber, Modal, Popconfirm, Slider, Space, Tooltip, Typography } from "antd";
 import { useState } from "react";
 import { api } from "../api.ts";
 import { failureText } from "../lib/errors.ts";
@@ -99,13 +99,13 @@ export function AccountActions({ a, compact = false }: { a: AccountView; compact
       </Space>
 
       <Modal title={`Floors of ${a.account}`} open={floorsOpen} onOk={() => void saveFloors()} okText="Save" confirmLoading={busy} onCancel={() => setFloorsOpen(false)} destroyOnHidden>
-        <Typography.Paragraph type="secondary">The percent of each window to keep free for the owner. Leave a box empty for the default.</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">The percent of each window to keep free for the owner. A pass only takes the room above it.</Typography.Paragraph>
         <Form form={form} layout="vertical">
-          <Form.Item name="f5" label="5-hour floor (%)" rules={[floorRule]}>
-            <Input inputMode="numeric" placeholder={`default (${a.floorSource === "owner" ? "" : `${a.floor5h}%`})`} />
+          <Form.Item name="f5" label="5-hour floor" rules={[floorRule]}>
+            <FloorField fallback={a.floorSource === "owner" ? undefined : a.floor5h} />
           </Form.Item>
-          <Form.Item name="fw" label="Week floor (%)" rules={[floorRule]}>
-            <Input inputMode="numeric" placeholder={`default (${a.floorSource === "owner" ? "" : `${a.floorWeek}%`})`} />
+          <Form.Item name="fw" label="Week floor" rules={[floorRule]}>
+            <FloorField fallback={a.floorSource === "owner" ? undefined : a.floorWeek} />
           </Form.Item>
         </Form>
       </Modal>
@@ -114,5 +114,25 @@ export function AccountActions({ a, compact = false }: { a: AccountView; compact
         {started === undefined ? null : <LoginProgress start={started} />}
       </Modal>
     </>
+  );
+}
+
+/**
+ * One floor: a slider and a number box, or the default. The form keeps text ("" = the default), so
+ * the same floorBody check runs as before.
+ */
+function FloorField({ value, onChange, fallback }: { value?: string; onChange?: (v: string) => void; fallback: number | undefined }) {
+  const isDefault = value === undefined || value === "";
+  const n = isDefault ? (fallback ?? 10) : Number(value);
+  return (
+    <Flex vertical gap={4}>
+      <Checkbox checked={isDefault} onChange={(e) => onChange?.(e.target.checked ? "" : String(n))}>
+        Use the default{fallback === undefined ? "" : ` (${fallback}%)`}
+      </Checkbox>
+      <Flex align="center" gap={12}>
+        <Slider style={{ flex: 1 }} min={0} max={100} value={n} disabled={isDefault} onChange={(v) => onChange?.(String(v))} tooltip={{ formatter: (v) => `${v}%` }} />
+        <InputNumber min={0} max={100} value={n} disabled={isDefault} addonAfter="%" style={{ width: 110 }} onChange={(v) => onChange?.(v === null ? "" : String(v))} />
+      </Flex>
+    </Flex>
   );
 }
