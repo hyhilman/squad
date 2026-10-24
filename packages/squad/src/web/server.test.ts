@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -346,6 +346,45 @@ test("static files: index.html for client routes, assets by type, nothing outsid
   }
   assert.equal((await fetch(`${r.base}/`, { method: "POST", headers: { "x-squad-csrf": "1", origin: PUBLIC } })).status, 405);
   await r.close();
+});
+
+test("the real source layout never serves the server's own code", async () => {
+  const r = await rig();
+  try {
+  for (const path of ["/oidc.ts", "/server.ts", "/settings.ts", "/web/server.ts", "/server.test.ts"]) {
+    const res = await fetch(`${r.base}${path}`);
+    const body = await res.text();
+    assert.ok(!body.includes("createOidc"), `${path} leaks code`);
+    assert.notEqual(res.headers.get("content-type")?.startsWith("text/javascript"), true, path);
+  }
+  const built = new URL("../../../../apps/web/dist/index.html", import.meta.url);
+  if (existsSync(built)) {
+    const home = await fetch(`${r.base}/`);
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /<html/i);
+  }
+  } finally {
+    await r.close();
+  }
+});
+
+test("source and type-declaration files in the static root are refused", async () => {
+  const dist = mkdtempSync(join(tmpdir(), "dist-"));
+  mkdirSync(join(dist, "_astro"));
+  writeFileSync(join(dist, "index.html"), "<html>home</html>");
+  for (const n of ["a.ts", "a.mts", "a.cts", "a.d.ts", "a.js.map", "_astro/b.ts"]) writeFileSync(join(dist, n), "secret code");
+  writeFileSync(join(dist, "_astro/app.js"), "ok()");
+  const r = await rig({ staticDir: dist });
+  try {
+  for (const n of ["a.ts", "a.mts", "a.cts", "a.d.ts", "a.js.map", "_astro/b.ts"]) {
+    const res = await fetch(`${r.base}/${n}`);
+    assert.equal(res.status, 404, n);
+    assert.ok(!(await res.text()).includes("secret"), n);
+  }
+  assert.equal((await fetch(`${r.base}/_astro/app.js`)).status, 200);
+  } finally {
+    await r.close();
+  }
 });
 
 test("a request target that is not a plain path is a 400", async () => {

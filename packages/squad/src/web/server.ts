@@ -225,6 +225,8 @@ function fileFor(root: string, pathname: string): string | undefined {
     return undefined;
   }
   if (decoded.includes("\0") || decoded.includes("\\")) return undefined;
+  // Never source or debug files, even if a build left one in the root.
+  if (/\.(d\.ts|mts|cts|ts|js\.map)$/i.test(decoded)) return undefined;
   const parts = decoded.split("/").filter((p) => p !== "");
   if (parts.some((p) => p === "..")) return undefined;
   const real = (p: string): string | undefined => {
@@ -259,7 +261,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const log = opts.log ?? makeLog();
   const oidc = createOidc(cfg, opts.fetch === undefined ? {} : { fetch: opts.fetch });
   const handlers = makeHandlers(opts);
-  const staticRoot = opts.staticDir ?? bundledPath("web");
+  const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
 

@@ -1,5 +1,5 @@
 // Builds the installable package into dist/: the contract (vendored), the squad code, and the
-// folders the code reads at run time (assets, images, web). `npm pack` runs this through `prepack`.
+// folders the code reads at run time (assets, images, webapp). `npm pack` runs this through `prepack`.
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -52,5 +52,5 @@ if (!existsSync(join(web, "index.html"))) throw new Error(`the web build left no
 
 cpSync(join(PKG, "assets"), join(DIST, "assets"), { recursive: true });
 cpSync(join(ROOT, "images"), join(DIST, "images"), { recursive: true });
-cpSync(web, join(DIST, "web"), { recursive: true });
+cpSync(web, join(DIST, "webapp"), { recursive: true });
 console.error(`built ${DIST}`);
