@@ -72,13 +72,13 @@ test("moneyText: cents for a cent or more, four decimals below, nothing when unk
   assert.equal(moneyText(0.001425421), "$0.0014");
 });
 
-test("gapPercent and gapText need both costs and a CLI cost above zero", async () => {
+test("gapPercent is CLI minus catalog, in percent of the catalog cost; it needs both costs and a catalog cost above zero", async () => {
   const { gapPercent, gapText } = await import("./format.ts");
-  assert.equal(gapPercent(2, 3), 50);
-  assert.equal(gapPercent(4, 3), -25);
+  assert.equal(gapPercent(3, 2), 50, "the CLI spent half more than the catalog says");
+  assert.equal(gapPercent(3, 4), -25);
   assert.equal(gapPercent(undefined, 3), undefined);
   assert.equal(gapPercent(2, undefined), undefined);
-  assert.equal(gapPercent(0, 3), undefined);
+  assert.equal(gapPercent(0.0029, 0), undefined, "no share of a zero catalog cost");
   assert.equal(gapText(50), "+50.0%");
   assert.equal(gapText(-25), "-25.0%");
   assert.equal(gapText(undefined), "-");
@@ -88,7 +88,7 @@ test("costCompare keeps rows with either cost, adds the gap, biggest first", asy
   const { costCompare } = await import("./format.ts");
   const rows = costCompare([
     { key: "a", passes: 1 },
-    { key: "p/x", passes: 2, cliCostUsd: 1, catalogCostUsd: 1.1 },
+    { key: "p/x", passes: 2, cliCostUsd: 1.1, catalogCostUsd: 1 },
     { key: "p/y", passes: 1, catalogCostUsd: 5 },
     { key: "p/z", passes: 1, cliCostUsd: 0.5 },
   ]);
@@ -97,21 +97,24 @@ test("costCompare keeps rows with either cost, adds the gap, biggest first", asy
   assert.equal(rows[0]!.gap, undefined);
 });
 
-test("diffText is catalog minus CLI, in dollars and as a share of the CLI cost", () => {
-  assert.equal(diffText(0.004071, 0), "-$0.0041 (-100.0%)");
-  assert.equal(diffText(0.01, 0.012), "+$0.0020 (+20.0%)");
+test("diffText is CLI minus catalog, in dollars and as a share of the catalog cost", () => {
+  assert.equal(diffText(0.0029, 0), "+$0.0029", "spent more than a free catalog price: no %");
+  assert.equal(diffText(0.012, 0.01), "+$0.0020 (+20.0%)");
+  assert.equal(diffText(0.01, 0.012), "-$0.0020 (-16.7%)");
   assert.equal(diffText(0.01, 0.01), "$0.00 (0.0%)");
   assert.equal(diffText(undefined, 0.5), "");
   assert.equal(diffText(0.5, undefined), "");
-  assert.equal(diffText(0, 0.5), "+$0.50", "no share of a zero CLI cost");
+  assert.equal(diffText(0, 0.5), "-$0.50 (-100.0%)");
 });
 
-test("gapTone: green when the catalog is cheaper, red when pricier, grey when equal or unknown", () => {
-  assert.equal(gapTone(-12.5), "green");
-  assert.equal(gapTone(50.7), "red");
+test("the tones: red when the CLI spent more than the catalog says, green when less, grey when equal or unknown", () => {
+  assert.equal(gapTone(12.5), "red");
+  assert.equal(gapTone(-50.7), "green");
   assert.equal(gapTone(0), "grey");
   assert.equal(gapTone(undefined), "grey");
-  assert.equal(diffTone(0.01, 0.012), "red");
-  assert.equal(diffTone(0.004, 0), "green");
+  assert.equal(diffTone(0.012, 0.01), "red");
+  assert.equal(diffTone(0.0029, 0), "red", "a zero catalog cost and a CLI cost above it is still red");
+  assert.equal(diffTone(0.004, 0.005), "green");
+  assert.equal(diffTone(0.01, 0.01), "grey");
   assert.equal(diffTone(undefined, 0.5), "grey");
 });

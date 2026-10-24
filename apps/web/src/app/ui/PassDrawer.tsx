@@ -113,7 +113,7 @@ function Body({ p }: { p: PassDetail }) {
         <Box>
           <Fact label="CLI cost">{moneyText(p.cliCostUsd) || "-"}</Fact>
           <Fact label="Catalog cost">{moneyText(p.catalogCostUsd) || "-"}</Fact>
-          <Fact label="Catalog minus CLI">
+          <Fact label="CLI minus catalog">
             <Text as="span" color={TONE_COLOR[diffTone(p.cliCostUsd, p.catalogCostUsd)]}>{diffText(p.cliCostUsd, p.catalogCostUsd) || "-"}</Text>
           </Fact>
         </Box>

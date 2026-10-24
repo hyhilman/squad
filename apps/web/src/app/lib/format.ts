@@ -80,16 +80,20 @@ export function durationText(startIso: string, endIso: string | undefined): stri
 /** Money for a pass or a model: cents when it is a cent or more, else four decimals (a pass often costs a fraction of a cent). */
 export const moneyText = (usd: number | undefined): string => (usd === undefined ? "" : usd === 0 || usd >= 0.01 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(4)}`);
 
-/** How far the catalog cost is from the CLI cost, in percent of the CLI cost. Unset unless both exist and the CLI cost is above zero. */
+// The diff answers "did the agent spend more than the catalog says?": CLI cost minus catalog cost.
+// Above zero (red) it spent more; below zero (green) it spent less.
+export const DIFF_HINT = "CLI cost minus catalog cost: red means the agent spent more than the catalog price";
+
+/** CLI cost minus catalog cost, in percent of the catalog cost. Unset unless both exist and the catalog cost is above zero. */
 export function gapPercent(cli: number | undefined, catalog: number | undefined): number | undefined {
-  if (cli === undefined || catalog === undefined || !(cli > 0)) return undefined;
-  return ((catalog - cli) / cli) * 100;
+  if (cli === undefined || catalog === undefined || !(catalog > 0)) return undefined;
+  return ((cli - catalog) / catalog) * 100;
 }
 
-/** Catalog cost minus CLI cost, signed, with its share of the CLI cost when that is above zero. Empty unless both exist. */
+/** CLI cost minus catalog cost, signed, with its share of the catalog cost when that is above zero. Empty unless both exist. */
 export function diffText(cli: number | undefined, catalog: number | undefined): string {
   if (cli === undefined || catalog === undefined) return "";
-  const d = catalog - cli;
+  const d = cli - catalog;
   const money = `${d > 0 ? "+" : d < 0 ? "-" : ""}${moneyText(Math.abs(d))}`;
   const gap = gapPercent(cli, catalog);
   return gap === undefined ? money : `${money} (${gapText(gap)})`;
@@ -121,12 +125,12 @@ export type Tone = "green" | "red" | "grey";
 /** The Chakra colour token for a tone. */
 export const TONE_COLOR: Readonly<Record<Tone, string>> = { green: "green.fg", red: "red.fg", grey: "fg.muted" };
 
-/** The colour of a gap: the catalog cheaper than the CLI is good news (green), pricier is red. */
-export const gapTone = (gap: number | undefined): Tone => (gap === undefined || gap === 0 ? "grey" : gap < 0 ? "green" : "red");
+/** The colour of a gap: spent more than the catalog says is red, less is green. */
+export const gapTone = (gap: number | undefined): Tone => (gap === undefined || gap === 0 ? "grey" : gap > 0 ? "red" : "green");
 
-/** The same rule on the two costs, so a zero CLI cost still shows a pricier catalog as red. */
+/** The same rule on the two costs, so a zero catalog cost still shows a CLI cost above it as red. */
 export function diffTone(cli: number | undefined, catalog: number | undefined): Tone {
   if (cli === undefined || catalog === undefined) return "grey";
-  const d = catalog - cli;
-  return d === 0 ? "grey" : d < 0 ? "green" : "red";
+  const d = cli - catalog;
+  return d === 0 ? "grey" : d > 0 ? "red" : "green";
 }

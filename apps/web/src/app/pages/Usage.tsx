@@ -1,7 +1,7 @@
 import { Box, Flex, SegmentGroup, SimpleGrid, Skeleton, Table, Text } from "@chakra-ui/react";
 import { Activity, Coins, DollarSign, Receipt } from "lucide-react";
 import { useState } from "react";
-import { costCompare, gapText, gapTone, moneyText, TONE_COLOR, compactNumber, tokensText } from "../lib/format.ts";
+import { costCompare, DIFF_HINT, diffText, diffTone, moneyText, TONE_COLOR, compactNumber, tokensText } from "../lib/format.ts";
 import { RANGES, sinceFor, type Bucket, type Range } from "../lib/range.ts";
 import { seriesTotals } from "../lib/totals.ts";
 import { useUsageByModel, useUsageSeries } from "../queries.ts";
@@ -56,7 +56,7 @@ export function Usage() {
         {series.isPending ? <Skeleton h="300px" rounded="md" /> : series.isError ? <ErrorBlock error={series.error} onRetry={() => void series.refetch()} /> : series.data.length === 0 ? <EmptyBlock title="No passes in this range" /> : <TokensChart points={series.data} height={300} />}
       </Panel>
 
-      <Panel title="CLI cost and catalog cost by model" description="The gap is how far the catalog price is from what the CLI said." flush overflow="hidden">
+      <Panel title="CLI cost and catalog cost by model" description="Spent vs catalog is the CLI cost minus the catalog cost, and its share of the catalog cost: red means the agent spent more than the catalog price." flush overflow="hidden">
         <Box px="0">
           {models.isPending ? (
             <Box p="5">
@@ -79,8 +79,8 @@ export function Usage() {
                     </Table.ColumnHeader>
                     <Table.ColumnHeader {...num}>CLI cost</Table.ColumnHeader>
                     <Table.ColumnHeader {...num}>Catalog cost</Table.ColumnHeader>
-                    <Table.ColumnHeader {...num} pe="5">
-                      Gap
+                    <Table.ColumnHeader {...num} pe="5" title={DIFF_HINT}>
+                      Spent vs catalog
                     </Table.ColumnHeader>
                   </Table.Row>
                 </Table.Header>
@@ -97,8 +97,8 @@ export function Usage() {
                         {moneyText(r.cliCostUsd) || "-"}
                       </Table.Cell>
                       <Table.Cell {...num}>{moneyText(r.catalogCostUsd) || "-"}</Table.Cell>
-                      <Table.Cell {...num} pe="5" fontWeight={r.gap === undefined ? undefined : "500"} color={r.gap === undefined ? "fg.subtle" : TONE_COLOR[gapTone(r.gap)]}>
-                        {gapText(r.gap)}
+                      <Table.Cell {...num} pe="5" fontWeight="500" color={TONE_COLOR[diffTone(r.cliCostUsd, r.catalogCostUsd)]}>
+                        {diffText(r.cliCostUsd, r.catalogCostUsd) || "-"}
                       </Table.Cell>
                     </Table.Row>
                   ))}

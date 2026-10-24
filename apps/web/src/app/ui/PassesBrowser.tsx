@@ -5,7 +5,7 @@ import type { PassView } from "@squad/contract";
 import { ChevronLeft, ChevronRight, History } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
-import { diffText, diffTone, moneyText, TONE_COLOR, tokensText, totalTokens } from "../lib/format.ts";
+import { DIFF_HINT, diffText, diffTone, moneyText, TONE_COLOR, tokensText, totalTokens } from "../lib/format.ts";
 import { filterPasses, outcomeFromParam, type OutcomeGroup } from "../lib/passFilter.ts";
 import { useAccounts, usePasses } from "../queries.ts";
 import { PassDrawer } from "./PassDrawer.tsx";
@@ -45,8 +45,8 @@ function Rows({ rows, onOpen, showAccount }: { rows: readonly PassView[]; onOpen
             <Table.ColumnHeader {...num}>Tokens</Table.ColumnHeader>
             <Table.ColumnHeader {...num} hideBelow="md">CLI cost</Table.ColumnHeader>
             <Table.ColumnHeader {...num} hideBelow="md">Catalog</Table.ColumnHeader>
-            <Table.ColumnHeader {...num} hideBelow="lg" pe="5">
-              Diff
+            <Table.ColumnHeader {...num} hideBelow="lg" pe="5" title={DIFF_HINT}>
+              CLI − catalog
             </Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
