@@ -32,7 +32,7 @@ import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { passDetail, passViews } from "./passes.ts";
-import { allowedProviders, loadWebConfig } from "./settings.ts";
+import { SQUAD_WEB_BRAND_DIR_ENV, allowedProviders, loadWebConfig } from "./settings.ts";
 import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
 import { LimitResets } from "./limit-reset.ts";
 import { startTicker, type Timers } from "./ticker.ts";
@@ -619,6 +619,40 @@ function fileFor(root: string, pathname: string): string | undefined {
   return index !== undefined && index.startsWith(base + sep) ? index : undefined;
 }
 
+// ---- brand files ----
+
+/** The only names a brand folder may replace, and the other logo each may stand in for. */
+const BRAND_NAMES: Readonly<Record<string, readonly string[]>> = {
+  "logo-light.png": ["logo-light.png", "logo-dark.png"],
+  "logo-dark.png": ["logo-dark.png", "logo-light.png"],
+  "favicon.ico": ["favicon.ico"],
+  "apple-touch-icon.png": ["apple-touch-icon.png"],
+};
+const BRAND_MAX_BYTES = 2 * 1024 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const ICO_MAGIC = Buffer.from([0, 0, 1, 0]);
+
+/**
+ * One file of the brand folder, or undefined. The folder is the operator's, but the same rules as the
+ * built app hold: nothing outside it (also through a symlink), a plain file, at most 2 MB, and bytes
+ * that start as the image its name says.
+ */
+function brandFile(dir: string, name: string): Buffer | undefined {
+  try {
+    const base = realpathSync(dir);
+    const found = realpathSync(join(base, name));
+    if (!found.startsWith(base + sep)) return undefined;
+    const st = statSync(found);
+    if (!st.isFile() || st.size > BRAND_MAX_BYTES) return undefined;
+    const data = readFileSync(found);
+    if (data.length > BRAND_MAX_BYTES) return undefined;
+    const magic = name.endsWith(".ico") ? ICO_MAGIC : PNG_MAGIC;
+    return data.subarray(0, magic.length).equals(magic) ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ---- the server ----
 
 /** A path under /api/connect/ with a pair code in it: `/api/connect/<code>/...`. Matched by prefix, so a wrong method or a longer path counts too. */
@@ -782,8 +816,20 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     sendText(res, REFUSAL[done.reason], "sign-in refused\n", { "set-cookie": [...done.setCookies] });
   }
 
+  const brandDir = envOptional(SQUAD_WEB_BRAND_DIR_ENV, opts.env);
+
   function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string): void {
     if (req.method !== "GET" && req.method !== "HEAD") return sendText(res, 405, "method not allowed\n", { allow: "GET, HEAD" });
+    const asked = pathname.startsWith("/brand/") ? pathname.slice("/brand/".length) : "";
+    const brand = brandDir !== undefined && Object.hasOwn(BRAND_NAMES, asked) ? BRAND_NAMES[asked] : undefined;
+    if (brand !== undefined) {
+      for (const name of brand) {
+        const data = brandFile(brandDir!, name);
+        if (data === undefined) continue;
+        res.writeHead(200, { "content-type": TYPES[extname(name)]!, "content-length": data.length, "cache-control": "no-cache" });
+        return void res.end(req.method === "HEAD" ? undefined : data);
+      }
+    }
     const file = fileFor(staticRoot, pathname);
     if (file === undefined) return sendText(res, 404, "not found\n");
     const type = TYPES[extname(file)] ?? "application/octet-stream";

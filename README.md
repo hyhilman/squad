@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.png">
+    <img src="docs/brand/logo-light.png" alt="squad" width="160" height="160">
+  </picture>
+</p>
+
 # squad
 
 squad runs AI coding agents (claude, codex and pi) in Docker, one pass at a time, on accounts bound
@@ -184,6 +191,11 @@ the browser.
 
 It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A client secret, if
 any, goes in `squad.secret.toml` (mode 600) in the squad home.
+
+The logo and icons sit at `/brand/`. To use your own, set `SQUAD_WEB_BRAND_DIR` to a folder with
+any of `logo-light.png`, `logo-dark.png`, `favicon.ico` and `apple-touch-icon.png` (PNG or ICO, at
+most 2 MB each). A name that is missing there keeps the built-in file; one logo alone stands in for
+both themes.
 
 ### Add an account from the web
 

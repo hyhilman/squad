@@ -420,6 +420,67 @@ test("static files: index.html for client routes, assets by type, nothing outsid
   await r.close();
 });
 
+const PNG = (tag: string): Buffer => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tag)]);
+const ICO = (tag: string): Buffer => Buffer.concat([Buffer.from([0, 0, 1, 0, 1, 0]), Buffer.from(tag)]);
+
+test("SQUAD_WEB_BRAND_DIR: the four brand names come from that folder; anything else, a bad file or no setting is the built-in file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "brand-"));
+  const dist = join(root, "dist");
+  mkdirSync(join(dist, "brand"), { recursive: true });
+  writeFileSync(join(dist, "index.html"), "<html></html>");
+  for (const f of ["logo-light.png", "logo-dark.png", "logo-light-128.png", "apple-touch-icon.png"]) writeFileSync(join(dist, "brand", f), PNG(`builtin ${f}`));
+  writeFileSync(join(dist, "brand", "favicon.ico"), ICO("builtin favicon"));
+  const own = join(root, "own");
+  mkdirSync(own);
+  writeFileSync(join(own, "logo-dark.png"), PNG("own dark"));
+  writeFileSync(join(own, "favicon.ico"), ICO("own favicon"));
+  writeFileSync(join(own, "logo-light-128.png"), PNG("own small"));
+  writeFileSync(join(own, "apple-touch-icon.png"), "<svg>not a png</svg>");
+  writeFileSync(join(root, "secret.png"), PNG("TOP-SECRET"));
+  const get = async (r: Rig, path: string): Promise<{ status: number; text: string; type: string | null }> => {
+    const res = await fetch(`${r.base}${path}`);
+    return { status: res.status, text: Buffer.from(await res.arrayBuffer()).toString("latin1"), type: res.headers.get("content-type") };
+  };
+  const plain = await rig({ staticDir: dist });
+  assert.match((await get(plain, "/brand/logo-dark.png")).text, /builtin logo-dark/, "no setting: built-in");
+  await plain.close();
+
+  const r = await rig({ staticDir: dist }, { SQUAD_WEB_BRAND_DIR: own });
+  const dark = await get(r, "/brand/logo-dark.png");
+  assert.deepEqual([dark.status, dark.type], [200, "image/png"]);
+  assert.match(dark.text, /own dark/);
+  // Only logo-dark is in the folder: it stands in for logo-light too.
+  assert.match((await get(r, "/brand/logo-light.png")).text, /own dark/);
+  const fav = await get(r, "/brand/favicon.ico");
+  assert.deepEqual([fav.status, fav.type], [200, "image/x-icon"]);
+  assert.match(Buffer.from(fav.text, "latin1").toString(), /own favicon/);
+  assert.match((await get(r, "/brand/logo-light-128.png")).text, /builtin logo-light-128/, "not one of the four names: built-in");
+  assert.match((await get(r, "/brand/apple-touch-icon.png")).text, /builtin apple-touch-icon/, "not an image: built-in");
+  await r.close();
+
+  // A symlink out of the folder, a file over 2 MB: built-in. logo-light only: it stands in for logo-dark.
+  const other = join(root, "other");
+  mkdirSync(other);
+  symlinkSync(join(root, "secret.png"), join(other, "logo-light.png"));
+  writeFileSync(join(other, "favicon.ico"), Buffer.concat([ICO("big"), Buffer.alloc(2 * 1024 * 1024)]));
+  const r2 = await rig({ staticDir: dist }, { SQUAD_WEB_BRAND_DIR: other });
+  for (const f of ["logo-light.png", "logo-dark.png"]) {
+    const res = await get(r2, `/brand/${f}`);
+    assert.ok(!res.text.includes("TOP-SECRET"), f);
+    assert.match(res.text, new RegExp(`builtin ${f}`), f);
+  }
+  assert.match(Buffer.from((await get(r2, "/brand/favicon.ico")).text, "latin1").toString(), /builtin favicon/, "over 2 MB: built-in");
+  for (const bad of ["/brand/..%2Fsecret.png", "/brand/%2e%2e/secret.png"]) assert.ok(!(await get(r2, bad)).text.includes("TOP-SECRET"), bad);
+  await r2.close();
+
+  const light = join(root, "light");
+  mkdirSync(light);
+  writeFileSync(join(light, "logo-light.png"), PNG("own light"));
+  const r3 = await rig({ staticDir: dist }, { SQUAD_WEB_BRAND_DIR: light });
+  assert.match((await get(r3, "/brand/logo-dark.png")).text, /own light/);
+  await r3.close();
+});
+
 test("each page answer has a fresh style nonce, in the CSP and in a meta tag for Ant Design", async () => {
   const root = mkdtempSync(join(tmpdir(), "static-"));
   writeFileSync(join(root, "index.html"), "<html><head><title>x</title></head><body></body></html>");

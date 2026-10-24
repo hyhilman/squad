@@ -15,7 +15,7 @@ const ENV = { SQUAD_WEB_URL: "https://squad.example.test", SQUAD_OIDC_ISSUER: "h
 const secretPath = (h: ReturnType<typeof home>): string => join(h.root, "squad.secret.toml");
 
 test("every web setting has a one-line why, and the list is pinned", () => {
-  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP", "SQUAD_OIDC_ADMIN_GROUP", "SQUAD_WEB_PROVIDERS", "SQUAD_WEB_FRAME_ANCESTORS", "SQUAD_WEB_API_ORIGINS"]);
+  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP", "SQUAD_OIDC_ADMIN_GROUP", "SQUAD_WEB_PROVIDERS", "SQUAD_WEB_FRAME_ANCESTORS", "SQUAD_WEB_API_ORIGINS", "SQUAD_WEB_BRAND_DIR"]);
   for (const s of WEB_SETTINGS) assert.ok(s.why.length > 0 && !s.why.includes("\n"), s.key);
 });
 

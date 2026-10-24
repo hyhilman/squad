@@ -34,7 +34,12 @@ export const SQUAD_WEB_API_ORIGINS_ENV: EnvSpec = {
   why: "the https origins of other apps on the same site that may call /api with the session cookie (CORS), as a comma list, exact match, no wildcards; unset = none",
 };
 
-export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV, SQUAD_WEB_FRAME_ANCESTORS_ENV, SQUAD_WEB_API_ORIGINS_ENV];
+export const SQUAD_WEB_BRAND_DIR_ENV: EnvSpec = {
+  key: "SQUAD_WEB_BRAND_DIR",
+  why: "a folder whose logo-light.png, logo-dark.png, favicon.ico and apple-touch-icon.png replace the built-in ones at /brand/ (one logo stands in for both); unset = the built-in files",
+};
+
+export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV, SQUAD_WEB_FRAME_ANCESTORS_ENV, SQUAD_WEB_API_ORIGINS_ENV, SQUAD_WEB_BRAND_DIR_ENV];
 
 // An https origin, its host optionally starting with "*." (as CSP allows), with an optional port and
 // nothing else: the value goes into a CSP header, so nothing may close the directive or add another.

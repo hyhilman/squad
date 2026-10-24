@@ -2,10 +2,11 @@
 // height, so the app also works inside an iframe of another page.
 import { Badge, Box, Button, Flex, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
 import type { Me } from "@squad/contract";
-import { BarChart3, BookOpen, Boxes, Check, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
+import { BarChart3, BookOpen, Check, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
 import { inFrame } from "../lib/embed.ts";
+import { BrandLogo } from "./BrandLogo.tsx";
 import { useColorMode, type ThemeChoice } from "./colorMode.ts";
 
 const NAV = [
@@ -32,9 +33,7 @@ function Wordmark() {
   return (
     <HStack gap="2" asChild>
       <NavLink to="/" aria-label="squad home">
-        <Flex boxSize="7" rounded="lg" bg="brand.solid" color="white" align="center" justify="center" shadow="sm">
-          <Boxes size={16} strokeWidth={2.25} />
-        </Flex>
+        <BrandLogo size={8} />
         <Text fontSize="md" fontWeight="650" letterSpacing="-0.02em">
           squad
         </Text>
