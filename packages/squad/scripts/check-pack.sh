@@ -20,6 +20,19 @@ printf '#!/bin/sh\npwd; ls -d images/pi/Dockerfile\n' > "$work/fake-docker"; chm
 SQUAD_DOCKER="$work/fake-docker" SQUAD_HOME="$home" npx squad image build pi 2>&1 | grep -v Warning | grep -v trace-warnings
 echo "== bundled paths from the installed dist"
 node -e 'import("./node_modules/squad/dist/paths.js").then(m=>{for (const r of ["webapp","images","assets/codex-config.toml"]) console.log(r, "->", m.bundledPath(r))})'
+echo "== the connect command names the installed version"
+node -e 'import("./node_modules/squad/dist/web/connect.js").then(m=>{const v=m.squadVersion(),want=require("./node_modules/squad/package.json").version;console.log("version",v);if(v!==want){console.error("version mismatch");process.exit(1)}})'
+echo "== squad connect: a wrong use is exit 2 and makes no home"
+set +e; out=$(cd "$work" && npx --prefix "$work/app" squad connect --url http://example.com --pair x 2>&1); rc=$?; set -e
+echo "$out" | head -1; [ "$rc" = 2 ] || { echo "exit $rc, want 2"; exit 1; }; [ ! -e "$work/.squad" ] || { echo "connect made a home"; exit 1; }
+echo "== npx of the tarball URL runs connect, as the web page tells people to (a wrong use: exit 2)"
+# The page gives an https URL; a local http server stands in for the release. (npx runs a bare file path as a program, so a path would not test the same thing.)
+node -e 'const h=require("http"),f=require("fs");const s=h.createServer((q,r)=>{r.end(f.readFileSync(process.argv[1]))}).listen(0,"127.0.0.1",()=>{f.writeFileSync(process.argv[2],String(s.address().port))})' "$work/$tgz" "$work/port" & srv=$!
+for _ in $(seq 50); do [ -s "$work/port" ] && break; sleep 0.1; done
+mkdir "$work/npx"
+set +e; out=$(cd "$work/npx" && npx -y "http://127.0.0.1:$(cat "$work/port")/$tgz" connect --url http://example.com --pair x 2>&1); rc=$?; set -e
+kill "$srv"
+echo "$out" | grep "squad connect" | head -1; [ "$rc" = 2 ] || { echo "exit $rc, want 2"; exit 1; }
 echo "== files exist"; ls node_modules/squad/dist/webapp/index.html node_modules/squad/dist/images/entry.sh node_modules/squad/dist/assets/codex-config.toml
 echo "== types"; echo 'import type { PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider } from "squad"; export const x: [PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider] | undefined = undefined;' > t.ts
 "$repo/node_modules/.bin/tsc" --noEmit --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node --typeRoots "$repo/node_modules/@types" t.ts && echo "types ok"

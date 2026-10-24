@@ -10,7 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { NO_SESSION_ROUTES, ROUTES, findForbidden, matchPath, type AccountView, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
@@ -23,6 +23,7 @@ import { ACCOUNT_NAME } from "../accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, envNum, envOn, envOptional } from "../settings.ts";
 import type { Store } from "../store/db.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
+import { ConnectPairs, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { passDetail, passViews } from "./passes.ts";
@@ -30,11 +31,15 @@ import { allowedProviders, loadWebConfig } from "./settings.ts";
 import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
 import { startTicker, type Timers } from "./ticker.ts";
 
+type NoSession = (typeof NO_SESSION_ROUTES)[number];
 export interface Ctx<N extends RouteName> {
   readonly params: Api[N]["params"];
   readonly query: Api[N]["query"];
   readonly body: Api[N]["body"];
-  readonly session: Session;
+  /** A route in NO_SESSION_ROUTES has none. */
+  readonly session: N extends NoSession ? undefined : Session;
+  /** The client address of the connection (never a forwarded header, which a client can forge). */
+  readonly ip: string;
 }
 export type Handlers = { [N in RouteName]: (c: Ctx<N>) => Api[N]["res"] | Promise<Api[N]["res"]> };
 
@@ -84,6 +89,8 @@ class HttpError extends Error {
 
 const INTERNAL: ApiError = { error: "internal", message: "internal error" };
 const MAX_BODY = 64 * 1024;
+/** The connect token route takes one token: a much smaller body is plenty. */
+const MAX_TOKEN_BODY = 8 * 1024;
 const NOT_FOUND = new HttpError(404, "not-found", "no such account");
 const bad = (message: string): HttpError => new HttpError(400, "bad-request", message);
 
@@ -103,7 +110,20 @@ const floor = (v: unknown): number | null => {
 
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
-  me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {},
+  me: {}, listAccounts: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {}, connectStatus: {},
+  startConnect: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["runner", "name"]) || b.runner !== "claude" || typeof b.name !== "string") throw bad('body must be {runner: "claude", name}');
+      return { runner: "claude", name: b.name };
+    },
+  },
+  connectToken: {
+    // The token is secret: the message is fixed, nothing from the body is echoed.
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["token"]) || typeof b.token !== "string") throw bad("body must be {token}");
+      return { token: b.token };
+    },
+  },
   submitLoginCode: {
     // The code is secret and short-lived: the message is fixed, nothing from the body is echoed.
     body: (b) => {
@@ -185,7 +205,7 @@ const INPUTS: Inputs = {
 
 // ---- the handlers ----
 
-function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, adminGroup: string | undefined): Handlers {
+function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins, connects: ConnectPairs, adminGroup: string | undefined): Handlers {
   const db = o.store.db;
   const now = o.now ?? (() => new Date());
   const busyOf = o.busy ?? ((a: AccountRow): boolean => {
@@ -250,6 +270,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       throw e;
     }
   };
+  const offered = (runner: string, id: string) => providerEntries(loadProviders(o.home), allowedProviders(o.env)).find((e) => e.id === id && e.runner === runner);
   const refuseAsync = async <T,>(fn: () => Promise<T>): Promise<T> => {
     try {
       return await fn();
@@ -347,10 +368,15 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
         id: e.id, name: e.name, runner: e.runner, kind: e.kind, ...(e.builtin === true ? { builtin: true as const } : {}), models: e.models, accounts: used.get(e.id) ?? 0,
       }));
     },
+    startConnect: ({ session, body }) => {
+      if (offered(body.runner, body.runner) === undefined) throw bad("this provider is not offered");
+      return refuse(() => connects.start(session.email, body.name));
+    },
+    connectStatus: ({ session, params }) => refuse(() => connects.status(session.email, params.connectId)),
+    connectToken: ({ ip, params, body }) => refuse(() => connects.redeem(ip, params.pairCode, body.token)),
     addAccount: ({ session, body }) => {
       // The setting is enforced here, not only in the list the page shows.
-      const wanted = body.runner === "pi" ? body.provider : body.runner;
-      const entry = providerEntries(loadProviders(o.home), allowedProviders(o.env)).find((e) => e.id === wanted && e.runner === body.runner);
+      const entry = offered(body.runner, body.runner === "pi" ? body.provider : body.runner);
       if (entry === undefined) throw bad("this provider is not offered");
       if (body.runner === "codex") return refuseAsync(() => logins.startAdd(session.email, body.name));
       if (body.runner === "claude" && body.token === undefined) return refuseAsync(() => setups.start(session.email, body.name));
@@ -435,6 +461,11 @@ function fileFor(root: string, pathname: string): string | undefined {
 
 // ---- the server ----
 
+/** A path under /api/connect/ with a pair code in it: `/api/connect/<code>/...`. Matched by prefix, so a wrong method or a longer path counts too. */
+const isPairPath = (p: string): boolean => /^\/api\/connect\/[^/]*\/./.test(p);
+/** The path as the access log keeps it: a pair code is a credential, so its segment is hidden. */
+const logPath = (p: string): string => (isPairPath(p) ? p.replace(/^\/api\/connect\/[^/]*/, "/api/connect/[hidden]") : p);
+
 const REFUSAL: Record<FailReason, number> = {
   "no-login-cookie": 400, "provider-error": 400, "state-mismatch": 400, "token-endpoint": 502, "bad-id-token": 401, "email-unverified": 403, "not-in-group": 403,
 };
@@ -458,7 +489,8 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     start: opts.login?.pty?.start ?? realPty.start, stop: opts.login?.pty?.stop ?? realPty.stop,
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
-  const handlers = makeHandlers(opts, logins, setups, cfg.adminGroup);
+  const connects = new ConnectPairs({ env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), origin: cfg.origin, version: squadVersion() });
+  const handlers = makeHandlers(opts, logins, setups, connects, cfg.adminGroup);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
   const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
@@ -487,15 +519,15 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const apiError = (res: ServerResponse, route: string, e: HttpError): void => sendJson(res, route, e.status, { error: e.code, message: e.message } satisfies ApiError);
 
   /** The JSON body, or undefined when there is none. Bytes past the limit are dropped, then 413. */
-  const readBody = (req: IncomingMessage): Promise<string | HttpError> =>
+  const readBody = (req: IncomingMessage, max: number): Promise<string | HttpError> =>
     new Promise((resolve) => {
       const chunks: Buffer[] = [];
       let size = 0;
       req.on("data", (c: Buffer) => {
         size += c.length;
-        if (size <= MAX_BODY) chunks.push(c);
+        if (size <= max) chunks.push(c);
       });
-      req.on("end", () => resolve(size > MAX_BODY ? new HttpError(413, "bad-request", "body too large") : Buffer.concat(chunks).toString("utf8")));
+      req.on("end", () => resolve(size > max ? new HttpError(413, "bad-request", "body too large") : Buffer.concat(chunks).toString("utf8")));
       req.on("error", () => resolve(bad("cannot read the body")));
     });
 
@@ -519,14 +551,16 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const name = hit.name;
     setRoute(name);
     const write = req.method !== "GET";
-    if (write && !apiCsrfOk(req)) return apiError(res, name, new HttpError(403, "forbidden", "missing or wrong csrf proof"));
-    const session = oidc.readSession(req.headers.cookie);
-    if (session === undefined) return apiError(res, name, new HttpError(401, "unauthenticated", "sign in first"));
+    // squad connect is no browser: it has no cookie for CSRF to guard, and its pair code is the proof.
+    const open = (NO_SESSION_ROUTES as readonly RouteName[]).includes(name);
+    if (write && !open && !apiCsrfOk(req)) return apiError(res, name, new HttpError(403, "forbidden", "missing or wrong csrf proof"));
+    const session = open ? undefined : oidc.readSession(req.headers.cookie);
+    if (!open && session === undefined) return apiError(res, name, new HttpError(401, "unauthenticated", "sign in first"));
     try {
       const input = INPUTS[name] as { query?: (q: URLSearchParams) => unknown; body?: (b: unknown) => unknown };
       let body: unknown;
       if (write) {
-        const raw = await readBody(req);
+        const raw = await readBody(req, open ? MAX_TOKEN_BODY : MAX_BODY);
         if (raw instanceof HttpError) return apiError(res, name, raw);
         if (input.body !== undefined) {
           if (!/^application\/json\b/i.test(req.headers["content-type"] ?? "")) throw bad("content-type must be application/json");
@@ -540,8 +574,8 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
         }
       }
       const query = input.query?.(url.searchParams);
-      const handler = handlers[name] as (c: { params: unknown; query: unknown; body: unknown; session: Session }) => unknown;
-      const out = await handler({ params: hit.params, query, body, session });
+      const handler = handlers[name] as (c: { params: unknown; query: unknown; body: unknown; session: Session | undefined; ip: string }) => unknown;
+      const out = await handler({ params: hit.params, query, body, session, ip: req.socket.remoteAddress ?? "" });
       sendJson(res, name, 200, out);
     } catch (e) {
       if (e instanceof HttpError) return apiError(res, name, e);
@@ -623,7 +657,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const t0 = performance.now();
     let route = "static";
     let pathname = "/";
-    res.on("finish", () => log.info("access", { method: req.method ?? "-", route, path: pathname.slice(0, 200), status: res.statusCode, ms: Math.round(performance.now() - t0) }));
+    res.on("finish", () => log.info("access", { method: req.method ?? "-", route, path: logPath(pathname).slice(0, 200), status: res.statusCode, ms: Math.round(performance.now() - t0) }));
     res.setHeader("content-security-policy", BASE_CSP);
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("referrer-policy", "same-origin");
@@ -642,7 +676,8 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const isApi = pathname === "/api" || pathname.startsWith("/api/");
     const isAuth = pathname === "/auth" || pathname.startsWith("/auth/");
     if (isApi || isAuth) res.setHeader("cache-control", "no-store");
-    if (isApi) {
+    // The helper's token route never gets CORS: no page of any origin may send it a token.
+    if (isApi && !isPairPath(pathname)) {
       const allowed = apiOrigin(req);
       if (allowed !== undefined) {
         // The reply depends on Origin, so a shared cache must key on it.

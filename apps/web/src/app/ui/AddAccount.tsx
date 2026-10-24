@@ -2,18 +2,18 @@
 // A secret lives only in this dialog while it is open; closing it clears it.
 import { Badge, Box, useBreakpointValue, Button, Code, CloseButton, Dialog, Field, Flex, HStack, Input, InputGroup, Portal, RadioCard, SimpleGrid, Skeleton, Stack, Text } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { LoginStart, LoginStatus, ProviderView } from "@squad/contract";
+import type { ConnectStart, ConnectStatus, LoginStart, LoginStatus, ProviderView } from "@squad/contract";
 import { ArrowLeft, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api } from "../api.ts";
 import { accountNameError, suggestName } from "../lib/accountName.ts";
+import { CLAUDE_WAYS, submitTextFor, wayNeedsSecret, type ClaudeWay } from "../lib/connect.ts";
 import { accountPrefix, addBody, logoIdOf, pickerGroups, providerSub, secretError, secretField, type PickerItem } from "../lib/providers.ts";
 import { useMe, useProviders } from "../queries.ts";
+import { ConnectProgress } from "./ConnectProgress.tsx";
 import { LoginProgress } from "./LoginProgress.tsx";
 import { EmptyBlock, ErrorBlock, ProviderLogo } from "./parts.tsx";
 import { toastOk } from "./toaster.tsx";
-
-type ClaudeWay = "signin" | "token";
 
 /** A hint's `quoted` parts as code; plain text only, never HTML. */
 const codeSpans = (text: string) =>
@@ -127,7 +127,8 @@ export function AddAccount() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [start, setStart] = useState<LoginStart>();
-  const [final, setFinal] = useState<LoginStatus>();
+  const [connect, setConnect] = useState<ConnectStart>();
+  const [final, setFinal] = useState<LoginStatus | ConnectStatus>();
   const providers = useProviders(open);
   const suggested = suggestName(me?.email);
   const size = useBreakpointValue({ base: "full", md: "xl" } as const) ?? "xl";
@@ -140,6 +141,7 @@ export function AddAccount() {
     setTouched(false);
     setError(undefined);
     setStart(undefined);
+    setConnect(undefined);
     setFinal(undefined);
   };
   const close = () => {
@@ -150,11 +152,11 @@ export function AddAccount() {
 
   const usedName = name === "" ? suggested : name;
   const nameErr = accountNameError(usedName);
-  // claude: the sign-in way needs no secret; pi and the token way need one.
-  const needsSecret = provider !== undefined && (provider.runner === "pi" || (provider.runner === "claude" && way === "token"));
+  // claude: only the token way needs a secret; pi always does.
+  const needsSecret = provider !== undefined && (provider.runner === "pi" || (provider.runner === "claude" && wayNeedsSecret(way)));
   const field = secretField(provider);
   const secretErr = needsSecret ? secretError(secret) : undefined;
-  const step = provider === undefined ? 1 : start === undefined ? 2 : 3;
+  const step = provider === undefined ? 1 : start === undefined && connect === undefined ? 2 : 3;
 
   const submit = async () => {
     setTouched(true);
@@ -162,6 +164,10 @@ export function AddAccount() {
     setBusy(true);
     setError(undefined);
     try {
+      if (provider.runner === "claude" && way === "computer") {
+        setConnect(await api("startConnect", { body: { runner: "claude", name: usedName } }));
+        return;
+      }
       const res = await api("addAccount", { body: addBody(provider, usedName, needsSecret ? secret : "") });
       setSecret("");
       if ("loginId" in res) {
@@ -177,8 +183,8 @@ export function AddAccount() {
     }
   };
 
-  const titles = ["Choose a provider", "Name the account", provider?.runner === "claude" ? "Sign in with Claude" : "Log in"] as const;
-  const submitText = provider?.runner === "codex" || (provider?.runner === "claude" && way === "signin") ? "Start login" : "Add account";
+  const titles = ["Choose a provider", "Name the account", connect !== undefined ? "Use my computer" : provider?.runner === "claude" ? "Sign in with Claude" : "Log in"] as const;
+  const submitText = submitTextFor(provider?.runner, way);
 
   return (
     <>
@@ -192,7 +198,7 @@ export function AddAccount() {
             <Dialog.Content maxH={{ md: "min(720px, 88dvh)" }} minH={{ md: "min(560px, 88dvh)" }}>
               <Dialog.Header flexDirection="column" alignItems="flex-start" gap="1" borderBottomWidth="1px" borderColor="border.subtle" pb="4">
                 <Text fontSize="xs" color="fg.subtle" fontWeight="500">
-                  Step {step} of {submitText === "Start login" || provider === undefined ? 3 : 2}
+                  Step {step} of {submitText === "Add account" && provider !== undefined ? 2 : 3}
                 </Text>
                 <Dialog.Title fontSize="lg">{titles[step - 1]}</Dialog.Title>
               </Dialog.Header>
@@ -230,27 +236,19 @@ export function AddAccount() {
                     {provider.runner === "claude" ? (
                       <RadioCard.Root value={way} onValueChange={(d) => setWay(d.value as ClaudeWay)} size="sm" colorPalette="brand">
                         <RadioCard.Label>How to get the token</RadioCard.Label>
-                        <SimpleGrid columns={{ base: 1, sm: 2 }} gap="2">
-                          <RadioCard.Item value="signin">
-                            <RadioCard.ItemHiddenInput />
-                            <RadioCard.ItemControl>
-                              <RadioCard.ItemContent>
-                                <RadioCard.ItemText>Sign in with Claude</RadioCard.ItemText>
-                                <RadioCard.ItemDescription>The server makes the token. You open a link and paste back a code.</RadioCard.ItemDescription>
-                              </RadioCard.ItemContent>
-                              <RadioCard.ItemIndicator />
-                            </RadioCard.ItemControl>
-                          </RadioCard.Item>
-                          <RadioCard.Item value="token">
-                            <RadioCard.ItemHiddenInput />
-                            <RadioCard.ItemControl>
-                              <RadioCard.ItemContent>
-                                <RadioCard.ItemText>I already have a token</RadioCard.ItemText>
-                                <RadioCard.ItemDescription>Paste the output of claude setup-token.</RadioCard.ItemDescription>
-                              </RadioCard.ItemContent>
-                              <RadioCard.ItemIndicator />
-                            </RadioCard.ItemControl>
-                          </RadioCard.Item>
+                        <SimpleGrid columns={{ base: 1, md: 3 }} gap="2">
+                          {CLAUDE_WAYS.map((w) => (
+                            <RadioCard.Item key={w.value} value={w.value}>
+                              <RadioCard.ItemHiddenInput />
+                              <RadioCard.ItemControl>
+                                <RadioCard.ItemContent>
+                                  <RadioCard.ItemText>{w.title}</RadioCard.ItemText>
+                                  <RadioCard.ItemDescription>{w.description}</RadioCard.ItemDescription>
+                                </RadioCard.ItemContent>
+                                <RadioCard.ItemIndicator />
+                              </RadioCard.ItemControl>
+                            </RadioCard.Item>
+                          ))}
                         </SimpleGrid>
                       </RadioCard.Root>
                     ) : null}
@@ -270,6 +268,7 @@ export function AddAccount() {
                   </Stack>
                 ) : null}
                 {step === 3 && start !== undefined ? <LoginProgress start={start} onFinal={setFinal} /> : null}
+                {step === 3 && connect !== undefined ? <ConnectProgress start={connect} onFinal={setFinal} /> : null}
               </Dialog.Body>
               {step === 1 ? null : (
                 <Dialog.Footer borderTopWidth="1px" borderColor="border.subtle" pt="4">

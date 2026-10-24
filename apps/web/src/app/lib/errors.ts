@@ -13,6 +13,8 @@ export function failureText(e: unknown): string {
       return `The server refused the request: ${e.body.message}`;
     case "conflict":
       return `This conflicts with the current state: ${e.body.message}`;
+    case "too-many":
+      return "Too many tries. Wait a minute, then try again.";
     case "disabled":
       return `This is not available yet: ${e.body.message}`;
     default:

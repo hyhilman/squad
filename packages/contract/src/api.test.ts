@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { ROUTES, matchPath, pathOf } from "./api.ts";
+import { NO_SESSION_ROUTES, ROUTES, matchPath, pathOf } from "./api.ts";
 
 test("every route path is under /api/ and unique per method", () => {
   const seen = new Set<string>();
@@ -28,4 +28,13 @@ test("the code route sits under its login and does not shadow the status route",
   assert.deepEqual(matchPath(ROUTES.submitLoginCode.path, "/api/logins/abc/code"), { loginId: "abc" });
   assert.equal(matchPath(ROUTES.loginStatus.path, "/api/logins/abc/code"), undefined);
   assert.equal(matchPath(ROUTES.submitLoginCode.path, "/api/logins/abc"), undefined);
+});
+
+test("the connect routes: start, status and the token do not shadow each other; only the token route takes no session", () => {
+  assert.deepEqual(matchPath(ROUTES.connectStatus.path, "/api/connect/abc"), { connectId: "abc" });
+  assert.deepEqual(matchPath(ROUTES.connectToken.path, "/api/connect/abc/token"), { pairCode: "abc" });
+  assert.equal(matchPath(ROUTES.connectStatus.path, "/api/connect/abc/token"), undefined);
+  assert.equal(matchPath(ROUTES.startConnect.path, "/api/connect/abc"), undefined);
+  assert.equal(ROUTES.connectToken.method, "POST");
+  assert.deepEqual(NO_SESSION_ROUTES, ["connectToken"]);
 });

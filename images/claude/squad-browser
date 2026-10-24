@@ -1,0 +1,6 @@
+#!/bin/sh
+# $BROWSER for `claude setup-token` in a web sign-in. The CLI calls it with the sign-in URL. squad reads
+# that URL from the mounted throwaway /claude and builds the link it shows from it, so it never has to
+# read the link off the screen. The file is mode 600 and appears whole (written aside, then renamed).
+umask 077
+printf '%s\n' "$1" > /claude/.squad-opened-url.tmp && mv -f /claude/.squad-opened-url.tmp /claude/.squad-opened-url

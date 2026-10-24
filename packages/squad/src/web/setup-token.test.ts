@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,12 +9,15 @@ import { ensureHome, layoutOf } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore } from "../store/db.ts";
 import { LoginRefused } from "./device-login.ts";
-import { ENTER_DELAY_MS, SetupTokenLogins, codeShapeError, findToken, parseSetupOutput, ptyCommand, type PtyProc } from "./setup-token.ts";
+import { findToken, parseSetupOutput } from "../claude-token.ts";
+import { BROWSER_SCRIPT, ENTER_DELAY_MS, OPENED_FILE, OPENED_POLL_MS, SCREEN_GRACE_MS, SetupTokenLogins, codeShapeError, ptyCommand, type PtyProc } from "./setup-token.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const ESC = "\u001b";
 // Fakes. The query has the shape of the real URL captured from squad-claude:2.1.310; the values are made up.
 const AUTH_URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE000&code_challenge_method=S256&state=FAKESTATEFAKESTATE000";
+/** What the CLI gives to $BROWSER: the same URL with its own localhost listener as the redirect. */
+const OPENED_URL = AUTH_URL.replace("https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback", "http%3A%2F%2Flocalhost%3A43117%2Fcallback");
 const TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE_-FAKE";
 
 /**
@@ -127,6 +130,9 @@ async function begin(r: Rig, email = "alice@example.test", name = "claude1") {
   const cut = SHOWN.indexOf("response_type");
   proc.say(SHOWN.slice(0, cut));
   proc.say(SHOWN.slice(cut));
+  // squad-browser in the image writes the opened URL into the mounted folder.
+  writeFileSync(join(proc.staging, OPENED_FILE), `${OPENED_URL}\n`, { mode: 0o600 });
+  r.fire(OPENED_POLL_MS);
   return { ...(await started), proc };
 }
 const refused = async (p: Promise<unknown> | (() => unknown), status: number, code: string): Promise<LoginRefused> => {
@@ -160,6 +166,73 @@ test("start runs claude setup-token under a terminal, mounts only a throwaway /c
   assert.deepEqual(r.logins.status("alice@example.test", s.loginId), { loginId: s.loginId, state: "pending" });
   await r.logins.close();
   clean(r, { ...s, proc: undefined });
+  r.store.close();
+});
+
+test("the link comes from the URL the CLI gave to $BROWSER, with the manual redirect; the screen link is not used", async () => {
+  const r = rig();
+  const started = r.logins.start("alice@example.test", "c1");
+  await r.tick();
+  const proc = r.procs[0]!;
+  assert.equal(OPENED_FILE, ".squad-opened-url");
+  assert.ok(proc.argv.includes(`BROWSER=${BROWSER_SCRIPT}`) && BROWSER_SCRIPT === "/usr/local/bin/squad-browser");
+  // The screen shows a link with another state, so the test can see which one wins.
+  proc.say(SHOWN.replace("FAKESTATEFAKESTATE000", "SCREENSTATE"));
+  r.fire(OPENED_POLL_MS);
+  writeFileSync(join(proc.staging, OPENED_FILE), `${OPENED_URL}\n`, { mode: 0o600 });
+  r.fire(OPENED_POLL_MS);
+  const s = await started;
+  assert.equal(s.verifyUrl, AUTH_URL, "the opened URL with redirect_uri set to the code page, byte for byte");
+  assert.ok(!r.logs.some((l) => l.includes("setup_link_from_screen")));
+  await r.logins.close();
+  r.store.close();
+});
+
+test("the file is read before the screen shows anything; polling stops once it is read", async () => {
+  const r = rig();
+  const started = r.logins.start("alice@example.test", "c1");
+  await r.tick();
+  writeFileSync(join(r.procs[0]!.staging, OPENED_FILE), OPENED_URL, { mode: 0o600 });
+  r.fire(OPENED_POLL_MS);
+  assert.equal((await started).verifyUrl, AUTH_URL);
+  assert.throws(() => r.fire(OPENED_POLL_MS), /a live/);
+  await r.logins.close();
+  r.store.close();
+});
+
+test("no file: the screen link is a fallback after a grace time, with a fixed log event", async () => {
+  const r = rig();
+  const started = r.logins.start("alice@example.test", "c1");
+  await r.tick();
+  r.procs[0]!.say(SHOWN);
+  r.fire(OPENED_POLL_MS);
+  r.fire(SCREEN_GRACE_MS);
+  assert.equal((await started).verifyUrl, AUTH_URL);
+  assert.ok(r.logs.some((l) => /event=setup_link_from_screen/.test(l)), r.logs.join("\n"));
+  await r.logins.close();
+  r.store.close();
+});
+
+test("a look-alike, a bad redirect or a symlink in the file fails the start; the screen is not a fallback then", async () => {
+  const r = rig();
+  const bads: [string, (dir: string) => void][] = [
+    ["host", (d) => writeFileSync(join(d, OPENED_FILE), OPENED_URL.replace("https://claude.com/", "https://claude.com.evil.example/"))],
+    ["redirect", (d) => writeFileSync(join(d, OPENED_FILE), OPENED_URL.replace("localhost%3A43117", "evil.example%3A43117"))],
+    ["two lines", (d) => writeFileSync(join(d, OPENED_FILE), `${OPENED_URL}\n${OPENED_URL}\n`)],
+    ["symlink", (d) => { writeFileSync(join(d, "elsewhere"), OPENED_URL); symlinkSync(join(d, "elsewhere"), join(d, OPENED_FILE)); }],
+  ];
+  for (const [i, [what, put]] of bads.entries()) {
+    const started = r.logins.start("alice@example.test", `bad${i}`);
+    await r.tick();
+    const proc = r.procs.at(-1)!;
+    proc.say(SHOWN);
+    put(proc.staging);
+    r.fire(OPENED_POLL_MS);
+    const e = await refused(started, 502, "internal");
+    assert.match(e.message, /unexpected-output/, what);
+    assert.ok(!existsSync(proc.staging), what);
+  }
+  assert.ok(!r.logs.some((l) => l.includes("setup_link_from_screen")));
   r.store.close();
 });
 

@@ -32,6 +32,7 @@ import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_NO_GC_ENV, SQUAD_NO_USAGE_RE
 import type { SupportedRunner } from "../runners/table.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { startWeb } from "../web/server.ts";
+import { runConnect } from "./connect.ts";
 import { USAGE_BYS, usageBy, type UsageBy, type UsageRow } from "../usage/report.ts";
 
 export interface Io {
@@ -46,6 +47,10 @@ export interface Io {
   readonly interactive?: (docker: string, argv: readonly string[]) => Promise<number>;
   /** Ends a long-running verb (`web`). Default: SIGINT or SIGTERM. Tests inject one. */
   readonly signal?: AbortSignal;
+  /** For `connect`: the platform (tests set it), the person's typed lines, and the longest wait. */
+  readonly platform?: NodeJS.Platform;
+  readonly stdin?: () => NodeJS.ReadableStream;
+  readonly waitMs?: number;
 }
 
 const USAGE = `usage: squad <verb>
@@ -69,6 +74,8 @@ const USAGE = `usage: squad <verb>
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
                                            (not --api-only) it also runs a background loop: usage reads, auto probes, prices
+  connect --url <origin> --pair <code>     on your own computer: sign in to claude in your browser and send the
+                                           token to squad web (the web page gives the command)
 `;
 
 /** A usage mistake: exit 2 with the text on stderr. Anything else that fails is exit 1. */
@@ -564,6 +571,8 @@ function fail(msg: string): never {
 /** Runs one verb. Returns the exit code: 0 done, 1 failed, 2 wrong use. */
 export async function main(argv: readonly string[], io: Io): Promise<number> {
   const verb = argv[0];
+  // connect runs on a person's own computer: it needs no squad home and must not make one.
+  if (verb === "connect") return runConnect(argv.slice(1), io);
   const run = verb === undefined ? undefined : Object.hasOwn(VERBS, verb) ? VERBS[verb] : undefined;
   if (run === undefined) {
     io.stderr(USAGE);
@@ -590,5 +599,5 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
 // The entry: only when this file is the program, not when a test imports it.
 // argv[1] is the npm bin symlink when installed, so compare real paths.
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
-  process.exitCode = await main(process.argv.slice(2), { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), env: process.env, cwd: process.cwd() });
+  process.exitCode = await main(process.argv.slice(2), { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), env: process.env, cwd: process.cwd(), stdin: () => process.stdin });
 }

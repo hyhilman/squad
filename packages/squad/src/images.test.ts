@@ -60,3 +60,10 @@ test("every runner Dockerfile carries the squad.entry=1 label, which checkImage 
     assert.match(text, /^LABEL squad\.entry="1"$/m, runner);
   }
 });
+
+test("the claude image ships squad-browser at the path the web sign-in sets as $BROWSER, and it writes the file the server reads", async () => {
+  const { BROWSER_SCRIPT, OPENED_FILE } = await import("./web/setup-token.ts");
+  assert.match(dockerfile("claude"), new RegExp(`^COPY --chmod=755 claude/squad-browser ${BROWSER_SCRIPT}$`, "m"));
+  const script = readFileSync(new URL("../../../images/claude/squad-browser", import.meta.url), "utf8");
+  assert.ok(script.includes(`/claude/${OPENED_FILE}`) && script.includes("umask 077"));
+});

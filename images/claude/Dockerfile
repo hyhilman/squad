@@ -50,6 +50,8 @@ ENV HOME=/home/claude \
 # gh holds the token at $GH_CONFIG_DIR (mounted per pass); this is what git asks for it.
 COPY claude/gitconfig /etc/gitconfig
 COPY entry.sh /usr/local/bin/squad-entry
+# $BROWSER of the web sign-in (setup-token.ts): it writes the sign-in URL into /claude.
+COPY --chmod=755 claude/squad-browser /usr/local/bin/squad-browser
 
 WORKDIR /work
 # The caller images built FROM this one are checked for this label (see turn.ts checkImage): the account lock lives in squad-entry.

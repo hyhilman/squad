@@ -10,7 +10,7 @@ import { failureText } from "../lib/errors.ts";
 import { isFinalLogin, loginStateText, POLL_MS } from "../lib/login.ts";
 import { CopyButton } from "./parts.tsx";
 
-function StepNumber({ n }: { n: number }) {
+export function StepNumber({ n }: { n: number }) {
   return (
     <Flex boxSize="6" rounded="full" bg="bg.muted" color="fg.muted" fontSize="xs" fontWeight="600" align="center" justify="center" flexShrink={0}>
       {n}
@@ -18,7 +18,7 @@ function StepNumber({ n }: { n: number }) {
   );
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+export function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
     <HStack align="flex-start" gap="3">
       <StepNumber n={n} />
@@ -48,7 +48,7 @@ function LinkRow({ url }: { url: string }) {
   );
 }
 
-export function LoginStatusLine({ state, error, pendingText }: { state: LoginStatus; error?: string; pendingText?: string }) {
+export function LoginStatusLine({ state, error, pendingText, text }: { state: Pick<LoginStatus, "state" | "reason">; error?: string; pendingText?: string; text?: string }) {
   const tone = error !== undefined || state.state === "failed" || state.state === "expired" ? "error" : state.state === "done" ? "success" : "info";
   return (
     <HStack
@@ -63,7 +63,7 @@ export function LoginStatusLine({ state, error, pendingText }: { state: LoginSta
       aria-live="polite"
     >
       {tone === "info" ? <Spinner size="xs" /> : tone === "success" ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-      <Text>{error ?? (state.state === "pending" && pendingText !== undefined ? pendingText : loginStateText(state))}</Text>
+      <Text>{error ?? text ?? (state.state === "pending" && pendingText !== undefined ? pendingText : loginStateText({ loginId: "", ...state }))}</Text>
     </HStack>
   );
 }

@@ -86,6 +86,7 @@ current git repo, or the folder in `SQUAD_HOME`. It is mode 0700 and must never 
 | `log <passId>` | the end of a pass log |
 | `gc [--dry-run]` | remove orphan containers, lost passes, old files and old sessions |
 | `web [--api-only]` | the web view and its API |
+| `connect --url <origin> --pair <code>` | on your own computer: sign in to claude in your browser and send the token to squad web |
 
 `SQUAD_DRY_RUN=1` prints every Docker command and plan and runs nothing.
 
@@ -179,8 +180,6 @@ style `api.json`):
 
 Each provider card shows the catalog's logo. squad fetches `<catalog origin>/logos/<id>.svg` once, keeps it in `state/logos/`, and serves it at `/logos/<id>.svg` (an SVG with a sandbox CSP); a missing logo is a 404.
 
-Adding `claude` with no token runs `claude setup-token` on the server: the page shows the claude.com sign-in link, you paste the code it gives, and squad writes the token account. Pasting a token still works.
-
 `SQUAD_WEB_PROVIDERS` is `all` by default; a comma list of ids restricts what is offered, and the
 server refuses the rest. The table that says which runner serves a provider is `PROVIDER_RUNNER` in
 `packages/squad/src/providers.ts`. While the web loop runs, a new catalog copy also rewrites the
@@ -190,6 +189,25 @@ server refuses the rest. The table that says which runner serves a provider is `
 server. It is checked for shape only, written to the account folder (mode 600) and never logged or
 returned. A TLS-terminating proxy in between (a Cloudflare tunnel, for example) can see it. Use this
 only when you trust that hop; otherwise use `add-key` or `add-token` on the host.
+
+### Claude sign-in options
+
+A claude account holds a long-lived `claude setup-token` token. The "Add account" box offers three
+ways to get one:
+
+- **Sign in with Claude** (server sign-in with a code). squad runs `claude setup-token` in a
+  container on the server. The page shows the claude.com sign-in link; you sign in and paste back the
+  code that page shows. squad types it into the CLI and writes the token account.
+- **Use my computer (no typing).** The page gives you one command to run in a terminal on your own
+  computer (it needs Node.js 22.18 or newer and Claude Code):
+  `npx -y https://github.com/hyhilman/squad/releases/download/v<version>/squad-<version>.tgz connect --url <squad web address> --pair <code>`,
+  or `squad connect --url ... --pair ...` when squad is installed there. It runs your own
+  `claude setup-token`, so your browser opens and the sign-in finishes on your computer. The helper
+  reads the token from the CLI's output and sends it once, over HTTPS, to squad; it never prints or
+  saves it. The pair code works once, for 10 minutes, and only for the person who asked for it.
+  As with a pasted token, a TLS-terminating proxy in between can see the token. Linux and macOS
+  only for now.
+- **I already have a token.** Paste the output of `claude setup-token`.
 
 ### Two costs per pass
 

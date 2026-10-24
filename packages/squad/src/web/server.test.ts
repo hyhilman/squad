@@ -4,7 +4,7 @@ import { refreshPrices } from "../prices.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import { ROUTES, findForbidden, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
+import { NO_SESSION_ROUTES, ROUTES, findForbidden, type ConnectStart, type ConnectStatus, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
 import { CLIENT_ID, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
 import { emptyHealth } from "../accounts/health.ts";
 import { addAccount, getAccount, putHealth, recordRoom, setState } from "../accounts/store.ts";
@@ -80,7 +80,9 @@ function seed(r: Rig): void {
 test("every /api route needs a session: 401 with an ApiError", async () => {
   const r = await rig();
   for (const [name, route] of Object.entries(ROUTES)) {
-    const path = route.path.replace(":runner", "codex").replace(":name", "a").replace(":loginId", "x");
+    // The helper's token route has no session: its pair code is the proof (tested with the connect routes).
+    if ((NO_SESSION_ROUTES as readonly string[]).includes(name)) continue;
+    const path = route.path.replace(":runner", "codex").replace(":name", "a").replace(":loginId", "x").replace(":connectId", "x");
     const res = await api<ApiError>(r, undefined, route.method, path, route.method === "GET" ? undefined : {});
     assert.equal(res.status, 401, name);
     assert.equal(res.body.error, "unauthenticated", name);
@@ -1216,7 +1218,10 @@ function fakePty() {
   return {
     procs, stops,
     pty: {
-      start: (_argv: string[], name: string) => {
+      start: (argv: string[], name: string) => {
+        // Like squad-browser in the image: the opened URL lands in the mounted folder.
+        const staging = argv.find((a) => a.endsWith("target=/claude"))!.split(",")[1]!.replace("source=", "");
+        writeFileSync(join(staging, ".squad-opened-url"), `${SETUP_URL.replace("&response_type=code&", "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A40000%2Fcallback&")}\n`, { mode: 0o600 });
         let cb: (s: string) => void = () => {};
         let end: (c: number) => void = () => {};
         const exited = new Promise<number>((r) => { end = r; });
@@ -1238,7 +1243,7 @@ test("adding claude with no token starts a server-side setup-token login; the co
   const bob = await signIn(r, "bob@example.test");
   const start = await api<{ loginId: string; verifyUrl: string; needsCode?: true; userCode?: string }>(r, alice, "POST", "/api/accounts", { runner: "claude", name: "c1" });
   assert.equal(start.status, 200);
-  assert.equal(start.body.verifyUrl, SETUP_URL);
+  assert.equal(start.body.verifyUrl, SETUP_URL.replace("&response_type=code&", "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&"));
   assert.equal(start.body.needsCode, true);
   assert.equal(start.body.userCode, undefined);
   assert.equal(findForbidden(start.body), undefined);
@@ -1288,4 +1293,86 @@ test("claude with a pasted token still writes the account at once; a dry run ref
     assert.equal((await api(q, qc, "POST", "/api/accounts", { runner: "claude", name: "x" })).status, 501);
     await q.close();
   }
+});
+
+// ---- "use my computer": squad connect ----
+
+const CONNECT_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKECONNECT";
+const postToken = (r: Rig, code: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> =>
+  fetch(`${r.base}/api/connect/${code}/token`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });
+
+test("startConnect gives the owner a code and the command; connectStatus is the owner's only; it needs a session and csrf", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const bob = await signIn(r, "bob@example.test");
+  const s = await api<ConnectStart>(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" });
+  assert.equal(s.status, 200);
+  assert.equal(findForbidden(s.body), undefined);
+  assert.ok(s.body.command.startsWith("npx -y https://github.com/hyhilman/squad/releases/download/v"), s.body.command);
+  assert.ok(s.body.command.endsWith(`connect --url ${PUBLIC} --pair ${s.body.pairCode}`));
+  assert.equal(s.body.shortCommand, `squad connect --url ${PUBLIC} --pair ${s.body.pairCode}`);
+  const id = s.body.connectId;
+  assert.deepEqual((await api<ConnectStatus>(r, alice, "GET", `/api/connect/${id}`)).body, { connectId: id, state: "pending" });
+  assert.equal((await api(r, bob, "GET", `/api/connect/${id}`)).status, 404);
+  assert.equal((await api(r, undefined, "GET", `/api/connect/${id}`)).status, 401);
+  assert.equal((await api(r, undefined, "POST", "/api/connect", { runner: "claude", name: "c2" })).status, 401);
+  assert.equal((await api(r, alice, "POST", "/api/connect", { runner: "claude", name: "c2" }, { origin: "http://evil.test" })).status, 403);
+  for (const body of [{ runner: "codex", name: "c2" }, { runner: "claude" }, { runner: "claude", name: "c2", token: "x" }, { runner: "claude", name: "Bad Name" }]) {
+    assert.equal((await api(r, alice, "POST", "/api/connect", body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await api(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" })).status, 409, "one waiting sign-in per name");
+  assert.ok(!r.logs.join("\n").includes(s.body.pairCode), "the code is never logged");
+  await r.close();
+});
+
+test("the token route: no session or csrf needed, no CORS ever, 8 KB cap; it makes the owner's account once and the token and code show nowhere", async () => {
+  const APP = "https://app.example.test";
+  const r = await rig({}, { SQUAD_WEB_API_ORIGINS: APP });
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const s = (await api<ConnectStart>(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" })).body;
+  const pre = await fetch(`${r.base}/api/connect/${s.pairCode}/token`, { method: "OPTIONS", headers: { origin: APP, "access-control-request-method": "POST" } });
+  assert.equal(pre.headers.get("access-control-allow-origin"), null, "no preflight answer");
+  const big = await postToken(r, s.pairCode, { token: "x".repeat(9000) });
+  assert.equal(big.status, 413);
+  const wrong = await postToken(r, "W".repeat(43), { token: CONNECT_TOKEN });
+  assert.deepEqual([wrong.status, await wrong.json()], [404, { error: "not-found", message: "not found" }]);
+  const ok = await postToken(r, s.pairCode, { token: CONNECT_TOKEN }, { origin: APP });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("access-control-allow-origin"), null);
+  assert.equal(ok.headers.get("access-control-allow-credentials"), null);
+  assert.deepEqual(await ok.json(), { account: "claude/c1" });
+  assert.equal(readFileSync(join(r.home.accounts, "claude", "c1", "token"), "utf8"), CONNECT_TOKEN);
+  assert.equal(statSync(join(r.home.accounts, "claude", "c1", "token")).mode & 0o777, 0o600);
+  assert.equal(getAccount(r.store.db, "claude/c1")?.ownerEmail, "alice@example.test");
+  const again = await postToken(r, s.pairCode, { token: CONNECT_TOKEN });
+  assert.equal(again.status, 404, "single use");
+  const st = await api<ConnectStatus>(r, alice, "GET", `/api/connect/${s.connectId}`);
+  assert.deepEqual(st.body, { connectId: s.connectId, state: "done", account: "claude/c1" });
+  // A path with the code that matches no route, and a wrong method, also keep it out of the log.
+  await fetch(`${r.base}/api/connect/${s.pairCode}/token/x`, { method: "POST" });
+  await fetch(`${r.base}/api/connect/${s.pairCode}/token`);
+  const logs = r.logs.join("\n");
+  assert.ok(!logs.includes(s.pairCode) && !logs.includes("oat01") && !logs.includes("CONNECT"), "no code or token in a log line");
+  assert.ok(/event=connect_done/.test(logs) && /account=claude\/c1/.test(logs));
+  assert.ok(r.logs.some((l) => /event=access/.test(l) && /route=connectToken/.test(l)));
+  await r.close();
+});
+
+test("the token route refuses a bad body with a fixed message, and holds an address after 10 wrong codes", async () => {
+  const r = await rig();
+  await withCatalog(r);
+  const alice = await signIn(r, "alice@example.test");
+  const s = (await api<ConnectStart>(r, alice, "POST", "/api/connect", { runner: "claude", name: "c1" })).body;
+  for (const body of ["not json", { token: 5 }, { token: CONNECT_TOKEN, extra: 1 }, {}]) {
+    const res = await postToken(r, "W".repeat(43), body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.ok(!JSON.stringify(await res.json()).includes("CONNECT"));
+  }
+  for (let i = 0; i < 10; i++) assert.equal((await postToken(r, `${"V".repeat(42)}${i}`, { token: CONNECT_TOKEN })).status, 404);
+  const held = await postToken(r, s.pairCode, { token: CONNECT_TOKEN });
+  assert.deepEqual([held.status, (await held.json() as { error: string }).error], [429, "too-many"]);
+  assert.equal(getAccount(r.store.db, "claude/c1"), undefined);
+  await r.close();
 });

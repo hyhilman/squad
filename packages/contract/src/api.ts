@@ -189,7 +189,31 @@ export type AddAccountBody =
   | { readonly runner: "claude"; readonly name: string; readonly token?: string }
   | { readonly runner: "pi"; readonly name: string; readonly provider: string; readonly key: string };
 
-export type ErrorCode = "unauthenticated" | "forbidden" | "not-found" | "bad-request" | "conflict" | "disabled" | "internal";
+/**
+ * A "use my computer" claude sign-in: the person runs `squad connect` on their own computer, where the
+ * real CLI opens their browser. The helper sends the token once, with the pair code as its only proof.
+ */
+export interface ConnectStart {
+  readonly connectId: string;
+  /** Single use, valid until `expiresAt`, bound to the person and the name. The server keeps only its hash. */
+  readonly pairCode: string;
+  readonly expiresAt: string;
+  /** The command to run with no install: `npx` of the release tarball. */
+  readonly command: string;
+  /** The same command for a computer that has squad installed. */
+  readonly shortCommand: string;
+}
+
+export interface ConnectStatus {
+  readonly connectId: string;
+  readonly state: LoginState;
+  /** For `failed`: why, such as `exists` (an account with this name came first). */
+  readonly reason?: string;
+  /** For `done`: the new account, `claude/<name>`. */
+  readonly account?: string;
+}
+
+export type ErrorCode = "unauthenticated" | "forbidden" | "not-found" | "bad-request" | "conflict" | "disabled" | "too-many" | "internal";
 
 export interface ApiError {
   readonly error: ErrorCode;
@@ -214,9 +238,18 @@ export const ROUTES = {
   getPass: { method: "GET", path: "/api/passes/:passId" },
   addAccount: { method: "POST", path: "/api/accounts" },
   listProviders: { method: "GET", path: "/api/providers" },
+  startConnect: { method: "POST", path: "/api/connect" },
+  connectStatus: { method: "GET", path: "/api/connect/:connectId" },
+  connectToken: { method: "POST", path: "/api/connect/:pairCode/token" },
 } as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
 
 export type RouteName = keyof typeof ROUTES;
+
+/**
+ * Routes that take no session and no CSRF proof: `squad connect` runs outside any browser, and its pair
+ * code is the proof. The server never sets CORS headers on them, and never logs their path.
+ */
+export const NO_SESSION_ROUTES = ["connectToken"] as const satisfies readonly RouteName[];
 
 type AccountParams = { readonly runner: Runner; readonly name: string };
 
@@ -245,6 +278,15 @@ export interface Api {
    */
   addAccount: { params: void; query: void; body: AddAccountBody; res: LoginStart | AccountView };
   listProviders: { params: void; query: void; body: void; res: readonly ProviderView[] };
+  /** Starts a "use my computer" claude sign-in for a NEW account the person will own. */
+  startConnect: { params: void; query: void; body: { readonly runner: "claude"; readonly name: string }; res: ConnectStart };
+  /** The owner only; anyone else gets 404. */
+  connectStatus: { params: { readonly connectId: string }; query: void; body: void; res: ConnectStatus };
+  /**
+   * The helper sends the token once. No session: the pair code in the path is the proof. A wrong,
+   * used or expired code is a 404 with no detail. The token is checked by shape, never echoed.
+   */
+  connectToken: { params: { readonly pairCode: string }; query: void; body: { readonly token: string }; res: { readonly account: string } };
 }
 
 // Every route has a type entry, and every type entry a route.

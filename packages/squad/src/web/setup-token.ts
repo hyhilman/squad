@@ -1,8 +1,9 @@
 // Web logins for a claude token account: the owner adds a claude seat from the page. The server runs
-// `claude setup-token` in a container under a pseudo-terminal (the CLI prints nothing without one),
-// reads the sign-in link from its output, and shows it. The owner signs in at claude.com, and pastes
-// the code that page shows. The server types the code into the CLI. The CLI then prints a long-lived
-// token; the server writes it as a token account and forgets it.
+// `claude setup-token` in a container under a pseudo-terminal (the CLI prints nothing without one).
+// The CLI gives its sign-in URL to $BROWSER; the image's squad-browser writes it into the mounted
+// throwaway folder, and the server builds the link it shows from it. The owner signs in at claude.com,
+// and pastes the code that page shows. The server types the code into the CLI. The CLI then prints a
+// long-lived token; the server writes it as a token account and forgets it.
 //
 // The sign-in link is checked against an exact allowlist. The token is matched only by its exact
 // shape. Everything lives in memory. No answer and no log line holds the code, the token or the CLI's
@@ -10,12 +11,13 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoginStart, LoginState, LoginStatus } from "@squad/contract";
 import { AccountExists, createFileAccount } from "../accounts/add.ts";
 import { ACCOUNT_NAME, accountId, getAccount } from "../accounts/store.ts";
+import { MAX_OPENED, codeShapeError, findToken, linkFromOpened, maskedTrace, parseSetupOutput } from "../claude-token.ts";
 import type { HomeLayout } from "../home.ts";
 import { ulid } from "../ids.ts";
 import { loginArgv } from "../login.ts";
@@ -26,83 +28,49 @@ import { KEEP_MS, LOGIN_LIFE_MS, LoginRefused, MAX_RUNNING, dockerLoginRunner, t
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-/** The only page the setup-token sign-in may send a person to. */
-const AUTH_HOST = "claude.com";
-const AUTH_PATH = "/cai/oauth/authorize";
-/** The CLI starts and prints its link within this time. */
+/** The CLI starts and gives its link within this time. */
 export const LINK_WAIT_MS = 30_000;
 /** After the code is typed, the token must come within this time. */
 export const TOKEN_WAIT_MS = 60_000;
 /** The CLI's input box takes a pasted chunk as text; Enter must come as its own key press after it. */
 export const ENTER_DELAY_MS = 250;
+/** How often the server looks for the opened URL in the staging folder. */
+export const OPENED_POLL_MS = 400;
+/** The screen showed a link but no file came: wait this long more, then use the screen link. */
+export const SCREEN_GRACE_MS = 5_000;
+/** The image's $BROWSER (images/claude/squad-browser), and the file it writes in /claude. */
+export const BROWSER_SCRIPT = "/usr/local/bin/squad-browser";
+export const OPENED_FILE = ".squad-opened-url";
 /** What is kept of the output before the link, and of the output after the code. */
 const MAX_BEFORE = 64 * 1024;
 const MAX_AFTER = 16 * 1024;
-/** The terminal is wide, so the CLI does not wrap the link. */
-const COLS = 400;
-const ROWS = 50;
-
-const TOKEN_SHAPE = /sk-ant-oat01-[A-Za-z0-9_-]{20,}/g;
-const TOKEN_CHAR = /[A-Za-z0-9_-]/;
-const CODE_SHAPE = /^[\x21-\x7e]{1,512}$/;
+/** The terminal is wide, so the CLI does not wrap the link or the token. */
+export const COLS = 400;
+export const ROWS = 50;
 
 /**
- * Plain text from terminal output. A cursor move takes the place of a space in the CLI's UI, so
- * the prose loses its spaces: callers match on a URL or a token, never on prose. `sep` stands where an
- * escape sequence was.
+ * The opened URL from the staging folder: undefined while there is none, "bad" when it is not a plain
+ * small file. The container writes it, so a symlink is never followed.
  */
-function strip(raw: string, sep: string): string {
-  return raw
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, sep)
-    .replace(/\u001b\[[0-9;?<=>]*[ -/]*[@-~]/g, sep)
-    .replace(/\u001b[()#][0-9A-Za-z]|\u001b[@-Z\\-_]/g, sep)
-    .replace(/\r\n|\r/g, "\n")
-    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, sep);
-}
-
-export type Parsed = { readonly kind: "wait" } | { readonly kind: "bad" } | { readonly kind: "ready"; readonly url: string };
-
-const allowedUrl = (s: string): boolean => {
+export function readOpened(dir: string): string | "bad" | undefined {
+  let fd: number;
   try {
-    const u = new URL(s);
-    return u.protocol === "https:" && u.hostname === AUTH_HOST && u.port === "" && u.username === "" && u.password === "" && u.pathname === AUTH_PATH && u.hash === "";
-  } catch {
-    return false;
+    fd = openSync(join(dir, OPENED_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "bad";
   }
-};
-
-/**
- * Finds the sign-in link in the CLI's output. Only whole lines count, so a half-printed link is never
- * judged. Every link in the output must pass the allowlist; one that does not is `bad`.
- */
-export function parseSetupOutput(raw: string): Parsed {
-  const text = strip(raw, "");
-  const whole = text.slice(0, text.lastIndexOf("\n") + 1);
-  let url: string | undefined;
-  for (const m of whole.matchAll(/[a-z][a-z0-9+.-]*:\/\/\S*/gi)) {
-    if (!allowedUrl(m[0])) return { kind: "bad" };
-    url = m[0];
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_OPENED) return "bad";
+    const buf = Buffer.alloc(st.size);
+    const n = readSync(fd, buf, 0, st.size, 0);
+    return buf.subarray(0, n).toString("utf8");
+  } finally {
+    closeSync(fd);
   }
-  return url === undefined ? { kind: "wait" } : { kind: "ready", url };
 }
 
-/**
- * The token the CLI printed, by its exact shape. It must be whole: followed by something that cannot be
- * in a token, or (`ended`) the output has ended. No other text is read.
- */
-export function findToken(raw: string, ended: boolean): string | undefined {
-  const text = strip(raw, "\u0001");
-  for (const m of text.matchAll(TOKEN_SHAPE)) {
-    const next = text[m.index + m[0].length];
-    if (next === undefined ? ended : !TOKEN_CHAR.test(next)) return m[0];
-  }
-  return undefined;
-}
-
-/** Why a pasted code is refused by shape, or undefined. The text never holds the value. */
-export function codeShapeError(v: unknown): string | undefined {
-  return typeof v === "string" && CODE_SHAPE.test(v) ? undefined : "the code must be 1 to 512 visible characters with no space";
-}
+export { codeShapeError } from "../claude-token.ts";
 
 /** A running `docker run -it` behind a pseudo-terminal: its output, a way to type, and its exit code. */
 export interface PtyProc {
@@ -230,7 +198,7 @@ export class SetupTokenLogins {
     const cwd = join(tmpdir(), `squad-login-${passId}`);
     const argv = loginArgv("claude", {
       cwd, passId, project: "squad-web", user: this.d.user, home: home.root, staging, name, tty: true,
-      args: ["setup-token"], env: { COLUMNS: String(COLS), LINES: String(ROWS) },
+      args: ["setup-token"], env: { COLUMNS: String(COLS), LINES: String(ROWS), BROWSER: BROWSER_SCRIPT },
     });
     const container = argv[argv.indexOf("--name") + 1]!;
     mkdirSync(staging, { recursive: true, mode: 0o700 });
@@ -243,27 +211,57 @@ export class SetupTokenLogins {
     return new Promise<LoginStart>((resolve, reject) => {
       let buf = "";
       let exited = false;
+      let screen: string | undefined;
+      let poll: unknown;
+      let grace: unknown;
       const fail = (msg: string): void => {
         if (e.state !== "starting") return;
         this.clr(e.step);
+        this.clr(poll);
+        this.clr(grace);
         this.entries.delete(id);
         log.warn("web_login_start_failed", { account: aid, login: id });
         void this.halt(e, exited);
         reject(new LoginRefused(502, "internal", `the login did not start: ${msg}`));
       };
+      const ready = (url: string): void => {
+        if (e.state !== "starting") return;
+        buf = "";
+        this.clr(e.step);
+        this.clr(poll);
+        this.clr(grace);
+        e.state = "pending";
+        e.life = this.t.after(() => void this.expire(e), LOGIN_LIFE_MS);
+        resolve({ loginId: id, verifyUrl: url, needsCode: true, expiresAt: new Date(this.d.now().getTime() + LOGIN_LIFE_MS).toISOString() });
+      };
+      const look = (): void => {
+        if (e.state !== "starting") return;
+        const raw = readOpened(staging);
+        if (raw === undefined) {
+          poll = this.t.after(look, OPENED_POLL_MS);
+          return;
+        }
+        // A file that is there but wrong is not the CLI's: the screen is no fallback then.
+        const url = raw === "bad" ? undefined : linkFromOpened(raw);
+        if (url === undefined) return fail("unexpected-output");
+        ready(url);
+      };
       e.abort = fail;
       e.step = this.t.after(() => fail("no link in time"), LINK_WAIT_MS);
+      poll = this.t.after(look, OPENED_POLL_MS);
       proc.onOutput((chunk) => {
         if (e.state === "starting") {
+          if (screen !== undefined) return;
           buf += chunk;
           const got = parseSetupOutput(buf);
           if (got.kind === "bad") return fail("unexpected-output");
           if (got.kind === "wait") return buf.length > MAX_BEFORE ? fail("unexpected-output") : undefined;
-          buf = "";
-          this.clr(e.step);
-          e.state = "pending";
-          e.life = this.t.after(() => void this.expire(e), LOGIN_LIFE_MS);
-          resolve({ loginId: id, verifyUrl: got.url, needsCode: true, expiresAt: new Date(this.d.now().getTime() + LOGIN_LIFE_MS).toISOString() });
+          screen = got.url;
+          grace = this.t.after(() => {
+            if (e.state !== "starting") return;
+            log.warn("setup_link_from_screen", { account: aid, login: id });
+            ready(got.url);
+          }, SCREEN_GRACE_MS);
         } else if (e.state === "pending" && e.sent && e.finishing === undefined) {
           e.tail = (e.tail + chunk).slice(-MAX_AFTER);
           const token = findToken(e.tail, false);
@@ -353,8 +351,7 @@ export class SetupTokenLogins {
     try {
       const dir = join(this.d.home.state, "debug");
       mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const text = strip(e.tail, " ").replace(/sk-ant[A-Za-z0-9_-]*/g, "[token?]").replace(/[A-Za-z0-9_-]{20,}/g, "[long]").replace(/[ \t]+/g, " ");
-      writeFileSync(join(dir, `setup-token-${e.id}.txt`), text, { mode: 0o600 });
+      writeFileSync(join(dir, `setup-token-${e.id}.txt`), maskedTrace(e.tail), { mode: 0o600 });
     } catch {
       // A trace is a help, never a reason for the login to fail differently.
     }
