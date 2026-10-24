@@ -6,10 +6,11 @@ import { test } from "node:test";
 import { makeFakeDocker } from "../test/fake-docker.ts";
 import { addAccount } from "./accounts/store.ts";
 import { dockerPsArgv } from "./docker.ts";
-import { executeGc, gatherGcState, gcSettings, parsePs, planGc, type GcSettings, type GcState } from "./gc.ts";
+import { executeGc, gatherGcState, gcSettings, parsePs, passOfStaging, planGc, type GcSettings, type GcState } from "./gc.ts";
 import { ensureHome, layoutOf } from "./home.ts";
 import { makeLog } from "./log.ts";
-import { pinSession } from "./sessions.ts";
+import { pinSession, sessionDir } from "./sessions.ts";
+import { ulid } from "./ids.ts";
 import { openStore } from "./store/db.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
@@ -19,7 +20,7 @@ const D = 24 * H;
 const S: GcSettings = { graceS: 7, keepPassesD: 400, keepLogsD: 30, sessionTtlD: 7, deadlineMs: 2 * H };
 const home = layoutOf("/h/.squad", {});
 
-const state = (more: Partial<GcState> = {}): GcState => ({ home, containers: [], passes: [], staging: [], logs: [], sessions: [], ...more });
+const state = (more: Partial<GcState> = {}): GcState => ({ home, containers: [], passes: [], staging: [], logs: [], sessions: [], sessionDirs: [], ...more });
 const c = (name: string, passId: string, st: string, createdAt: Date | null = ago(10 * 60_000), purpose = "") => ({ name, passId, state: st, createdAt, purpose });
 const p = (id: string, startedAgo: number, ended = true) => ({ id, startedAt: ago(startedAgo).toISOString(), endedAt: ended ? ago(startedAgo - 1000).toISOString() : null });
 
@@ -239,4 +240,76 @@ test("a running orphan with purpose pass, or with no purpose label, is still sto
   for (const purpose of ["pass", ""]) {
     assert.deepEqual(planGc(state({ containers: [c("squad-a", "A", "running", ago(3 * H), purpose)] }), NOW, S).map((a) => a.kind), ["stop-container", "remove-container"], purpose);
   }
+});
+
+const PA = ulid(1, Buffer.alloc(10, 1));
+const PB = ulid(2, Buffer.alloc(10, 2));
+const stg = (name: string, ageMs = 90 * 60_000) => ({ path: join(home.staging, name), mtime: ago(ageMs) });
+const running = (id: string) => ({ containers: [c(`squad-${id}`, id, "running")], passes: [p(id, 60_000, false)] });
+
+test("passOfStaging reads the pass id from a copy name, and is null when there is none", () => {
+  assert.equal(passOfStaging(`pi-k1-${PA}-a1B2c3`), PA);
+  assert.equal(passOfStaging("pi-k1-abc"), null);
+  assert.equal(passOfStaging("pi-k1-a1B2c3"), null);
+  assert.equal(passOfStaging(PA), null);
+});
+
+test("staging of a pass that is not running goes, while another pass runs", () => {
+  const mine = stg(`pi-k1-${PA}-a1B2c3`);
+  const other = stg(`pi-k2-${PB}-d4E5f6`);
+  const acts = planGc(state({ staging: [mine, other], ...running(PB) }), NOW, S);
+  assert.deepEqual(acts, [{ kind: "remove-path", path: mine.path }]);
+});
+
+test("staging of a running pass stays, however old", () => {
+  const mine = stg(`pi-k1-${PA}-a1B2c3`, 5 * D);
+  assert.deepEqual(planGc(state({ staging: [mine], ...running(PA) }), NOW, S), []);
+});
+
+test("a staging entry with no pass id in its name waits while any pass runs, and goes when none runs", () => {
+  const odd = stg("pi-k1-abc");
+  assert.deepEqual(planGc(state({ staging: [odd], ...running(PB) }), NOW, S), []);
+  assert.deepEqual(planGc(state({ staging: [odd] }), NOW, S), [{ kind: "remove-path", path: odd.path }]);
+});
+
+test("a staging entry of a pass that is not running stays while it is younger than an hour", () => {
+  assert.deepEqual(planGc(state({ staging: [stg(`pi-k1-${PA}-a1B2c3`, 10 * 60_000)] }), NOW, S), []);
+});
+
+const sd = (runner: string, name: string, id: string, ageMs: number) => ({ path: sessionDir(home, runner, `${runner}/${name}`, id), mtime: ago(ageMs) });
+
+test("a session folder with no row, older than the deadline, is removed", () => {
+  const orphan = sd("pi", "k1", "lost", 3 * H);
+  assert.deepEqual(planGc(state({ sessionDirs: [orphan] }), NOW, S), [{ kind: "remove-path", path: orphan.path }]);
+});
+
+test("a session folder with a row, or younger than the deadline, stays", () => {
+  const withRow = sd("pi", "k1", "kept", 30 * D);
+  const young = sd("pi", "k1", "new", H);
+  const row = { runner: "pi", id: "kept", account: "pi/k1", lastUsedAt: ago(D).toISOString() };
+  assert.deepEqual(planGc(state({ sessionDirs: [withRow, young], sessions: [row] }), NOW, S), []);
+});
+
+test("a row for the same id under another account does not cover this folder", () => {
+  const orphan = sd("pi", "k1", "dup", 3 * H);
+  const row = { runner: "pi", id: "dup", account: "pi/k2", lastUsedAt: ago(D).toISOString() };
+  assert.deepEqual(planGc(state({ sessionDirs: [orphan], sessions: [row] }), NOW, S), [{ kind: "remove-path", path: orphan.path }]);
+});
+
+test("session folders are not judged when docker could not be asked", () => {
+  assert.deepEqual(planGc(state({ containers: null, sessionDirs: [sd("pi", "k1", "lost", 3 * H)] }), NOW, S), []);
+});
+
+test("gather lists session folders three levels down, and gc removes an orphan but not a row's folder", async () => {
+  const r = populated();
+  const orphan = join(r.h.sessions, "pi", "k1", "orphan");
+  mkdirSync(orphan, { recursive: true });
+  utimesSync(orphan, ago(3 * H), ago(3 * H));
+  const st = await gatherGcState(deps(r));
+  assert.ok(st.sessionDirs.some((x) => x.path === orphan));
+  const res = await executeGc(planGc(st, NOW, S), deps(r));
+  assert.deepEqual(res.failed, []);
+  assert.ok(!existsSync(orphan));
+  assert.ok(existsSync(join(r.h.sessions, "pi", "k1", "live", "t.jsonl")));
+  assert.ok(existsSync(join(r.h.sessions, "pi", "k1")), "only the id folder goes");
 });

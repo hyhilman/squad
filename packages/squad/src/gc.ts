@@ -7,7 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, rmdirSync, rmSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { dockerPsArgv, dockerRmArgv, dockerStopArgv, stopGraceS } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
 import type { Log } from "./log.ts";
@@ -51,6 +51,8 @@ export interface GcState {
   /** Pass logs and usage export files. */
   readonly logs: readonly GcFile[];
   readonly sessions: readonly GcSession[];
+  /** Every `sessions/<runner>/<account name>/<id>` folder on disk, with or without a row. */
+  readonly sessionDirs: readonly GcFile[];
 }
 export interface GcSettings {
   readonly graceS: number;
@@ -81,6 +83,12 @@ export function gcSettings(env?: Readonly<Record<string, string | undefined>>): 
     sessionTtlD: envNum(SQUAD_SESSION_TTL_D_ENV, env),
     deadlineMs: DEFAULT_DEADLINE_MS,
   };
+}
+
+/** The pass id inside a key copy name (`<runner>-<name>-<pass id>-<random>`), or null for a name without one. */
+export function passOfStaging(name: string): string | null {
+  const m = /-([0-9A-HJKMNP-TV-Z]{26})-[A-Za-z0-9]{6}$/.exec(name);
+  return m === null ? null : m[1]!;
 }
 
 /** The folders gc may delete inside. `accounts/` and `locks/` are not here, and never will be. */
@@ -132,8 +140,17 @@ export function planGc(state: GcState, now: Date, s: GcSettings): GcAction[] {
     for (const p of state.passes) {
       if (p.endedAt === null && !doomed.has(p.id) && !liveIds.has(p.id) && olderThan(p.startedAt, HOUR_MS)) acts.push({ kind: "end-pass", id: p.id });
     }
-    // A running pass may still read its key copy, so staging waits until no pass container is left.
-    if (!liveLeft) for (const f of state.staging) if (olderThan(f.mtime, HOUR_MS)) acts.push({ kind: "remove-path", path: f.path });
+    // A running pass may still read its key copy, so that copy stays. A name that does not tell its
+    // pass keeps the old rule: it waits until no pass container is left.
+    for (const f of state.staging) {
+      if (!olderThan(f.mtime, HOUR_MS)) continue;
+      const owner = passOfStaging(basename(f.path));
+      if (owner === null ? !liveLeft : !liveIds.has(owner)) acts.push({ kind: "remove-path", path: f.path });
+    }
+    // A new session whose account lost the lock race leaves a folder and no row. A pass that runs
+    // always has a row, so a folder with none is dead once it is older than a pass may run.
+    const rowDirs = new Set(state.sessions.map((x) => resolve(sessionDir(state.home, x.runner, x.account, x.id))));
+    for (const d of state.sessionDirs) if (!rowDirs.has(resolve(d.path)) && olderThan(d.mtime, Math.max(HOUR_MS, s.deadlineMs))) acts.push({ kind: "remove-path", path: d.path });
   }
 
   for (const p of state.passes) if (doomed.has(p.id)) acts.push({ kind: "delete-pass", id: p.id });
@@ -202,6 +219,15 @@ function filesIn(dir: string): GcFile[] {
   return out;
 }
 
+/** The names of the real folders (not links) directly inside `dir`; none when it does not exist. */
+function subdirs(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((n) => lstatSync(join(dir, n)).isDirectory());
+  } catch {
+    return [];
+  }
+}
+
 /** Reads the world. It runs `docker ps` (read-only) and folds the spool, and changes nothing else. */
 export function gatherGcState(deps: GcDeps): GcState {
   const { store, home } = deps;
@@ -220,8 +246,17 @@ export function gatherGcState(deps: GcDeps): GcState {
   } catch {
     // no staging folder yet
   }
+  const sessionDirs: GcFile[] = [];
+  for (const runner of subdirs(home.sessions)) {
+    for (const account of subdirs(join(home.sessions, runner))) {
+      for (const id of subdirs(join(home.sessions, runner, account))) {
+        const path = join(home.sessions, runner, account, id);
+        sessionDirs.push({ path, mtime: lstatSync(path).mtime });
+      }
+    }
+  }
   const sessions = listSessions(store.db).map((x) => ({ runner: x.runner, id: x.id, account: x.account, lastUsedAt: x.lastUsedAt }));
-  return { home, containers, passes, staging, logs: [...filesIn(home.passLogs), ...filesIn(home.usageExport)], sessions };
+  return { home, containers, passes, staging, logs: [...filesIn(home.passLogs), ...filesIn(home.usageExport)], sessions, sessionDirs };
 }
 
 export interface GcResult {

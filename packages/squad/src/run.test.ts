@@ -91,6 +91,7 @@ test("ok: one pass row with the tokens, health updated, the key copy gone, one a
   const acct = mountsOf(runs[0]!).filter((m) => m.target === "/pi");
   assert.equal(acct.length, 1);
   assert.ok(acct[0]!.source.startsWith(r.home.staging));
+  assert.ok(acct[0]!.source.includes(`-${res.passId}-`), "gc tells the owner of a copy by the pass id in its name");
   assert.notEqual(acct[0]!.source, join(r.home.accounts, "pi", "k1"));
   assert.ok(!mountsOf(runs[0]!).some((m) => m.source.includes(r.home.accounts)), "no mount of the real folder");
   assert.equal(runs[0]!.at(-1), "say ok");

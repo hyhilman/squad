@@ -49,3 +49,11 @@ test("a login or token account throws before any copy", async () => {
     assert.deepEqual(readdirSync(home.staging), []);
   }
 });
+
+test("a pass id given to withKeyCopy is in the copy name", async () => {
+  const { home, account } = setup("key");
+  const id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+  await withKeyCopy(home, account, (copy) => {
+    assert.match(copy.split("/").pop()!, new RegExp(`^pi-k1-${id}-[A-Za-z0-9]{6}$`));
+  }, id);
+});

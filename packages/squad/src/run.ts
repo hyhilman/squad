@@ -321,7 +321,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
 
     let sp: Spawned;
     try {
-      sp = account.kind === "key" ? await withKeyCopy(deps.home, account, run) : await run(accountDirOf(deps.home, account));
+      sp = account.kind === "key" ? await withKeyCopy(deps.home, account, run, passId) : await run(accountDirOf(deps.home, account));
       if (outDir !== null) sp = withLastMessage(sp, outDir);
     } catch (e) {
       // The plan was refused or the copy failed: the pass row must not stay open.
