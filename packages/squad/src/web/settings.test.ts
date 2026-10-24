@@ -15,7 +15,7 @@ const ENV = { SQUAD_WEB_URL: "https://squad.example.test", SQUAD_OIDC_ISSUER: "h
 const secretPath = (h: ReturnType<typeof home>): string => join(h.root, "squad.secret.toml");
 
 test("every web setting has a one-line why, and the list is pinned", () => {
-  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP", "SQUAD_OIDC_ADMIN_GROUP", "SQUAD_WEB_PROVIDERS"]);
+  assert.deepEqual(WEB_SETTINGS.map((s) => s.key), ["SQUAD_WEB_URL", "SQUAD_WEB_PORT", "SQUAD_WEB_BIND", "SQUAD_OIDC_ISSUER", "SQUAD_OIDC_CLIENT_ID", "SQUAD_OIDC_GROUP", "SQUAD_OIDC_ADMIN_GROUP", "SQUAD_WEB_PROVIDERS", "SQUAD_WEB_FRAME_ANCESTORS"]);
   for (const s of WEB_SETTINGS) assert.ok(s.why.length > 0 && !s.why.includes("\n"), s.key);
 });
 
@@ -29,6 +29,14 @@ test("the defaults: port 20140, bind 127.0.0.1, no group, https means Secure coo
   assert.equal(c.origin, "https://squad.example.test");
   assert.equal(c.url, "https://squad.example.test");
   assert.equal(loadWebConfig({ ...ENV, SQUAD_WEB_URL: "http://127.0.0.1:3000/" }, home()).secure, false);
+});
+
+test("frame ancestors: none by default; https origins and *.host origins only", () => {
+  assert.equal(loadWebConfig(ENV, home()).frameAncestors, "'none'");
+  assert.equal(loadWebConfig({ ...ENV, SQUAD_WEB_FRAME_ANCESTORS: "https://app.example.test, https://*.example.test" }, home()).frameAncestors, "https://app.example.test https://*.example.test");
+  for (const bad of ["*", "http://app.example.test", "https://app.example.test/path", "app.example.test", "https://a.test;script-src *", "'unsafe-inline'", "https://*"]) {
+    assert.throws(() => loadWebConfig({ ...ENV, SQUAD_WEB_FRAME_ANCESTORS: bad }, home()), /SQUAD_WEB_FRAME_ANCESTORS/, bad);
+  }
 });
 
 test("the first start writes a session key, mode 0600, and the second start keeps it", () => {

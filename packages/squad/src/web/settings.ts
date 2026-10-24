@@ -24,7 +24,25 @@ export const SQUAD_WEB_PROVIDERS_ENV: EnvSpec = {
   why: "which providers the web app offers for a new account: `all`, or a comma list of ids (codex, claude, or a pi provider id); the server refuses any other",
 };
 
-export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV];
+export const SQUAD_WEB_FRAME_ANCESTORS_ENV: EnvSpec = {
+  key: "SQUAD_WEB_FRAME_ANCESTORS",
+  why: "the sites that may show the web app in an iframe, as a comma list of https origins (a host may start with `*.`); unset = no site may frame it",
+};
+
+export const WEB_SETTINGS: readonly EnvSpec[] = [SQUAD_WEB_URL_ENV, SQUAD_WEB_PORT_ENV, SQUAD_WEB_BIND_ENV, SQUAD_OIDC_ISSUER_ENV, SQUAD_OIDC_CLIENT_ID_ENV, SQUAD_OIDC_GROUP_ENV, SQUAD_OIDC_ADMIN_GROUP_ENV, SQUAD_WEB_PROVIDERS_ENV, SQUAD_WEB_FRAME_ANCESTORS_ENV];
+
+// An https origin, its host optionally starting with "*." (as CSP allows), with an optional port and
+// nothing else: the value goes into a CSP header, so nothing may close the directive or add another.
+const FRAME_ORIGIN = /^https:\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+(:[0-9]{1,5})?$/;
+
+/** The CSP `frame-ancestors` value from the setting. */
+function frameAncestorsOf(raw: string | undefined): string {
+  if (raw === undefined) return "'none'";
+  const list = raw.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s !== "");
+  if (list.length === 0) return "'none'";
+  for (const o of list) if (!FRAME_ORIGIN.test(o)) throw new Error(`SQUAD_WEB_FRAME_ANCESTORS: each entry must be an https origin such as https://app.example.com`);
+  return list.join(" ");
+}
 
 /** The ids the setting allows; undefined = all. */
 export function allowedProviders(env: Readonly<Record<string, string | undefined>>): ReadonlySet<string> | undefined {
@@ -44,6 +62,8 @@ export interface WebConfig {
   readonly group?: string;
   /** The group that makes an admin; unset = nobody. */
   readonly adminGroup?: string;
+  /** The CSP frame-ancestors value for pages: 'none', or the sites that may frame the app. */
+  readonly frameAncestors: string;
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
   /** Cookies get `Secure` when the public URL is https. */
@@ -136,6 +156,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
     clientId,
     ...(group === undefined ? {} : { group }),
     ...(adminGroup === undefined ? {} : { adminGroup }),
+    frameAncestors: frameAncestorsOf(envOptional(SQUAD_WEB_FRAME_ANCESTORS_ENV, env)),
     ...(secrets.clientSecret === undefined ? {} : { clientSecret: secrets.clientSecret }),
     sessionKey: secrets.sessionKey,
     secure: web.protocol === "https:",

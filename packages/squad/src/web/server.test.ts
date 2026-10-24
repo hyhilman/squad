@@ -385,6 +385,20 @@ test("each page answer has a fresh style nonce, in the CSP and in a meta tag for
   }
 });
 
+test("frame-ancestors: a page allows the configured parents; api and auth answers never do", async () => {
+  const root = mkdtempSync(join(tmpdir(), "static-"));
+  writeFileSync(join(root, "index.html"), "<html><head></head><body></body></html>");
+  const r = await rig({ staticDir: root }, { SQUAD_WEB_FRAME_ANCESTORS: "https://app.example.test" });
+  try {
+    const page = (await fetch(`${r.base}/accounts`)).headers.get("content-security-policy") ?? "";
+    assert.match(page, /frame-ancestors https:\/\/app\.example\.test$/);
+    const apiCsp = (await fetch(`${r.base}/api/me`)).headers.get("content-security-policy") ?? "";
+    assert.match(apiCsp, /frame-ancestors 'none'/);
+  } finally {
+    await r.close();
+  }
+});
+
 test("the real source layout never serves the server's own code", async () => {
   const r = await rig();
   try {

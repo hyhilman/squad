@@ -389,14 +389,14 @@ const BASE_CSP = "default-src 'self'; frame-ancestors 'none'";
  * this answer's style nonce. Ant Design writes its styles at run time, so no hash can cover them;
  * it puts the nonce from the page's meta tag on each one.
  */
-function pageCsp(html: string, nonce: string): string {
+function pageCsp(html: string, nonce: string, frameAncestors: string): string {
   const hashes = (tag: "script" | "style"): string[] => {
     const re = new RegExp(`<${tag}(?![^>]*\\bsrc=)[^>]*>([\\s\\S]*?)</${tag}>`, "g");
     return [...html.matchAll(re)].filter((m) => m[1] !== "").map((m) => `'sha256-${createHash("sha256").update(m[1]!).digest("base64")}'`);
   };
   const s = hashes("script");
   const c = hashes("style");
-  return `default-src 'self'${s.length > 0 ? `; script-src 'self' ${s.join(" ")}` : ""}; style-src 'self' 'nonce-${nonce}'${c.length > 0 ? ` ${c.join(" ")}` : ""}; frame-ancestors 'none'`;
+  return `default-src 'self'${s.length > 0 ? `; script-src 'self' ${s.join(" ")}` : ""}; style-src 'self' 'nonce-${nonce}'${c.length > 0 ? ` ${c.join(" ")}` : ""}; frame-ancestors ${frameAncestors}`;
 }
 
 /** The file for a request path, or undefined. It never leaves the root, also through a symlink. */
@@ -587,7 +587,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
       // A fresh nonce per answer: one that repeats would let an injected style reuse it.
       const nonce = randomBytes(16).toString("base64");
       const page = data.toString("utf8");
-      res.setHeader("content-security-policy", pageCsp(page, nonce));
+      res.setHeader("content-security-policy", pageCsp(page, nonce, cfg.frameAncestors));
       data = Buffer.from(page.replace("<head>", `<head><meta name="csp-nonce" content="${nonce}">`), "utf8");
     }
     res.writeHead(200, {
