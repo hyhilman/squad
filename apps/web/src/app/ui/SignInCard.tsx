@@ -1,19 +1,28 @@
-// Signed out inside a frame. The identity server refuses to be framed, so sign-in opens in a popup.
-// The frame shares the session cookie with it (same site), so this page asks /api/me every 2 s, and
-// once it answers it closes the popup and reloads.
+// Signed out: a card with one Sign in button. Nothing signs in by itself (lib/signin.ts).
+// At the top level the button loads the backend's sign-in page. In a frame the identity server
+// refuses to be framed, so sign-in opens in a popup; the frame shares the session cookie with it
+// (same site), so this page asks /api/me every 2 s, and once it answers it closes the popup and
+// reloads.
 import { Box, Button, Flex, Link, Stack, Text } from "@chakra-ui/react";
-import { Boxes, LogIn } from "lucide-react";
+import { LogIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.ts";
+import type { SignInPlan } from "../lib/signin.ts";
+import { BrandLogo } from "./BrandLogo.tsx";
 import { LogoLoader } from "./Loader.tsx";
 
 const POLL_MS = 2000;
 
-export function SignInCard({ url }: { url: string }) {
+const NOTES = {
+  "signed-out": "You're signed out.",
+  "squad-only": "You're signed out of squad. Your sign-in provider has no sign-out link, so you may still be signed in there.",
+} as const;
+
+export function SignInCard({ plan, note }: { plan: SignInPlan; note?: keyof typeof NOTES | undefined }) {
   const popup = useRef<Window | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const [done, setDone] = useState(false);
+  const [leaving, setLeaving] = useState<string>();
 
   useEffect(() => {
     if (!waiting) return;
@@ -25,7 +34,7 @@ export function SignInCard({ url }: { url: string }) {
         () => {
           if (stop) return;
           popup.current?.close();
-          setDone(true);
+          setLeaving("Finishing sign-in…");
           window.location.reload();
         },
         () => {},
@@ -38,24 +47,36 @@ export function SignInCard({ url }: { url: string }) {
   }, [waiting]);
 
   const open = () => {
-    popup.current = window.open(url, "squad-sign-in", "popup,width=520,height=680");
+    if (plan.kind === "redirect") {
+      setLeaving("Signing in…");
+      window.location.assign(plan.url);
+      return;
+    }
+    popup.current = window.open(plan.url, "squad-sign-in", "popup,width=520,height=680");
     setBlocked(popup.current === null);
     setWaiting(true);
   };
 
-  if (done) return <LogoLoader text="Finishing sign-in…" />;
+  if (leaving !== undefined) return <LogoLoader text={leaving} />;
   return (
-    <Flex justify="center" px="4" py="16">
+    <Flex justify="center" align="center" px="4" py="16" minH={plan.kind === "redirect" ? "80vh" : undefined}>
       <Box w="full" maxW="sm" bg="surface" borderWidth="1px" borderColor="border" rounded="xl" shadow="sm" p="8" textAlign="center">
-        <Flex boxSize="10" mx="auto" rounded="xl" bg="brand.solid" color="white" align="center" justify="center">
-          <Boxes size={20} />
+        <Flex justify="center">
+          <BrandLogo size="20" />
         </Flex>
-        <Text mt="4" fontSize="lg" fontWeight="600">
+        {note === undefined ? null : (
+          <Text mt="4" fontSize="sm" fontWeight="500" color="fg" data-testid="signed-out-note">
+            {NOTES[note]}
+          </Text>
+        )}
+        <Text mt={note === undefined ? "4" : "2"} fontSize="lg" fontWeight="600">
           Sign in to squad
         </Text>
-        <Text mt="1" fontSize="sm" color="fg.muted">
-          Sign-in opens in a new window. This page reloads when you are done.
-        </Text>
+        {plan.kind === "popup" ? (
+          <Text mt="1" fontSize="sm" color="fg.muted">
+            Sign-in opens in a new window. This page reloads when you are done.
+          </Text>
+        ) : null}
         <Stack mt="6" gap="3" align="center">
           <Button colorPalette="brand" w="full" onClick={open} loading={waiting && !blocked} loadingText="Waiting for sign-in…">
             <LogIn size={16} /> Sign in

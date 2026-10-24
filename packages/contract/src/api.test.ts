@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, matchPath, pathOf } from "./api.ts";
+import { AUTH_PATHS, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, matchPath, pathOf } from "./api.ts";
 
 test("every route path is under /api/ and unique per method", () => {
   const seen = new Set<string>();
@@ -65,4 +65,12 @@ test("the catalog routes: a model id with dots, colons, slashes and an @ survive
   assert.deepEqual(matchPath(ROUTES.catalogProvider.path, "/api/catalog/providers/opencode-go"), { provider: "opencode-go" });
   assert.deepEqual(matchPath(ROUTES.catalogProviders.path, "/api/catalog/providers"), {});
   assert.equal(matchPath(ROUTES.catalogProvider.path, "/api/catalog/providers"), undefined);
+});
+
+test("the sign-in paths are under /auth and match no /api route; the signed-out page is an app path", () => {
+  for (const path of Object.values(AUTH_PATHS)) {
+    assert.match(path, /^\/auth\//);
+    for (const r of Object.values(ROUTES)) assert.equal(matchPath(r.path, path), undefined, path);
+  }
+  assert.equal(SIGNED_OUT_PATH, "/signed-out");
 });

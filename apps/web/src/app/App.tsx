@@ -5,7 +5,7 @@ import { Center, ChakraProvider } from "@chakra-ui/react";
 import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ApiFailure } from "@squad/contract";
-import { signInPlan } from "./lib/signin.ts";
+import { signedOutNote, signInPlan } from "./lib/signin.ts";
 import { SignInCard } from "./ui/SignInCard.tsx";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Account } from "./pages/Account.tsx";
@@ -27,13 +27,11 @@ import "./ui/colorMode.ts";
 
 function Gate() {
   const me = useMe();
+  if (me.isPending) return <LogoLoader />;
   if (me.isError && me.error instanceof ApiFailure && me.error.status === 401) {
     const plan = signInPlan(window, window.location.pathname, window.location.search);
-    // A top-level page is already on its way to /auth/login (queries.ts).
-    if (plan.kind === "popup") return <SignInCard url={plan.url} />;
+    return <SignInCard plan={plan} note={signedOutNote(window.location.pathname, window.location.search)} />;
   }
-  if (me.isPending) return <LogoLoader />;
-  if (me.isError && me.error instanceof ApiFailure && me.error.status === 401) return <LogoLoader text="Signing in…" />;
   if (me.isError) {
     return (
       <Center py="24" px="4">

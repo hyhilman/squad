@@ -52,6 +52,10 @@ export interface FakeOidc {
   /** What the issuer field of the discovery document says. */
   discoveryIssuer: string | undefined;
   readonly tokenRequests: { auth: string | undefined; form: URLSearchParams; pkceOk: boolean }[];
+  /** Whether discovery lists an end_session_endpoint (RP-initiated logout). */
+  endSession: boolean;
+  /** The query of each end-session request. */
+  readonly endSessionRequests: URLSearchParams[];
   jwksFetches: number;
   close(): Promise<void>;
 }
@@ -76,6 +80,8 @@ export async function startFakeOidc(kind: "RS256" | "ES256" = "RS256"): Promise<
     tokenStatus: 200,
     discoveryIssuer: undefined,
     tokenRequests: [],
+    endSession: true,
+    endSessionRequests: [],
     jwksFetches: 0,
     close: () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); }),
   };
@@ -83,7 +89,15 @@ export async function startFakeOidc(kind: "RS256" | "ES256" = "RS256"): Promise<
     const url = new URL(req.url ?? "/", issuer);
     const json = (status: number, body: unknown): void => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     if (url.pathname === "/.well-known/openid-configuration") {
-      return json(200, { issuer: p.discoveryIssuer ?? issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` });
+      return json(200, { issuer: p.discoveryIssuer ?? issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`, ...(p.endSession ? { end_session_endpoint: `${issuer}/end-session` } : {}) });
+    }
+    if (url.pathname === "/end-session" && p.endSession) {
+      // As a provider does: end its own session, then send the browser to the post-logout address.
+      p.endSessionRequests.push(url.searchParams);
+      const back = url.searchParams.get("post_logout_redirect_uri");
+      if (url.searchParams.get("client_id") !== CLIENT_ID || back === null) return json(400, { error: "invalid_request" });
+      res.writeHead(302, { location: back });
+      return res.end();
     }
     if (url.pathname === "/jwks") {
       p.jwksFetches++;

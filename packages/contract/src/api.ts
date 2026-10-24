@@ -371,6 +371,32 @@ export interface LimitResetResult {
 }
 
 /** The routes. A path param is `:name`. */
+/**
+ * The backend's sign-in routes. They sit outside ROUTES: they answer with redirects and cookies, not
+ * through `call`. Each POST wants the same csrf proof as an /api write.
+ */
+export const AUTH_PATHS = {
+  login: "/auth/login",
+  logout: "/auth/logout",
+  /** Ends squad's session and answers LogoutEverywhere: where to send the browser next. */
+  logoutEverywhere: "/auth/logout/everywhere",
+} as const;
+
+/**
+ * The app's signed-out page. The identity provider sends the browser back here after a sign out
+ * everywhere, so `<SQUAD_WEB_URL>/signed-out` is the post-logout address to register there.
+ */
+export const SIGNED_OUT_PATH = "/signed-out";
+/** On the signed-out page: the provider had no end-session link, so only squad's session ended. */
+export const SIGNED_OUT_SQUAD_ONLY = "provider=none";
+
+export interface LogoutEverywhere {
+  /** The provider's end-session URL, or the signed-out page when the provider has none. */
+  readonly to: string;
+  /** True when `to` ends the provider's session too. */
+  readonly provider: boolean;
+}
+
 export const ROUTES = {
   me: { method: "GET", path: "/api/me" },
   listAccounts: { method: "GET", path: "/api/accounts" },

@@ -2,16 +2,12 @@
 import { QueryCache, QueryClient, MutationCache, useQuery } from "@tanstack/react-query";
 import { ApiFailure, type Runner } from "@squad/contract";
 import { api } from "./api.ts";
-import { signInPlan } from "./lib/signin.ts";
 
-// Signed out: a full page load to the backend's /auth/login, never a router move (the router has no
-// page there). In a frame the Gate shows a sign-in card instead, so a 401 elsewhere only asks /api/me
-// again, and its 401 brings up the card.
+// Signed out: never a move by itself (lib/signin.ts). A 401 elsewhere only asks /api/me again, and
+// its 401 brings up the Gate's signed-out card.
 const onError = (e: unknown, key?: readonly unknown[]) => {
   if (!(e instanceof ApiFailure && e.status === 401)) return;
-  const plan = signInPlan(window, window.location.pathname, window.location.search);
-  if (plan.kind === "redirect") window.location.assign(plan.url);
-  else if (key?.[0] !== "me") void queryClient.refetchQueries({ queryKey: ["me"] });
+  if (key?.[0] !== "me") void queryClient.refetchQueries({ queryKey: ["me"] });
 };
 
 export const queryClient = new QueryClient({

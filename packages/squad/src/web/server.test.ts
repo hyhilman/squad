@@ -4,7 +4,7 @@ import { recordPriceHistory, refreshPrices } from "../prices.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import { NO_SESSION_ROUTES, ROUTES, findForbidden, type CatalogModelCompare, type CatalogProviderDetail, type CatalogProviderView, type ConnectStart, type ConnectStatus, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
+import { NO_SESSION_ROUTES, ROUTES, findForbidden, type LogoutEverywhere, type CatalogModelCompare, type CatalogProviderDetail, type CatalogProviderView, type ConnectStart, type ConnectStatus, type ProviderView, type AccountView, type ApiError, type Me, type PassDetail, type PassView, type RoomPoint, type UsageRow, type UsageSeriesPoint } from "@squad/contract";
 import { CLIENT_ID, startFakeOidc, type FakeOidc } from "../../test/fake-oidc.ts";
 import { emptyHealth } from "../accounts/health.ts";
 import { addAccount, getAccount, putHealth, recordRoom, setState } from "../accounts/store.ts";
@@ -373,6 +373,49 @@ test("CORS: with no setting, nobody gets headers and a preflight is refused", as
   assert.equal(x.status, 405);
   assert.equal(x.headers.get("access-control-allow-origin"), null);
   await r.close();
+});
+
+test("/auth/logout/everywhere: POST with the csrf proof; clears the session and answers the provider's end-session URL with client_id and the signed-out page, never an ID token", async () => {
+  const r = await rig();
+  const c = await signIn(r, "alice@example.test");
+  const path = "/auth/logout/everywhere";
+  assert.equal((await fetch(`${r.base}${path}`, { headers: { cookie: c } })).status, 405);
+  assert.equal((await fetch(`${r.base}${path}`, { method: "POST", headers: { cookie: c, origin: PUBLIC } })).status, 403);
+  assert.equal((await fetch(`${r.base}${path}`, { method: "POST", headers: { cookie: c, origin: "https://other.example.test", "x-squad-csrf": "1" } })).status, 403);
+  const out = await fetch(`${r.base}${path}`, { method: "POST", headers: { cookie: c, origin: PUBLIC, "x-squad-csrf": "1" } });
+  assert.equal(out.status, 200);
+  assert.match(out.headers.getSetCookie().join("\n"), /squad_session=; .*Max-Age=0/);
+  assert.equal(out.headers.get("cache-control"), "no-store");
+  const body = (await out.json()) as LogoutEverywhere;
+  assert.equal(findForbidden(body), undefined);
+  assert.equal(body.provider, true);
+  const to = new URL(body.to);
+  assert.equal(`${to.origin}${to.pathname}`, `${p.issuer}/end-session`);
+  assert.equal(to.searchParams.get("client_id"), CLIENT_ID);
+  assert.equal(to.searchParams.get("post_logout_redirect_uri"), `${PUBLIC}/signed-out`);
+  assert.equal(to.searchParams.has("id_token_hint"), false, "squad keeps no ID token");
+  // The provider ends its session and sends the browser back to the signed-out page.
+  const seen = p.endSessionRequests.length;
+  const back = await fetch(body.to, { redirect: "manual" });
+  assert.deepEqual([back.status, back.headers.get("location")], [302, `${PUBLIC}/signed-out`]);
+  assert.equal(p.endSessionRequests.length, seen + 1);
+  assert.ok(!r.logs.join("\n").includes(c.split("=")[1]!), "no session cookie in a log");
+  await r.close();
+});
+
+test("/auth/logout/everywhere with a provider that has no end-session link: only squad's session ends, and the signed-out page says so", async () => {
+  p.endSession = false;
+  try {
+    const r = await rig();
+    const c = await signIn(r, "alice@example.test");
+    const out = await fetch(`${r.base}/auth/logout/everywhere`, { method: "POST", headers: { cookie: c, origin: PUBLIC, "x-squad-csrf": "1" } });
+    assert.equal(out.status, 200);
+    assert.match(out.headers.getSetCookie().join("\n"), /squad_session=; .*Max-Age=0/);
+    assert.deepEqual(await out.json(), { to: "/signed-out?provider=none", provider: false });
+    await r.close();
+  } finally {
+    p.endSession = true;
+  }
 });
 
 test("/auth/logout is POST only, needs the csrf proof, and clears the session", async () => {

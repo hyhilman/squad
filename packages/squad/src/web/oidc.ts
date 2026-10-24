@@ -81,6 +81,8 @@ interface Doc {
   readonly authorization_endpoint: string;
   readonly token_endpoint: string;
   readonly jwks_uri: string;
+  /** RP-initiated logout; a provider may have none. */
+  readonly end_session_endpoint?: string;
 }
 type Jwk = Record<string, unknown>;
 type Claims = Record<string, unknown>;
@@ -141,7 +143,9 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
     if (body.issuer !== cfg.issuer) throw new OidcError("issuer-mismatch");
     const { authorization_endpoint, token_endpoint, jwks_uri } = body;
     if (!isStr(authorization_endpoint) || !isStr(token_endpoint) || !isStr(jwks_uri)) throw new OidcError("discovery-incomplete");
-    doc = { value: { authorization_endpoint, token_endpoint, jwks_uri }, at: now() };
+    const end = body.end_session_endpoint;
+    const endOk = isStr(end) && URL.canParse(end) && ["https:", "http:"].includes(new URL(end).protocol);
+    doc = { value: { authorization_endpoint, token_endpoint, jwks_uri, ...(endOk ? { end_session_endpoint: end } : {}) }, at: now() };
     return doc.value;
   }
 
@@ -274,6 +278,20 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
     },
 
     clearSessionCookie: (): string => cookie(SESSION_COOKIE, "", "/", 0),
+
+    /**
+     * The provider's end-session URL (OIDC RP-initiated logout), or undefined when it has none. The
+     * session keeps no ID token, so there is no id_token_hint: the spec then wants client_id, and
+     * `back` must be registered at the provider as a post-logout address.
+     */
+    async endSessionUrl(back: string): Promise<string | undefined> {
+      const end = (await discovery()).end_session_endpoint;
+      if (end === undefined) return undefined;
+      const u = new URL(end);
+      u.searchParams.set("client_id", cfg.clientId);
+      u.searchParams.set("post_logout_redirect_uri", back);
+      return u.toString();
+    },
   };
 }
 

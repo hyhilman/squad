@@ -1,8 +1,8 @@
 // The frame around every page: a top bar and a centred container. Nothing depends on the viewport
 // height, so the app also works inside an iframe of another page.
 import { Badge, Box, Button, Flex, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
-import type { Me } from "@squad/contract";
-import { BarChart3, BookOpen, Check, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
+import { AUTH_PATHS, SIGNED_OUT_PATH, type LogoutEverywhere, type Me } from "@squad/contract";
+import { BarChart3, BookOpen, Check, ChevronDown, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
 import { inFrame } from "../lib/embed.ts";
@@ -101,10 +101,76 @@ function ThemeMenu() {
   );
 }
 
+// /auth is outside `call`; the backend wants the same csrf proof as for a write. Both end on the
+// signed-out page, which never signs in by itself (lib/signin.ts).
 async function signOut() {
-  // /auth is outside the contract; the backend wants the same csrf proof as for a write.
-  await fetch("/auth/logout", { method: "POST", headers: { "x-squad-csrf": "1" }, credentials: "same-origin" });
-  window.location.assign("/");
+  await fetch(AUTH_PATHS.logout, { method: "POST", headers: { "x-squad-csrf": "1" }, credentials: "same-origin" });
+  window.location.assign(SIGNED_OUT_PATH);
+}
+
+/** Ends squad's session, then goes to the provider's end-session page, which sends the browser back to the signed-out page. */
+async function signOutEverywhere() {
+  const res = await fetch(AUTH_PATHS.logoutEverywhere, { method: "POST", headers: { "x-squad-csrf": "1" }, credentials: "same-origin" });
+  if (!res.ok) return signOut();
+  const body = (await res.json()) as LogoutEverywhere;
+  window.location.assign(body.to);
+}
+
+function SignOutItems({ onPick }: { onPick: (everywhere: boolean) => void }) {
+  return (
+    <>
+      <Menu.Item value="sign-out" onSelect={() => onPick(false)} fontSize="sm">
+        <LogOut size={15} /> Sign out
+      </Menu.Item>
+      <Menu.Item value="sign-out-everywhere" onSelect={() => onPick(true)} fontSize="sm">
+        <LogOut size={15} />
+        <Box>
+          <Text>Sign out everywhere</Text>
+          <Text fontSize="xs" color="fg.muted">
+            Also signs you out of your sign-in provider
+          </Text>
+        </Box>
+      </Menu.Item>
+    </>
+  );
+}
+
+/** The person, and the two ways to sign out. */
+function AccountMenu({ me }: { me: Me }) {
+  const [busy, setBusy] = useState(false);
+  const pick = (everywhere: boolean) => {
+    setBusy(true);
+    void (everywhere ? signOutEverywhere() : signOut()).catch(() => setBusy(false));
+  };
+  return (
+    <Menu.Root positioning={{ placement: "bottom-end" }}>
+      <Menu.Trigger asChild>
+        <Button size="sm" variant="ghost" color="fg.muted" mr="-3" loading={busy} aria-label="Account and sign out" minW="0">
+          <Text truncate maxW="56" hideBelow="lg">
+            {me.email}
+          </Text>
+          <Text hideFrom="lg">Account</Text>
+          <ChevronDown size={14} />
+        </Button>
+      </Menu.Trigger>
+      <Portal>
+        <Menu.Positioner>
+          <Menu.Content minW="64">
+            <Box px="2" py="1.5">
+              <Text fontSize="xs" color="fg.muted">
+                Signed in as
+              </Text>
+              <Text fontSize="sm" truncate>
+                {me.email}
+              </Text>
+            </Box>
+            <Menu.Separator />
+            <SignOutItems onPick={pick} />
+          </Menu.Content>
+        </Menu.Positioner>
+      </Portal>
+    </Menu.Root>
+  );
 }
 
 function AdminBadge() {
@@ -158,9 +224,7 @@ function PhoneMenu({ me }: { me: Me }) {
                   </Menu.Item>
                 ))}
                 <Menu.Separator />
-                <Menu.Item value="sign-out" onSelect={() => void signOut()} fontSize="sm">
-                  <LogOut size={15} /> Sign out
-                </Menu.Item>
+                <SignOutItems onPick={(everywhere) => void (everywhere ? signOutEverywhere() : signOut())} />
               </>
             )}
           </Menu.Content>
@@ -171,7 +235,6 @@ function PhoneMenu({ me }: { me: Me }) {
 }
 
 export function Shell({ me, children }: { me: Me; children: ReactNode }) {
-  const [busy, setBusy] = useState(false);
   return (
     <Box>
       <Box as="header" bg="surface" borderBottomWidth="1px" borderColor="border" position="sticky" top="0" zIndex="sticky">
@@ -184,24 +247,9 @@ export function Shell({ me, children }: { me: Me; children: ReactNode }) {
             <Box flex="1" />
             {FRAMED ? null : (
               <HStack gap="2" hideBelow="md" minW="0">
-                <Text fontSize="sm" color="fg.muted" truncate maxW="56" hideBelow="lg" title={me.email}>
-                  {me.email}
-                </Text>
                 {me.admin ? <AdminBadge /> : null}
                 <ThemeMenu />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  color="fg.muted"
-                  mr="-3"
-                  loading={busy}
-                  onClick={() => {
-                    setBusy(true);
-                    void signOut().finally(() => setBusy(false));
-                  }}
-                >
-                  <LogOut size={15} /> Sign out
-                </Button>
+                <AccountMenu me={me} />
               </HStack>
             )}
             <Box hideFrom="md" mr="-2">

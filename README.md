@@ -192,6 +192,13 @@ the browser.
 It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A client secret, if
 any, goes in `squad.secret.toml` (mode 600) in the squad home.
 
+Signed out, the app never signs in by itself: it shows a Sign in button. The account menu has
+"Sign out" (squad's session only) and "Sign out everywhere", which also ends the identity
+provider's session through its `end_session_endpoint` (OIDC RP-initiated logout). squad keeps no ID
+token, so it sends `client_id` and `post_logout_redirect_uri=<SQUAD_WEB_URL>/signed-out`: register
+that exact address at the provider as a post-logout redirect URI. A provider with no
+`end_session_endpoint` gets the plain sign out, and the page says so.
+
 The logo and icons sit at `/brand/`. To use your own, set `SQUAD_WEB_BRAND_DIR` to a folder with
 any of `logo-light.png`, `logo-dark.png`, `favicon.ico` and `apple-touch-icon.png` (PNG or ICO, at
 most 2 MB each). A name that is missing there keeps the built-in file; one logo alone stands in for

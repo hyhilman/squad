@@ -11,7 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { AUTH_PATHS, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY, type LogoutEverywhere, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
 import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProviderList, isModelIdParam, isProviderIdParam, priceHistory } from "../catalog.ts";
 import { getLogo } from "../logos.ts";
@@ -788,11 +788,26 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     const method = req.method;
     if (pathname === "/auth/login" || pathname === "/auth/callback") {
       if (method !== "GET") return sendText(res, 405, "method not allowed\n", { allow: "GET" });
-    } else if (pathname === "/auth/logout") {
+    } else if (pathname === AUTH_PATHS.logout) {
       if (method !== "POST") return sendText(res, 405, "method not allowed\n", { allow: "POST" });
       if (!csrfOk(req)) return sendText(res, 403, "forbidden\n");
       res.writeHead(204, { "set-cookie": oidc.clearSessionCookie() });
       return void res.end();
+    } else if (pathname === AUTH_PATHS.logoutEverywhere) {
+      // A page move cannot carry the csrf header, so this is a POST that answers where to go next,
+      // and the page goes there itself.
+      if (method !== "POST") return sendText(res, 405, "method not allowed\n", { allow: "POST" });
+      if (!csrfOk(req)) return sendText(res, 403, "forbidden\n");
+      res.setHeader("set-cookie", oidc.clearSessionCookie());
+      let end: string | undefined;
+      try {
+        end = await oidc.endSessionUrl(`${cfg.url}${SIGNED_OUT_PATH}`);
+      } catch (e) {
+        // squad's session is over either way; the page says the provider's may not be.
+        log.warn("end_session_unavailable", e instanceof OidcError ? { reason: e.reason } : { reason: "unknown" });
+      }
+      const body: LogoutEverywhere = end === undefined ? { to: `${SIGNED_OUT_PATH}?${SIGNED_OUT_SQUAD_ONLY}`, provider: false } : { to: end, provider: true };
+      return sendJson(res, "auth/logout/everywhere", 200, body);
     } else {
       return sendText(res, 404, "not found\n");
     }
