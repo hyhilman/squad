@@ -21,7 +21,7 @@ SQUAD_DOCKER="$work/fake-docker" SQUAD_HOME="$home" npx squad image build pi 2>&
 echo "== bundled paths from the installed dist"
 node -e 'import("./node_modules/squad/dist/paths.js").then(m=>{for (const r of ["webapp","images","assets/codex-config.toml"]) console.log(r, "->", m.bundledPath(r))})'
 echo "== files exist"; ls node_modules/squad/dist/webapp/index.html node_modules/squad/dist/images/entry.sh node_modules/squad/dist/assets/codex-config.toml
-echo "== types"; echo 'import type { PassRequest } from "squad"; export const x: PassRequest | undefined = undefined;' > t.ts
+echo "== types"; echo 'import type { PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions } from "squad"; export const x: [PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions] | undefined = undefined;' > t.ts
 "$repo/node_modules/.bin/tsc" --noEmit --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node --typeRoots "$repo/node_modules/@types" t.ts && echo "types ok"
 echo "== webapp holds the built app only"
 test -f node_modules/squad/dist/webapp/index.html

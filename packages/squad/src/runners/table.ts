@@ -6,6 +6,7 @@ import { ClaudeStream } from "../streams/claude.ts";
 import { CodexStream } from "../streams/codex.ts";
 import { PiStream } from "../streams/pi.ts";
 import type { StreamOutcome } from "../types.ts";
+import { skillBody } from "../turn.ts";
 import { cliArgs as claudeArgs } from "./claude.ts";
 import { cliArgs as codexArgs } from "./codex.ts";
 import { cliArgs as piArgs, type CliPlan } from "./pi.ts";
@@ -24,6 +25,10 @@ export interface CliRequest {
   /** codex only: the host folder mounted at /squad/out for its last-message file. */
   readonly outDir?: string;
   readonly cwd?: string;
+  /** The standard fields (see ../turn.ts). `skill.text` is SKILL.md, read by the caller. */
+  readonly system?: string;
+  readonly effort?: string;
+  readonly skill?: { readonly name: string; readonly dir: string; readonly text: string };
 }
 
 export interface RunnerSpec {
@@ -40,17 +45,18 @@ const need = (v: string | undefined, what: string): string => {
 
 export const RUNNER_SPECS = {
   pi: {
-    cli: (r) => piArgs({ model: r.model, effort: null, prompt: r.prompt, skill: null, sessionId: r.sessionId ?? null, guidance: null }),
+    cli: (r) => piArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined ? r.prompt : `/skill:${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, sessionId: r.sessionId ?? null, guidance: r.system ?? null }),
     stream: () => new PiStream(),
     exportOf: (raw, _o, meta) => piExport(raw, meta),
   },
   claude: {
-    cli: (r) => claudeArgs({ model: r.model, effort: null, prompt: r.prompt, skill: null }),
+    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined ? r.prompt : `/${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, system: r.system ?? null }),
     stream: () => new ClaudeStream(),
     exportOf: (_raw, o, meta) => claudeExport(o, meta),
   },
   codex: {
-    cli: (r) => codexArgs({ model: r.model, effort: null, prompt: r.prompt, skill: null, cwd: need(r.cwd, "cwd"), outDir: need(r.outDir, "outDir") }),
+    // codex has no system or skill flag: both go into the prompt, in this order.
+    cli: (r) => codexArgs({ model: r.model, effort: r.effort ?? null, prompt: [r.system, r.skill === undefined ? undefined : skillBody(r.skill.text), r.prompt].filter((x) => x !== undefined && x !== "").join("\n\n"), skill: null, cwd: need(r.cwd, "cwd"), outDir: need(r.outDir, "outDir") }),
     stream: () => new CodexStream(),
     exportOf: (_raw, o, meta) => codexExport(o, meta),
   },

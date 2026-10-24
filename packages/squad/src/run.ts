@@ -10,13 +10,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { findForbidden } from "@squad/contract";
-import { bundledPath } from "./paths.ts";
 import { applyOutcome } from "./accounts/health.ts";
 import { withKeyCopy } from "./accounts/keycopy.ts";
 import { candidates, getAccount, getHealth, putHealth, recordRoom, setState, type AccountRow } from "./accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_NO_USAGE_EXPORT_ENV, envOn, envOptional } from "./settings.ts";
-import { dockerKillArgv, dockerRunArgv, dockerStopArgv, stopGraceS, type PassPlan } from "./docker.ts";
-import type { HomeLayout } from "./home.ts";
+import { checkCallerMounts, dockerKillArgv, dockerRmArgv, dockerRunArgv, dockerStopArgv, stopGraceS, type PassPlan } from "./docker.ts";
+import { ensureCodexGuard, type HomeLayout } from "./home.ts";
 import { IMAGES } from "./images.ts";
 import { ulid } from "./ids.ts";
 import { makeLog, type Log } from "./log.ts";
@@ -28,9 +27,10 @@ import { checkSessionId, deleteSession, getSession, pinSession, sessionDir, touc
 import { isSupported, RUNNER_SPECS, type SupportedRunner } from "./runners/table.ts";
 import { isBusy, NO_TOKENS, type Store } from "./store/db.ts";
 import { writeUsageExport } from "./store/export.ts";
+import { checkContainerName, checkEffort, checkImage, checkLabels, dockerInspectImage, loadSkill, type ImageInfo, type TurnOptions } from "./turn.ts";
 import type { Failure, StreamOutcome, Usage } from "./types.ts";
 
-export interface PassRequest {
+export interface PassRequest extends TurnOptions {
   readonly runner: SupportedRunner;
   readonly model: string;
   readonly prompt: string;
@@ -46,6 +46,7 @@ export interface PassRequest {
   readonly session?: string;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
+  /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
   readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -64,6 +65,8 @@ export interface RunDeps {
   readonly busy?: (account: AccountRow, lockFile: string) => boolean;
   /** Settings source for the grace time, floors and cool times; default is process.env. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Reads an image's labels and entrypoint; default is `docker image inspect`. Tests inject a fake. */
+  readonly inspectImage?: (image: string) => ImageInfo | null;
 }
 
 export interface PassResult {
@@ -96,8 +99,6 @@ function ensureEmptyFile(path: string): void {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
 }
-
-const CODEX_CONFIG_GUARD = bundledPath("assets/codex-config.toml");
 
 export const lockPathOf = (home: HomeLayout, a: AccountRow): string => join(home.locks, a.runner, `${a.name}.lock`);
 const accountDirOf = (home: HomeLayout, a: AccountRow): string => join(home.accounts, a.runner, a.name);
@@ -152,7 +153,7 @@ interface Spawned {
 }
 
 /** Runs one `docker run`. Thin: it only moves bytes and keeps two timers. */
-function spawnDocker(docker: string, argv: string[], name: string, idleMs: number, deadlineMs: number, graceS: number, runner: SupportedRunner, stdin: string | null): Promise<Spawned> {
+function spawnDocker(docker: string, argv: string[], name: string, idleMs: number, deadlineMs: number, graceS: number, runner: SupportedRunner, stdin: string | null, tap: ((chunk: string) => void) | undefined): Promise<Spawned> {
   return new Promise((resolve) => {
     const child = spawn(docker, argv, { stdio: [stdin === null ? "ignore" : "pipe", "pipe", "pipe"] });
     const stream = RUNNER_SPECS[runner].stream();
@@ -190,6 +191,13 @@ function spawnDocker(docker: string, argv: string[], name: string, idleMs: numbe
       const s = out.write(b);
       raw += s;
       stream.push(s);
+      if (tap !== undefined && s !== "") {
+        try {
+          tap(s);
+        } catch {
+          // A broken tap must not lose the pass.
+        }
+      }
     });
     child.stderr!.on("data", (b: Buffer) => {
       err = (err + b.toString("utf8")).slice(-STDERR_KEEP * 2);
@@ -243,6 +251,14 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     checkSessionId(req.session);
     if (req.runner !== "pi") throw new Error(`${req.runner} cannot keep a session yet; only pi can`);
   }
+  const docker = deps.docker ?? envOptional(SQUAD_DOCKER_ENV, deps.env) ?? "docker";
+  // Every check of the caller's fields runs here, before an account is picked or a container starts.
+  const skill = req.skill === undefined ? undefined : loadSkill(req.skill);
+  if (req.effort !== undefined) checkEffort(req.runner, req.effort);
+  if (req.labels !== undefined) checkLabels(req.labels);
+  if (req.container !== undefined) checkContainerName(req.container);
+  if (req.mounts !== undefined) checkCallerMounts(req.mounts, deps.home.root);
+  if (req.image !== undefined) checkImage(req.image, req.runner, deps.inspectImage ?? ((i) => dockerInspectImage(docker, i)));
   const nowFn = deps.now ?? (() => new Date());
   const log = deps.log ?? makeLog();
   const { store } = deps;
@@ -285,21 +301,23 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
         mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
         chmodSync(sessionPath, 0o700);
       }
-      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }) });
+      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(req.system === undefined ? {} : { system: req.system }), ...(req.effort === undefined ? {} : { effort: req.effort }), ...(skill === undefined ? {} : { skill }), ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }) });
       // docker makes a missing mount target as an empty root-owned file inside the login folder.
       // An empty user file in its place is what codex would see anyway under the read-only guard.
       if (req.runner === "codex") ensureEmptyFile(join(dir, "config.toml"));
       const plan: PassPlan = {
         runner: req.runner,
-        image: IMAGES[req.runner].tag,
-        name: `squad-${passId.toLowerCase()}`,
+        image: req.image ?? IMAGES[req.runner].tag,
+        name: req.container ?? `squad-${passId.toLowerCase()}`,
         passId,
         caller: { project: deps.project, flow: req.caller.flow },
         user: deps.user,
         cwd: req.cwd,
         gitDir: req.gitDir ?? join(req.cwd, ".git"),
         mounts: cli.mounts,
-        overlays: req.runner === "codex" ? [{ host: CODEX_CONFIG_GUARD, container: "/codex/config.toml" }] : [],
+        callerMounts: (req.mounts ?? []).map((m) => ({ host: m.host, container: m.container, ro: m.ro })),
+        ...(req.labels === undefined ? {} : { labels: req.labels }),
+        overlays: req.runner === "codex" ? [{ host: ensureCodexGuard(deps.home), container: "/codex/config.toml" }] : [],
         session: sessionPath === null ? null : { dir: sessionPath },
         account: { name: account.name, kind: account.kind, dir },
         lockFile: account.kind === "login" ? lockPathOf(deps.home, account) : null,
@@ -309,7 +327,10 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
         env: req.env ?? {},
         args: cli.args,
       };
-      return spawnDocker(deps.docker ?? envOptional(SQUAD_DOCKER_ENV, deps.env) ?? "docker", dockerRunArgv(plan), plan.name, req.idleMs ?? DEFAULT_IDLE_MS, req.deadlineMs ?? DEFAULT_DEADLINE_MS, stopGraceS(deps.env), req.runner, cli.stdin);
+      const argv = dockerRunArgv(plan);
+      // A lost turn may still hold the name, and still write into the worktree: remove it first.
+      if (req.container !== undefined) spawnSync(docker, dockerRmArgv(plan.name, true), { stdio: "ignore" });
+      return spawnDocker(docker, argv, plan.name, req.idleMs ?? DEFAULT_IDLE_MS, req.deadlineMs ?? DEFAULT_DEADLINE_MS, stopGraceS(deps.env), req.runner, cli.stdin, req.onOutput);
     };
 
     let sp: Spawned;

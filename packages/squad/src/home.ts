@@ -2,8 +2,10 @@
 // SQUAD_HOME says otherwise. A worktree finds its main checkout through git's common dir, so every
 // worktree of one project shares one home, and one login has one writer.
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { GUARD_IN_HOME } from "./docker.ts";
+import { bundledPath } from "./paths.ts";
 import { SQUAD_DB_ENV, SQUAD_HOME_ENV, envOptional } from "./settings.ts";
 
 export const HOME_DIR_NAME = ".squad";
@@ -64,4 +66,28 @@ export function ensureHome(layout: HomeLayout): void {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     chmodSync(dir, 0o700);
   }
+}
+
+/**
+ * The codex config guard, copied into the home. A daemon that runs on another host (squad inside a
+ * container) cannot see the package's own path, but it can see the home. The copy is checked on every
+ * use, so a changed or missing file is put back. Returns the path to mount.
+ */
+export function ensureCodexGuard(layout: HomeLayout): string {
+  const want = readFileSync(bundledPath("assets/codex-config.toml"));
+  const path = join(layout.root, GUARD_IN_HOME);
+  let ok = false;
+  try {
+    ok = readFileSync(path).equals(want) && (statSync(path).mode & 0o777) === 0o644;
+  } catch {
+    // missing: write it below
+  }
+  if (!ok) {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, want, { mode: 0o644 });
+    chmodSync(tmp, 0o644);
+    renameSync(tmp, path);
+  }
+  return path;
 }

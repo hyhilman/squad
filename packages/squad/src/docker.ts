@@ -28,6 +28,10 @@ export interface PassPlan {
   /** The main repo's .git. A worktree keeps its objects there. */
   readonly gitDir: string;
   readonly mounts: readonly Mount[];
+  /** Mounts the caller asked for. They get stricter target checks than `mounts`, which squad builds itself. */
+  readonly callerMounts?: readonly Mount[];
+  /** Extra labels from the caller. Keys under `squad.` are refused. */
+  readonly labels?: Readonly<Record<string, string>>;
   /**
    * Files laid read-only over a path inside the account mount. Only `/codex/config.toml` is allowed
    * for now. The host file must be outside the home.
@@ -72,6 +76,8 @@ function mountArg(host: string, container: string, ro: boolean): string {
 const RESERVED = ["/squad", "/pi", "/codex", "/claude", "/gh"];
 /** The one file an overlay may cover. */
 const OVERLAY_TARGET = "/codex/config.toml";
+/** Where `ensureCodexGuard` (home.ts) puts its copy, relative to the home. */
+export const GUARD_IN_HOME = "state/assets/codex-config.toml";
 const RUNNER_PATHS = ["/squad/skills", "/squad/out", "/squad/sessions"];
 
 const within = (path: string, base: string): boolean => path === base || path.startsWith(base.endsWith("/") ? base : `${base}/`);
@@ -79,6 +85,20 @@ const within = (path: string, base: string): boolean => path === base || path.st
 function checkExtraTarget(container: string): void {
   const c = posix.normalize(container);
   if (RESERVED.some((r) => within(c, r)) && !RUNNER_PATHS.some((r) => within(c, r))) throw new Error(`mount target ${container} is reserved for squad`);
+}
+
+/** Targets of a caller mount: squad's own paths, runner paths included, and pi's skill folder are all closed. */
+const CLOSED_FOR_CALLER = [...RESERVED, "/skills"];
+
+/** Checks the mounts a caller asked for. Exported so `runPass` can refuse before it picks an account. */
+export function checkCallerMounts(mounts: readonly Mount[], home: string | null | undefined): void {
+  for (const m of mounts) {
+    const target = m.container ?? m.host;
+    if (!posix.isAbsolute(m.host) || !posix.isAbsolute(target)) throw new Error(`mount ${m.host} -> ${target}: both paths must be absolute`);
+    const c = posix.normalize(target);
+    if (CLOSED_FOR_CALLER.some((r) => within(c, r)) || c === "/") throw new Error(`mount target ${target} is reserved for squad`);
+    checkHome(m.host, home);
+  }
 }
 
 /** A mount of the home, inside it, or of a parent of it would expose accounts the pass does not own. */
@@ -105,6 +125,10 @@ export function dockerRunArgv(plan: PassPlan): string[] {
 
   const argv = ["run", "--rm", plan.tty === true ? "-it" : "-i", "--init", "--name", plan.name];
   argv.push("--label", `squad.pass=${plan.passId}`, "--label", `squad.caller=${plan.caller.project}/${plan.caller.flow}`, "--label", `squad.account=${runner}/${account.name}`, "--label", `squad.purpose=${plan.purpose ?? "pass"}`);
+  for (const [k, v] of Object.entries(plan.labels ?? {})) {
+    if (k.startsWith("squad.")) throw new Error(`label ${k}: keys under squad. are reserved`);
+    argv.push("--label", `${k}=${v}`);
+  }
   argv.push("--network", "host");
   if (plan.user !== null) argv.push("--user", `${plan.user.uid}:${plan.user.gid}`);
 
@@ -113,7 +137,8 @@ export function dockerRunArgv(plan: PassPlan): string[] {
   argv.push("--mount", mountArg(plan.cwd, plan.cwd, false), "-w", plan.cwd);
   // A git dir inside cwd is already mounted, and a second mount of the same tree is noise.
   if (!within(plan.gitDir, plan.cwd)) argv.push("--mount", mountArg(plan.gitDir, plan.gitDir, false));
-  for (const m of plan.mounts) {
+  checkCallerMounts(plan.callerMounts ?? [], plan.home);
+  for (const m of [...plan.mounts, ...(plan.callerMounts ?? [])]) {
     const target = m.container ?? m.host;
     checkExtraTarget(target);
     if (plan.session !== null && within(posix.normalize(target), "/squad/sessions")) throw new Error(`mount target ${target} is the session's`);
@@ -135,7 +160,8 @@ export function dockerRunArgv(plan: PassPlan): string[] {
   // An overlay comes after the account mount: in docker a later mount on a sub-path wins.
   for (const o of plan.overlays) {
     if (runner !== "codex" || posix.normalize(o.container) !== OVERLAY_TARGET) throw new Error(`overlay target ${o.container} is not allowed; only ${OVERLAY_TARGET} for codex`);
-    checkHome(o.host, plan.home);
+    // The home's own copy of the guard is the one file of the home that may be mounted.
+    if (plan.home === null || plan.home === undefined || posix.resolve(o.host) !== posix.join(posix.resolve(plan.home), GUARD_IN_HOME)) checkHome(o.host, plan.home);
     argv.push("--mount", mountArg(o.host, OVERLAY_TARGET, true));
   }
   if (account.kind === "login") argv.push("--mount", mountArg(plan.lockFile!, "/squad/lock", true), "-e", "SQUAD_LOCK=1");

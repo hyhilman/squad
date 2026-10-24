@@ -53,3 +53,10 @@ test("each image sets its account folder", () => {
   assert.ok(dockerfile("claude").includes("CLAUDE_CONFIG_DIR=/claude"));
   assert.ok(dockerfile("claude").includes("DISABLE_AUTOUPDATER=1"));
 });
+
+test("every runner Dockerfile carries the squad.entry=1 label, which checkImage looks for", () => {
+  for (const runner of ["pi", "codex", "claude"]) {
+    const text = dockerfile(runner);
+    assert.match(text, /^LABEL squad\.entry="1"$/m, runner);
+  }
+});

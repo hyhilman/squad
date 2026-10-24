@@ -49,4 +49,6 @@ COPY pi/gitconfig /etc/gitconfig
 COPY entry.sh /usr/local/bin/squad-entry
 
 WORKDIR /work
+# The caller images built FROM this one are checked for this label (see turn.ts checkImage): the account lock lives in squad-entry.
+LABEL squad.entry="1"
 ENTRYPOINT ["squad-entry", "pi"]

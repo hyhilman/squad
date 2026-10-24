@@ -13,6 +13,8 @@ import { makeLog } from "./log.ts";
 import { runPass, type PassRequest, type RunDeps } from "./run.ts";
 import { openStore, type Store } from "./store/db.ts";
 import { findForbidden } from "@squad/contract";
+import { chmodSync } from "node:fs";
+import { bundledPath } from "./paths.ts";
 
 interface Rig {
   home: HomeLayout;
@@ -589,8 +591,7 @@ test("codex login pass: real folder at /codex, the lock, and a read-only empty c
   const over = m.findIndex((x) => x.target === "/codex/config.toml");
   assert.ok(acct >= 0 && over > acct, "the overlay comes after the account mount");
   assert.equal(m[acct]!.source, join(r.home.accounts, "codex", "c1"));
-  assert.ok(m[over]!.source.endsWith("/assets/codex-config.toml"));
-  assert.ok(!m[over]!.source.startsWith(r.home.root), "the overlay file is outside the home");
+  assert.equal(m[over]!.source, join(r.home.state, "assets", "codex-config.toml"), "the daemon sees the home, not the package");
   assert.ok(argv.some((a) => a.includes("target=/codex/config.toml,readonly")));
   assert.equal(m.filter((x) => x.target === "/squad/lock").length, 1);
   const body = readFileSync(m[over]!.source, "utf8");
@@ -671,4 +672,182 @@ test("breaker: closed while one account can run, and a named account is not chec
   assert.equal(res.account, "pi/k2");
   const named = await runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps);
   assert.ok(!named.failure?.message.startsWith("breaker open"));
+});
+
+// ---- standard fields and container options ----
+
+const skillDir = (name = "fix"): string => {
+  const d = join(mkdtempSync(join(tmpdir(), "skill-")), name);
+  mkdirSync(d);
+  writeFileSync(join(d, "SKILL.md"), "---\nname: fix\ndescription: x\n---\n\nStep one.\n");
+  return d;
+};
+const flagValues = (argv: string[], flag: string): string[] => argv.flatMap((a, i) => (argv[i - 1] === flag ? [a] : []));
+const roMount = (argv: string[], target: string): { source: string; ro: boolean } | undefined => {
+  const m = flagValues(argv, "--mount").find((x) => x.includes(`target=${target}`));
+  return m === undefined ? undefined : { source: m.split(",")[1]!.replace("source=", ""), ro: m.endsWith(",readonly") };
+};
+const noContainer = (r: Rig): void => {
+  assert.equal(r.fake.calls().length, 0, "no docker call");
+  assert.equal(passes(r).length, 0, "no pass row");
+};
+
+test("pi: system, skill and effort become --append-system-prompt, --skill (a read-only mount) and --thinking", async () => {
+  const r = rig();
+  const dir = skillDir();
+  await runPass(req(r, { system: "be brief", skill: { name: "fix", dir }, effort: "high", prompt: "go" }), r.deps);
+  const argv = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(flagValues(argv, "--append-system-prompt"), ["be brief"]);
+  assert.deepEqual(flagValues(argv, "--skill"), ["/skills/fix"]);
+  assert.deepEqual(flagValues(argv, "--thinking"), ["high"]);
+  assert.deepEqual(roMount(argv, "/skills/fix"), { source: dir, ro: true });
+  assert.equal(argv.at(-1), "/skill:fix go");
+});
+
+test("codex: stdin is system, a blank line, the skill text without front matter, a blank line, the message; effort is -c", async () => {
+  const r = codexRig("key");
+  await runPass(codexReq(r, { system: "SYS", skill: { name: "fix", dir: skillDir() }, effort: "max", prompt: "MSG" }), r.deps);
+  assert.deepEqual(r.fake.stdins(), ["SYS\n\nStep one.\n\nMSG"]);
+  const argv = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(flagValues(argv, "-c"), ["model_reasoning_effort=max"]);
+  assert.ok(!argv.includes("--append-system-prompt") && !argv.includes("--skill"));
+});
+
+test("codex: with only a message, stdin is the message alone", async () => {
+  const r = codexRig("key");
+  await runPass(codexReq(r, { prompt: "MSG" }), r.deps);
+  assert.deepEqual(r.fake.stdins(), ["MSG"]);
+});
+
+test("claude: --append-system-prompt, --effort, the skill mounted read-only under .claude/skills with --add-dir, and the prompt starts /<name>", async () => {
+  const r = claudeRig();
+  const dir = skillDir();
+  await runPass(claudeReq(r, { system: "SYS", skill: { name: "fix", dir }, effort: "xhigh", prompt: "MSG" }), r.deps);
+  const argv = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(flagValues(argv, "--append-system-prompt"), ["SYS"]);
+  assert.deepEqual(flagValues(argv, "--effort"), ["xhigh"]);
+  assert.deepEqual(flagValues(argv, "--add-dir"), ["/squad/skills"]);
+  assert.deepEqual(roMount(argv, "/squad/skills/.claude/skills/fix"), { source: dir, ro: true });
+  assert.deepEqual(r.fake.stdins(), ["/fix MSG"]);
+});
+
+test("a bad skill name, a dir without SKILL.md and a bad effort are refused before any account or container", async () => {
+  const rigs: [PassRequest["runner"], string, () => Rig][] = [["pi", "opencode-go/hy4-preview", () => rig()], ["codex", "gpt-6.1-sol", () => codexRig("key")], ["claude", "claude-opus-5-5", () => claudeRig()]];
+  for (const [runner, model, make] of rigs) {
+    const r = make();
+    const base: PassRequest = { runner, model, prompt: "x", pool: "all", cwd: r.cwd, caller: { flow: "f", action: "a" } };
+    await assert.rejects(runPass({ ...base, skill: { name: "../x", dir: skillDir() } }, r.deps), /skill name/);
+    const empty = mkdtempSync(join(tmpdir(), "noskill-"));
+    await assert.rejects(runPass({ ...base, skill: { name: "fix", dir: empty } }, r.deps), /SKILL\.md/);
+    for (const bad of ["off", "ultra", ""]) await assert.rejects(runPass({ ...base, effort: bad as "low" }, r.deps), /effort/);
+    noContainer(r);
+  }
+});
+
+test("a mount into the home, over a reserved path or a relative path is refused before any container", async () => {
+  const r = rig();
+  const outside = mkdtempSync(join(tmpdir(), "m-"));
+  await assert.rejects(runPass(req(r, { mounts: [{ host: join(r.home.root, "accounts"), container: "/data", ro: true }] }), r.deps), /home/);
+  await assert.rejects(runPass(req(r, { mounts: [{ host: r.home.root, container: "/data", ro: true }] }), r.deps), /home/);
+  for (const container of ["/pi", "/pi/auth.json", "/squad/lock", "/squad/out", "/squad/skills/x", "/gh", "/codex", "/claude/x", "/skills/fix", "/squad/../pi", "rel"]) {
+    await assert.rejects(runPass(req(r, { mounts: [{ host: outside, container, ro: true }] }), r.deps), /reserved|absolute/, container);
+  }
+  await assert.rejects(runPass(req(r, { mounts: [{ host: "rel/dir", container: "/data", ro: true }] }), r.deps), /absolute/);
+  noContainer(r);
+});
+
+test("caller mounts are --mount, read-only when asked, and PATH from the caller reaches -e", async () => {
+  const r = rig();
+  const a = mkdtempSync(join(tmpdir(), "m-"));
+  const b = mkdtempSync(join(tmpdir(), "m-"));
+  await runPass(req(r, { mounts: [{ host: a, container: "/opt/tools", ro: true }, { host: b, container: "/node_modules", ro: false }], env: { PATH: "/opt/tools/bin:/usr/bin" } }), r.deps);
+  const argv = r.fake.callsOf("run")[0]!;
+  assert.deepEqual(roMount(argv, "/opt/tools"), { source: a, ro: true });
+  assert.deepEqual(roMount(argv, "/node_modules"), { source: b, ro: false });
+  assert.ok(!argv.includes("-v"));
+  assert.deepEqual(flagValues(argv, "-e").filter((e) => e.startsWith("PATH=")), ["PATH=/opt/tools/bin:/usr/bin"]);
+});
+
+test("labels are added as --label; a squad. key, a bad key and a squad- container name are refused", async () => {
+  const r = rig();
+  await runPass(req(r, { labels: { "doppel.job": "j1" } }), r.deps);
+  assert.ok(flagValues(r.fake.callsOf("run")[0]!, "--label").includes("doppel.job=j1"));
+  const before = r.fake.calls().length;
+  await assert.rejects(runPass(req(r, { labels: { "squad.pass": "x" } }), r.deps), /squad\./);
+  await assert.rejects(runPass(req(r, { labels: { "a b": "x" } }), r.deps), /label/);
+  await assert.rejects(runPass(req(r, { container: "squad-123" }), r.deps), /container/);
+  await assert.rejects(runPass(req(r, { container: "-x" }), r.deps), /container/);
+  assert.equal(r.fake.calls().length, before);
+});
+
+test("a fixed container name: docker rm -f of that name comes first, then run with that --name", async () => {
+  const r = rig();
+  await runPass(req(r, { container: "doppel-job-1" }), r.deps);
+  const calls = r.fake.calls();
+  assert.deepEqual(calls[0], ["rm", "-f", "doppel-job-1"]);
+  assert.equal(calls[1]![0], "run");
+  assert.deepEqual(flagValues(calls[1]!, "--name"), ["doppel-job-1"]);
+});
+
+test("without a container name there is no rm", async () => {
+  const r = rig();
+  await runPass(req(r), r.deps);
+  assert.equal(r.fake.callsOf("rm").length, 0);
+});
+
+test("onOutput gets every stdout chunk, in order, and parsing does not change", async () => {
+  const r = rig();
+  const chunks: string[] = [];
+  const res = await runPass(req(r, { onOutput: (c) => chunks.push(c) }), r.deps);
+  assert.equal(chunks.join(""), readFileSync(join(import.meta.dirname, "..", "test/fixtures/captures/pi/ok.jsonl"), "utf8"));
+  assert.equal(res.text, "ok");
+});
+
+test("a throwing onOutput does not break the pass", async () => {
+  const r = rig();
+  const res = await runPass(req(r, { onOutput: () => { throw new Error("boom"); } }), r.deps);
+  assert.equal(res.text, "ok");
+});
+
+const inspectOf = (labels: Record<string, string> | null, entrypoint: string[] | null) => () => ({ labels: labels ?? {}, entrypoint });
+
+test("image: a caller image that keeps squad's label and entrypoint is used", async () => {
+  const r = rig([], {});
+  const r2 = rig(["k1"], { inspectImage: inspectOf({ "squad.entry": "1" }, ["squad-entry", "pi"]) });
+  await runPass(req(r2, { image: "doppel-pi:1" }), r2.deps);
+  assert.ok(r2.fake.callsOf("run")[0]!.includes("doppel-pi:1"));
+  assert.ok(r);
+});
+
+test("image: no label, a foreign entrypoint, a missing image or another runner's entrypoint are refused before any container", async () => {
+  const cases: [(image: string) => { labels: Record<string, string>; entrypoint: string[] | null } | null, RegExp][] = [
+    [inspectOf({}, ["squad-entry", "pi"]), /squad\.entry/],
+    [inspectOf({ "squad.entry": "1" }, ["/bin/sh"]), /entrypoint/],
+    [inspectOf({ "squad.entry": "1" }, null), /entrypoint/],
+    [inspectOf({ "squad.entry": "1" }, ["squad-entry", "codex"]), /entrypoint/],
+    [() => null, /not found/],
+  ];
+  for (const [inspect, re] of cases) {
+    const r = rig(["k1"], { inspectImage: inspect });
+    await assert.rejects(runPass(req(r, { image: "x:1" }), r.deps), re);
+    noContainer(r);
+  }
+  const r = rig(["k1"], { inspectImage: inspectOf({ "squad.entry": "1" }, ["squad-entry", "pi"]) });
+  await assert.rejects(runPass(req(r, { image: "--privileged" }), r.deps), /image/);
+});
+
+test("codex: the config guard is a copy in the home, mode 0644, and is restored when changed", async () => {
+  const r = codexRig("login");
+  await runPass(codexReq(r), r.deps);
+  const src = roMount(r.fake.callsOf("run")[0]!, "/codex/config.toml")!;
+  const copy = join(r.home.state, "assets", "codex-config.toml");
+  assert.equal(src.source, copy);
+  assert.equal(src.ro, true);
+  assert.equal(statSync(copy).mode & 0o777, 0o644);
+  assert.equal(readFileSync(copy, "utf8"), readFileSync(bundledPath("assets/codex-config.toml"), "utf8"));
+  writeFileSync(copy, 'model = "evil"\n');
+  chmodSync(copy, 0o600);
+  await runPass(codexReq(r), r.deps);
+  assert.equal(readFileSync(copy, "utf8"), readFileSync(bundledPath("assets/codex-config.toml"), "utf8"));
+  assert.equal(statSync(copy).mode & 0o777, 0o644);
 });

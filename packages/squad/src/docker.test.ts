@@ -232,3 +232,19 @@ test("labels: squad.purpose is pass by default, and login and shell when asked; 
     assert.ok(l.includes("squad.account=pi/alice"));
   }
 });
+
+test("an overlay may be the home's own guard copy and nothing else in the home", () => {
+  const ok = dockerRunArgv(plan({ runner: "codex", overlays: [{ host: `${HOME}/state/assets/codex-config.toml`, container: "/codex/config.toml" }] }));
+  assert.ok(mountsOf(ok).includes(`${HOME}/state/assets/codex-config.toml:/codex/config.toml:ro`));
+  assert.throws(() => dockerRunArgv(plan({ runner: "codex", overlays: [{ host: `${HOME}/state/assets/other.toml`, container: "/codex/config.toml" }] })), /home/);
+  assert.throws(() => dockerRunArgv(plan({ runner: "codex", overlays: [{ host: `${HOME}/state/assets/../../accounts/codex/a/config.toml`, container: "/codex/config.toml" }] })), /home/);
+});
+
+test("caller mounts: --mount, closed targets, absolute paths, never the home; labels never under squad.", () => {
+  const a = dockerRunArgv(plan({ callerMounts: [{ host: "/opt/t", container: "/tools", ro: true }], labels: { "x.y": "1" } }));
+  assert.ok(mountsOf(a).includes("/opt/t:/tools:ro"));
+  assert.ok(pairs(a, "--label").includes("x.y=1"));
+  for (const container of ["/pi/x", "/squad/out", "/squad/skills", "/skills/a", "/", "rel"]) assert.throws(() => dockerRunArgv(plan({ callerMounts: [{ host: "/opt/t", container, ro: true }] })), /reserved|absolute/, container);
+  assert.throws(() => dockerRunArgv(plan({ callerMounts: [{ host: `${HOME}/locks`, container: "/t", ro: true }] })), /home/);
+  assert.throws(() => dockerRunArgv(plan({ labels: { "squad.pass": "x" } })), /squad\./);
+});

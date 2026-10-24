@@ -111,6 +111,24 @@ const result = await runPass(
 id. `result` holds the pass id, the account, the final text, every assistant text, the token use
 and, on failure, `{ kind, code, message }`.
 
+A request can also carry fields that every runner takes in the same form. squad turns each one into
+that CLI's own flags:
+
+- `system`: extra system prompt. codex has no flag, so it goes at the top of the prompt.
+- `skill: { name, dir }`: a folder with `SKILL.md`. It is mounted read-only. For codex the text of
+  `SKILL.md` (without its front matter) goes before the message.
+- `effort`: `low`, `medium`, `high`, `xhigh` or `max`.
+- `mounts: [{ host, container, ro }]`: extra read-only or read-write mounts. Never the squad home
+  and never a path squad owns. Set `env.PATH` if the tools are in a mount.
+- `image`: your own image built `FROM` a squad image. It must keep the `squad.entry=1` label and the
+  `squad-entry` entrypoint, because the account lock lives there.
+- `container` (a fixed name; `docker rm -f` of it runs first) and `labels` (`squad.*` keys are
+  reserved).
+- `onOutput(chunk)`: each stdout chunk as it arrives.
+
+A bad value is a thrown error before any account or container is touched. `openHome(dir?, env?)`
+returns `{ home, store }` for the `deps`.
+
 ## Web view
 
 `squad web` serves the API and the built web app from one origin. Sign-in is OIDC (the code flow
