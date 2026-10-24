@@ -1,6 +1,6 @@
 import type { Health } from "@squad/contract";
 
-/** Ant Design Tag colors. */
+/** The colour of a badge; the page maps it to a palette. */
 export type BadgeColor = "success" | "error" | "warning" | "processing" | "default";
 
 const HEALTH: Readonly<Record<Health, BadgeColor>> = {

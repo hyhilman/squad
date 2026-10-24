@@ -1,6 +1,6 @@
 ---
-// The one page. The whole app is a single React island: Refine needs the browser (router, query
-// cache), so it renders on the client only.
+// The one page. The whole app is a single React island that renders on the client only: it needs the
+// browser (router, query cache, the CSP nonce in the meta tag the server adds to <head>).
 import App from "../app/App.tsx";
 ---
 <!doctype html>

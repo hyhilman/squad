@@ -1,7 +1,0 @@
-/* Ant Design brings its own styles. Only the page background follows the system. */
-html, body { margin: 0; }
-
-/* On a phone the sider's menu button floats over the top-left of the page; keep page titles clear of it. */
-@media (max-width: 767px) {
-  .ant-layout-content { padding-top: 48px !important; }
-}

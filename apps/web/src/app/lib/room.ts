@@ -9,3 +9,5 @@ export function roomState(left: number, floor: number): RoomState {
   if (usable > 5) return "orange";
   return "red";
 }
+
+export const roomLabel = (left: number | undefined, floor: number): string => (left === undefined ? "no read yet" : `${left}% · floor ${floor}%`);

@@ -215,7 +215,7 @@ account and is empty for a seat. The Usage page compares the two sums by provide
 ```
 packages/contract/  the HTTP API between the backend and the web app
 packages/squad/     the library, the CLI and the web server
-apps/web/           the web app (Astro and Refine)
+apps/web/           the web app (Astro, React and Chakra UI)
 images/             the runner images and their entrypoint
 ```
 
@@ -227,3 +227,18 @@ contract, the images and the web app are inside it.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## SDK
+
+Another app on the same site can call the squad API with the typed SDK. Each release holds a
+second tarball, `squad-contract-<version>.tgz` (`npm run pack:sdk -- <dir>` makes it). It is the
+package `@squad/contract`.
+
+```ts
+import { call } from "@squad/contract";
+await call(fetch, "https://squad.example.com", "listAccounts", {}, { credentials: "include" });
+```
+
+The server must list the app's origin: `SQUAD_WEB_API_ORIGINS=https://app.example.com`. The session
+cookie is `SameSite=Lax`, so the app must be on the same site as squad (`app.example.com` and
+`squad.example.com`). A different site will not work.

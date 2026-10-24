@@ -9,6 +9,8 @@ export default defineConfig({
   integrations: [react()],
   server: { host: "127.0.0.1" },
   vite: {
+    // The CSP allows only files from the same origin, so no asset may be inlined as a data: URI.
+    build: { assetsInlineLimit: 0 },
     server: {
       // In dev, the API comes from a local `squad web --api-only`.
       proxy: { "/api": "http://127.0.0.1:20140", "/auth": "http://127.0.0.1:20140", "/logos": "http://127.0.0.1:20140" },

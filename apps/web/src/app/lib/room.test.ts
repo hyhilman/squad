@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { roomState } from "./room.ts";
+import { roomLabel, roomState } from "./room.ts";
 
 test("the colour follows the room left after the floor: >50 blue, >25 yellow, >5 orange, else red", () => {
   assert.equal(roomState(100, 10), "blue");
@@ -13,4 +13,9 @@ test("the colour follows the room left after the floor: >50 blue, >25 yellow, >5
   assert.equal(roomState(10, 10), "red", "at the floor the pool skips it");
   assert.equal(roomState(3, 10), "red");
   assert.equal(roomState(80, 0), "blue");
+});
+
+test("roomLabel: the room left and the floor, or a plain word when unread", () => {
+  assert.equal(roomLabel(88, 10), "88% · floor 10%");
+  assert.equal(roomLabel(undefined, 10), "no read yet");
 });

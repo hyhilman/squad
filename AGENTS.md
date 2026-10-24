@@ -13,8 +13,8 @@ packages/contract/  @squad/contract: the HTTP API between backend and web app. R
                     typed `call`, and `findForbidden`. No dependencies, no Node types in its code.
 packages/squad/     squad: the backend. The library other tools import, the
                     `squad` CLI, and `squad web` (the API server that also serves the built web app).
-apps/web/           @squad/web: the web app. Astro builds one page; Refine core runs in one React
-                    island on the client.
+apps/web/           @squad/web: the web app. Astro builds one page; the whole app is one React
+                    island on the client (Chakra UI, React Router, TanStack Query, recharts).
 docs/               the design doc.
 ```
 
@@ -33,7 +33,7 @@ docs/               the design doc.
 - `npm test` at the root runs every workspace's tests, each with its type check first. It must pass
   before every commit that lands on a base branch.
 - `node --test <file>` runs one backend or contract test file.
-- `npm run dev -w @squad/web` runs the web app, with `/api` and `/auth` proxied to a local
+- `npm run dev -w @squad/web` runs the web app, with `/api`, `/auth` and `/logos` proxied to a local
   `squad web --api-only`.
 - Backend and contract have no build step for development or tests: Node strips the types at run
   time. Prefer Node's built-in modules (`node:test`, `node:sqlite`, `node:crypto`) over a new
@@ -42,6 +42,9 @@ docs/               the design doc.
   the web app. `npm run build -w squad` (also `prepack`) emits `packages/squad/dist/` with the
   contract vendored inside, the images, the codex config guard and the built web app.
   `packages/squad/scripts/check-pack.sh` installs the tarball into a fresh folder and checks it.
+- `npm run pack:sdk -- <dest dir>` packs `@squad/contract` as `squad-contract-<version>.tgz` (the SDK
+  for other apps; the version is squad's). `packages/contract/scripts/check-pack.sh` installs it in a
+  fresh folder, imports it and type-checks it with no DOM and no Node types.
 - The web app's pure helpers (`apps/web/src/app/lib/`) have `node --test` tests; its `npm test` runs
   them after `astro check`.
 - `SQUAD_DOCKER_CHECK=1 node --test <file>` runs the tests that start real containers. `npm test`
@@ -54,7 +57,7 @@ docs/               the design doc.
 - The backend has no runtime dependency. `@squad/contract` is a devDependency: the build vendors it
   into `dist/vendor/contract`, because it is not published. Ask before adding any dependency.
 - The web app's dependencies stay in `apps/web`. Telemetry is off: the scripts set
-  `ASTRO_TELEMETRY_DISABLED=1`, and `<Refine>` sets `disableTelemetry`.
+  `ASTRO_TELEMETRY_DISABLED=1`.
 
 ## Secrets and accounts
 
