@@ -206,7 +206,9 @@ The token is shown once; squad keeps only its sha256. Every call sends `Authoriz
 - the accounts a pass may name;
 - the host paths: `cwd`, `gitDir`, `skill.dir` and every mount host must exist and be inside one of
   the roots after symlinks are resolved, and must not touch the squad home;
-- the image: squad's own, or one given with `--images`.
+- the image: squad's own, or one given with `--images`;
+- the `container` name: it must start with the project name and a dash (`<project>-...`), because
+  squad runs `docker rm -f` on it before the pass.
 
 Out of scope is a 403 that names the field only.
 

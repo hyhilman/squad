@@ -354,8 +354,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
         const b = turnBody(await jsonBody(req));
         if (conv.closed_at !== null) throw new Refusal(409, "the conversation is closed");
         // The paths were checked at open; check them again, so a symlink swapped since cannot move a mount.
-        const spec = JSON.parse(conv.spec) as Partial<ScopedSetup> & { image?: string };
-        scopeSetup(token, { runner: conv.runner as "pi", account: conv.account, cwd: conv.cwd, ...(spec.gitDir === undefined ? {} : { gitDir: spec.gitDir }), ...(spec.skill === undefined ? {} : { skill: spec.skill }), ...(spec.mounts === undefined ? {} : { mounts: spec.mounts }), ...(spec.image === undefined ? {} : { image: spec.image }) }, scopeCtx);
+        const spec = JSON.parse(conv.spec) as Partial<ScopedSetup> & { image?: string; container?: string };
+        scopeSetup(token, { runner: conv.runner as "pi", account: conv.account, cwd: conv.cwd, ...(spec.gitDir === undefined ? {} : { gitDir: spec.gitDir }), ...(spec.skill === undefined ? {} : { skill: spec.skill }), ...(spec.mounts === undefined ? {} : { mounts: spec.mounts }), ...(spec.image === undefined ? {} : { image: spec.image }), ...(spec.container === undefined ? {} : { container: spec.container }) }, scopeCtx);
         if (stopping) throw STOPPING();
         const deps = depsFor(token, b.identity);
         return streamed(res, name, token, "turn", conv.runner, conv.account, (onStart, onOutput) => send(id, b.message, { onStart, onOutput, ...(b.idleMs === undefined ? {} : { idleMs: b.idleMs }), ...(b.deadlineMs === undefined ? {} : { deadlineMs: b.deadlineMs }) }, deps), failedTurn(conv.account));

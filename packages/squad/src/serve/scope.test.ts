@@ -91,3 +91,11 @@ test("a cwd owned by another uid is a 403 that names both uids", () => {
     return true;
   });
 });
+
+test("a container name must start with the token's project and a dash, so a token can only replace its own containers", () => {
+  const { repo, token, ctx } = setup();
+  assert.equal(scopeSetup(token, { runner: "pi", account: "one", cwd: repo, container: "p-review-42" }, ctx).account, "pi/one");
+  assert.throws(() => scopeSetup(token, { runner: "pi", account: "one", cwd: repo, container: "postgres" }, ctx), forbidden("container"));
+  assert.throws(() => scopeSetup(token, { runner: "pi", account: "one", cwd: repo, container: "p" }, ctx), forbidden("container"));
+  assert.throws(() => scopeSetup(token, { runner: "pi", account: "one", cwd: repo, container: "pp-x" }, ctx), forbidden("container"), "another project that starts with the same letters");
+});

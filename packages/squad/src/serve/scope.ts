@@ -39,6 +39,8 @@ export interface SetupPaths {
   readonly skill?: SkillRef;
   readonly mounts?: readonly ExtraMount[];
   readonly image?: string;
+  /** squad runs `docker rm -f` on this name before the pass, so it must be the token's own. */
+  readonly container?: string;
 }
 
 export interface ScopedSetup {
@@ -95,5 +97,7 @@ export function scopeSetup(token: ProjectToken, s: SetupPaths, ctx: ScopeContext
   const skill = s.skill === undefined ? undefined : { name: s.skill.name, dir: scopedPath(token, ctx, s.skill.dir, "skill.dir") };
   const mounts = s.mounts?.map((m, i) => ({ host: scopedPath(token, ctx, m.host, `mounts[${i}].host`), container: m.container, ro: m.ro }));
   if (s.image !== undefined && s.image !== IMAGES[s.runner].tag && !token.images.includes(s.image)) throw outOfScope("image");
+  // Without the project prefix a token could name any container on the host and have it removed.
+  if (s.container !== undefined && (!s.container.startsWith(`${token.project}-`) || s.container.length === token.project.length + 1)) throw outOfScope("container");
   return { account, cwd, ...(gitDir === undefined ? {} : { gitDir }), ...(skill === undefined ? {} : { skill }), ...(mounts === undefined ? {} : { mounts }) };
 }
