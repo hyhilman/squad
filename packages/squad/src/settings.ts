@@ -47,6 +47,16 @@ export const SQUAD_NO_WEB_LOGIN_ENV: EnvSpec = {
   default: "0",
   why: "1 = `squad web` refuses to start, so nobody can sign in to the web view (fail safe)",
 };
+export const SQUAD_NO_SERVE_ENV: EnvSpec = {
+  key: "SQUAD_NO_SERVE",
+  default: "0",
+  why: "1 = `squad serve` refuses to start, so no machine caller can start a pass (fail safe)",
+};
+export const SQUAD_SERVE_DRAIN_S_ENV: EnvSpec = {
+  key: "SQUAD_SERVE_DRAIN_S",
+  default: "60",
+  why: "seconds `squad serve` lets running passes finish after SIGTERM before it stops their containers; with the stop grace it stays under systemd's 90 s",
+};
 export const SQUAD_NO_LIMIT_RESET_ENV: EnvSpec = {
   key: "SQUAD_NO_LIMIT_RESET",
   default: "0",
@@ -154,6 +164,8 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_NO_USAGE_READ_ENV,
   SQUAD_NO_AUTO_PROBE_ENV,
   SQUAD_NO_WEB_LOGIN_ENV,
+  SQUAD_NO_SERVE_ENV,
+  SQUAD_SERVE_DRAIN_S_ENV,
   SQUAD_NO_LIMIT_RESET_ENV,
   SQUAD_NO_GC_ENV,
   SQUAD_NO_USAGE_EXPORT_ENV,

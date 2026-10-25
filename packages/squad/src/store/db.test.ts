@@ -70,11 +70,11 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 31);
+  assert.equal(MIGRATIONS.length, 33);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(tables, ["accounts", "conversations", "events", "health", "passes", "price_history", "room_reads", "schema_version", "serve_tokens", "sessions"]);
+  assert.deepEqual(tables, ["accounts", "conversations", "events", "health", "passes", "price_history", "room_reads", "schema_version", "serve_conversations", "serve_passes", "serve_tokens", "sessions"]);
 });
 
 test("migration 11: login_email is set from owner_email for codex and claude login rows only; room_reads exists", () => {
@@ -130,4 +130,19 @@ test("migrations 28-29: an account from before has no entered balance", () => {
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
   assert.equal(migrate(db), MIGRATIONS.length);
   assert.deepEqual({ ...(db.prepare("SELECT balance_usd, balance_at FROM accounts").get() as object) }, { balance_usd: null, balance_at: null });
+});
+
+test("a serve pass row: a later attempt moves pass_id while it runs; the end sticks whatever the order", () => {
+  const d = mkdtempSync(join(tmpdir(), "srv-"));
+  const s = openStore({ dbPath: join(d, "x.db"), spoolDir: join(d, "spool") });
+  const base = { id: "H", tokenId: "T", kind: "pass" as const, passId: "P1", container: "squad-p1", runner: "pi", account: "pi/a", startedAt: "2026-10-25T00:00:00.000Z" };
+  s.servePass(base);
+  s.servePass({ ...base, passId: "P2", container: "squad-p2" });
+  const get = () => ({ ...(s.db.prepare("SELECT pass_id, container, ended_at, result FROM serve_passes WHERE id = 'H'").get() as object) });
+  assert.deepEqual(get(), { pass_id: "P2", container: "squad-p2", ended_at: null, result: null });
+  s.servePass({ ...base, passId: "P2", container: "squad-p2", endedAt: "2026-10-25T00:01:00.000Z", result: "{}" });
+  // A start that arrives late (from the spool) does not open the ended row again.
+  s.servePass({ ...base, passId: "P9", container: "squad-p9" });
+  assert.deepEqual(get(), { pass_id: "P2", container: "squad-p2", ended_at: "2026-10-25T00:01:00.000Z", result: "{}" });
+  s.close();
 });

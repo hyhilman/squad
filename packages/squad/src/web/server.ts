@@ -17,7 +17,7 @@ import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProvider
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
 import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
-import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerBalance, setOwnerCaps, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
+import { getAccount, getHealth, listAccounts, resetHealth, roomSince, setOwnerBalance, setOwnerCaps, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
 import { removeAccount, replacePiKey, replaceToken, revokeNote } from "../accounts/care.ts";
 import { servedModels } from "../accounts/serves.ts";
 import { TOKEN_EXACT } from "../claude-token.ts";
@@ -25,13 +25,13 @@ import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
 import { flockBusy, lockPathOf } from "../run.ts";
 import { ACCOUNT_NAME } from "../accounts/store.ts";
-import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV, envNum, envOn, envOptional, type EnvSpec } from "../settings.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV, envOn, envOptional, type EnvSpec } from "../settings.ts";
 import type { Store } from "../store/db.ts";
-import { keyUsed, keyUsedSince } from "../usage/key-used.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
+import { accountView } from "./account-view.ts";
 import { passDetail, passViews } from "./passes.ts";
 import { SQUAD_WEB_BRAND_DIR_ENV, allowedProviders, loadWebConfig } from "./settings.ts";
 import { SetupTokenLogins, codeShapeError, dockerPtyRunner, type PtyRunner } from "./setup-token.ts";
@@ -323,35 +323,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     }
     return isAdmin(s) ? undefined : mine(s).map((a) => a.id);
   };
-  const view = (a: AccountRow): AccountView => {
-    const h = getHealth(db, a.id);
-    const health = healthOf(a, h, now());
-    const dflt = envNum(SQUAD_FLOOR_DEFAULT_ENV, o.env);
-    const lastCode = a.deadCode ?? h.lastFailCode;
-    return {
-      account: a.id, runner: a.runner, name: a.name, kind: a.kind, ownerEmail: a.ownerEmail ?? "", ...(a.loginEmail === null ? {} : { loginEmail: a.loginEmail }), pools: [], health,
-      ...(health === "cooling" && h.coolUntil !== null ? { coolUntil: h.coolUntil } : {}),
-      ...(lastCode === null ? {} : { lastCode }),
-      ...(h.left5h === null ? {} : { left5h: h.left5h }),
-      ...(h.leftWeek === null ? {} : { leftWeek: h.leftWeek }),
-      ...(h.readAt === null ? {} : { readAt: h.readAt }),
-      floor5h: a.floor5h ?? dflt, floorWeek: a.floorWeek ?? dflt, floorSource: a.floor5h !== null || a.floorWeek !== null ? "owner" : "default",
-      ...(a.consentAt === null ? {} : { consentAt: a.consentAt }),
-      busy: busyOf(a),
-      sharing: a.consentAt !== null,
-      ...(a.consentAt === null || a.consentBy === null ? {} : { consentBy: a.consentBy }),
-      ...(h.resets5h === null ? {} : { resets5h: h.resets5h }),
-      ...(h.resetsWeek === null ? {} : { resetsWeek: h.resetsWeek }),
-      canResetHealth: health === "cooling" || health === "suspect" || (a.state === "dead" && !needsLogin(a)),
-      ...(a.kind === "key" ? keyUsed(db, a.id, now()) : {}),
-      ...(a.kind === "key" && a.cap5h !== null ? { cap5h: a.cap5h } : {}),
-      ...(a.kind === "key" && a.capWeek !== null ? { capWeek: a.capWeek } : {}),
-      ...(a.kind === "key" && a.cap30d !== null ? { cap30d: a.cap30d } : {}),
-      ...(a.kind === "key" && a.balanceUsd !== null && a.balanceAt !== null
-        ? { balanceUsd: a.balanceUsd, balanceAt: a.balanceAt, balanceLeft: a.balanceUsd - keyUsedSince(db, a.id, a.balanceAt) }
-        : {}),
-    };
-  };
+  const view = (a: AccountRow): AccountView => accountView({ db, env: o.env, now: now(), busy: busyOf }, a);
   /** A removed or moved account takes no act: it is history here. */
   const live = (a: AccountRow): AccountRow => {
     if (a.state === "removed" || a.state === "moved") throw new HttpError(409, "conflict", `the account is ${a.state}`);

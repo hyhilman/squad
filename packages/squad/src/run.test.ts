@@ -960,3 +960,22 @@ test("a removed account is unknown to a named pass and never picked by the pool"
   await assert.rejects(runPass(req(r, { pool: undefined, account: "pi/k1" }), r.deps), /unknown pi account/);
   assert.equal((await runPass(req(r), r.deps)).account, "pi/k2");
 });
+
+test("onStart runs once per pass row, after the row exists, with the container name (null with no account); a throw in it loses nothing", async () => {
+  const r = rig(["k1", "k2"]);
+  r.fake.setModes("busy", "ok");
+  const seen: { id: string; container: string | null; rowThere: boolean }[] = [];
+  const res = await runPass(req(r, { onStart: (id, container) => {
+    seen.push({ id, container, rowThere: r.store.db.prepare("SELECT 1 FROM passes WHERE id = ?").get(id) !== undefined });
+    throw new Error("broken hook");
+  } }), r.deps);
+  assert.equal(res.failure, undefined);
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((s) => s.rowThere && s.container === `squad-${s.id.toLowerCase()}`));
+  assert.equal(seen[1]!.id, res.passId);
+  const none = rig([]);
+  const got: (string | null)[] = [];
+  const res2 = await runPass(req(none, { onStart: (_id, c) => got.push(c) }), none.deps);
+  assert.equal(res2.failure?.kind, "no-account");
+  assert.deepEqual(got, [null]);
+});

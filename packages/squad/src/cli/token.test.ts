@@ -65,3 +65,17 @@ test("token add refuses a wrong use (exit 2) and a bad scope (exit 1), and print
   assert.equal(await r.run("token", "add", "dg-test", "--accounts", "pi/acct-one", "--roots", "relative"), 1);
   assert.equal(r.out.join(""), "");
 });
+
+test("serve: refuses both flags (exit 2) and SQUAD_NO_SERVE=1 (exit 1); runs on a socket until the signal, then exits 0", async () => {
+  const r = rig();
+  assert.equal(await r.run("serve", "--socket", join(r.root, "a.sock"), "--port", "0"), 2);
+  assert.equal(await r.run("serve", "--port", "nope"), 2);
+  const off = await main(["serve"], { stdout: () => {}, stderr: (s) => r.err.push(s), env: { SQUAD_HOME: join(r.root, "home"), SQUAD_NO_SERVE: "1" }, cwd: r.root });
+  assert.equal(off, 1);
+  assert.match(r.err.join(""), /SQUAD_NO_SERVE=1/);
+  const ac = new AbortController();
+  const out: string[] = [];
+  const running = main(["serve"], { stdout: (s) => { out.push(s); ac.abort(); }, stderr: () => {}, env: { SQUAD_HOME: join(r.root, "home") }, cwd: r.root, signal: ac.signal });
+  assert.equal(await running, 0);
+  assert.deepEqual(out, [`squad serve: listening on unix:${join(r.root, "home", "serve.sock")}\n`]);
+});

@@ -5,7 +5,7 @@
 // `ps` prints the file `ps` (tab-separated rows a test wrote with `setPs`); `rm <name>` drops that
 // name's row, as the real daemon would. Neither touches the modes.
 //
-// Modes: ok, claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
+// Modes: ok, slow (ok after half a second), claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
 // codex-reused (an inline shape-test stream: a permanent auth failure), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
 // nokey (pi stderr, exit 1, no stream), tmpcwd (ok, with a /tmp path as session cwd),
 // login-codex / login-pi (a login run: write the file given to `setLoginAuth` as auth.json into the mounted /codex or /pi folder; the host path comes from the --mount arg),
@@ -39,6 +39,7 @@ if [ "$(wc -l < "$d/modes")" -gt 1 ]; then
 fi
 case "$mode" in
   ok) cat "$d/ok.jsonl" ;;
+  slow) sleep 0.5; cat "$d/ok.jsonl" ;;
   claude-ok) cat "$d/claude-ok.jsonl" ;;
   codex-ok) cat "$d/codex-ok.jsonl" ;;
   codex-model-not-found) cat "$d/codex-model-not-found.jsonl"; exit 1 ;;

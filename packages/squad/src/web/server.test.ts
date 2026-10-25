@@ -1946,3 +1946,14 @@ test("behind the tunnel (a loopback peer) the wrong-code limit keys on cf-connec
   assert.equal((await post(s.pairCode, "198.51.100.2")).status, 200, "another client behind the same tunnel is not");
   await r.close();
 });
+
+test("squad web serves none of squad serve's pass or conversation routes, even signed in and with a bearer token", async () => {
+  const r = await rig();
+  const c = await signIn(r, "alice@example.test");
+  const bearer = { authorization: "Bearer sqd_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" };
+  for (const [method, path] of [["POST", "/api/passes"], ["POST", "/api/conversations"], ["POST", "/api/conversations/x/turns"], ["DELETE", "/api/conversations/x"]] as const) {
+    const res = await api<ApiError>(r, c, method, path, method === "DELETE" ? undefined : {}, bearer);
+    assert.ok(res.status === 404 || res.status === 405, `${method} ${path} -> ${res.status}`);
+  }
+  await r.close();
+});

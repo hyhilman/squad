@@ -54,6 +54,11 @@ export interface PassRequest extends TurnOptions {
   readonly deadlineMs?: number;
   /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Called right after each pass row is written, with its id and container name (null when no
+   * container will start: no account). squad serve sends its "started" line from here. A throw is ignored.
+   */
+  readonly onStart?: (passId: string, container: string | null) => void;
 }
 
 export interface RunDeps {
@@ -237,9 +242,19 @@ function withLastMessage(sp: Spawned, outDir: string): Spawned {
   return text === "" ? sp : { ...sp, stream: { ...sp.stream, text, texts: [text] } };
 }
 
+/** Tells the caller a pass row exists. Its errors are its own: they must not lose the pass. */
+function notifyStart(req: PassRequest, passId: string, container: string | null): void {
+  try {
+    req.onStart?.(passId, container);
+  } catch {
+    // A broken hook must not lose the pass.
+  }
+}
+
 const noAccount = (store: Store, req: PassRequest, deps: RunDeps, now: Date, failure: Failure): PassResult => {
   const id = ulid(now.getTime());
   store.startPass({ id, startedAt: now.toISOString(), project: deps.project, flow: req.caller.flow, action: req.caller.action, runner: req.runner, model: req.model, ...taskOf(req) });
+  notifyStart(req, id, null);
   store.endPass({ id, endedAt: now.toISOString(), outcome: failure.kind, failKind: failure.kind, failCode: failure.code, tokens: NO_TOKENS });
   return { passId: id, account: null, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure, logPath: null };
 };
@@ -299,6 +314,8 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     const passId = ulid(nowFn().getTime());
     const started = nowFn();
     store.startPass({ id: passId, startedAt: started.toISOString(), project: deps.project, flow: req.caller.flow, action: req.caller.action, runner: req.runner, model: req.model, account: id, ...taskOf(req) });
+    const containerName = req.container ?? `squad-${passId.toLowerCase()}`;
+    notifyStart(req, passId, containerName);
 
     // codex's last-message file goes to a fresh folder outside the home, removed after the pass.
     const outDir = req.runner === "codex" ? mkdtempSync(join(tmpdir(), "squad-out-")) : null;
@@ -321,7 +338,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
       const plan: PassPlan = {
         runner: req.runner,
         image: req.image ?? IMAGES[req.runner].tag,
-        name: req.container ?? `squad-${passId.toLowerCase()}`,
+        name: containerName,
         passId,
         caller: { project: deps.project, flow: req.caller.flow },
         user: deps.user,

@@ -29,11 +29,12 @@ import { findForbidden } from "@squad/contract";
 import { bundledPath } from "../paths.ts";
 import { buildArgv, IMAGES, type ImageRunner } from "../images.ts";
 import { flockBusy, lockPathOf, runPass, safeTail, type RunDeps } from "../run.ts";
-import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_NO_GC_ENV, SQUAD_NO_USAGE_READ_ENV, envOn, envOptional } from "../settings.ts";
+import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_NO_GC_ENV, SQUAD_NO_SERVE_ENV, SQUAD_NO_USAGE_READ_ENV, envOn, envOptional } from "../settings.ts";
 import type { SupportedRunner } from "../runners/table.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { startWeb } from "../web/server.ts";
 import { addToken as addProjectToken, listTokens, revokeToken } from "../serve/tokens.ts";
+import { startServe } from "../serve/server.ts";
 import { runConnect } from "./connect.ts";
 import { USAGE_BYS, usageBy, type UsageBy, type UsageRow } from "../usage/report.ts";
 
@@ -79,6 +80,9 @@ const USAGE = `usage: squad <verb>
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
                                            (not --api-only) it also runs a background loop: usage reads, auto probes, prices
+  serve [--socket <path> | --port <n>]     provider mode: passes and conversations for machine callers with a
+                                           project token, on a 0600 unix socket (default <home>/serve.sock) or
+                                           on 127.0.0.1:<n>; run it as the project's user
   token add <project> --accounts <id,...> --roots <abs path,...> [--images <ref,...>]
                                            make the project's token for squad serve; only the token goes to stdout
   token list                               the live tokens: project, accounts, roots, images, times (never a token)
@@ -608,7 +612,14 @@ async function web(store: Store, io: Io, args: readonly string[]): Promise<numbe
     ...(io.fetch === undefined ? {} : { fetch: io.fetch }), ...(io.now === undefined ? {} : { now: io.now }),
   });
   io.stdout(`squad web: listening on http://${handle.bind.includes(":") ? `[${handle.bind}]` : handle.bind}:${handle.port} (public ${handle.url})\n`);
-  await new Promise<void>((done) => {
+  await untilSignal(io);
+  await handle.close();
+  return 0;
+}
+
+/** Resolves on the test's abort signal, or on SIGINT or SIGTERM. */
+const untilSignal = (io: Io): Promise<void> =>
+  new Promise<void>((done) => {
     if (io.signal !== undefined) {
       if (io.signal.aborted) return done();
       return io.signal.addEventListener("abort", () => done(), { once: true });
@@ -616,7 +627,27 @@ async function web(store: Store, io: Io, args: readonly string[]): Promise<numbe
     process.once("SIGINT", () => done());
     process.once("SIGTERM", () => done());
   });
-  await handle.close();
+
+/** `squad serve`: runs until the signal, then stops gracefully and exits 0. It prints where it listens. */
+async function serveCmd(store: Store, io: Io, args: readonly string[]): Promise<number> {
+  const { rest, opts } = options(args, ["socket", "port"]);
+  if (rest.length > 0) throw new UsageError(`unexpected ${rest[0]}`);
+  if (opts.has("socket") && opts.has("port")) throw new UsageError("serve takes --socket or --port, not both");
+  if (envOn(SQUAD_NO_SERVE_ENV, io.env)) {
+    io.stderr("squad serve is off (SQUAD_NO_SERVE=1)\n");
+    return 1;
+  }
+  const raw = opts.get("port");
+  if (raw !== undefined && (!/^\d+$/.test(raw) || Number(raw) > 65535)) throw new UsageError("--port must be a number from 0 to 65535");
+  const home = layoutOf(homeRoot(io.cwd, io.env), io.env);
+  const handle = await startServe({
+    env: io.env, home, store,
+    ...(raw !== undefined ? { port: Number(raw) } : { socket: resolve(io.cwd, opts.get("socket") ?? join(home.root, "serve.sock")) }),
+    ...(io.now === undefined ? {} : { now: io.now }),
+  });
+  io.stdout(`squad serve: listening on ${handle.address}\n`);
+  await untilSignal(io);
+  await handle.stop();
   return 0;
 }
 
@@ -676,6 +707,7 @@ const VERBS: Record<string, (store: Store, io: Io, args: readonly string[]) => n
   log: logCmd,
   web,
   token: tokenCmd,
+  serve: serveCmd,
 };
 
 function fail(msg: string): never {

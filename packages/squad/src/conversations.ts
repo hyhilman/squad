@@ -43,6 +43,8 @@ export interface Conversation {
 
 export interface SendOptions {
   readonly onOutput?: (chunk: string) => void;
+  /** Called right after the turn's pass row is written (see PassRequest.onStart). */
+  readonly onStart?: (passId: string, container: string | null) => void;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
 }
@@ -165,6 +167,7 @@ export async function send(conv: Conversation | string, message: string, opts: S
     ...(spec.env === undefined ? {} : { env: spec.env }),
     ...(spec.gitDir === undefined ? {} : { gitDir: spec.gitDir }),
     ...(opts.onOutput === undefined ? {} : { onOutput: opts.onOutput }),
+    ...(opts.onStart === undefined ? {} : { onStart: opts.onStart }),
     ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
     ...(opts.deadlineMs === undefined ? {} : { deadlineMs: opts.deadlineMs }),
   }, deps);

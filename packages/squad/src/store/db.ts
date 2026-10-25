@@ -173,6 +173,26 @@ export const MIGRATIONS: readonly string[] = [
      revoked_at TEXT
    ) STRICT`,
   `CREATE UNIQUE INDEX serve_tokens_live ON serve_tokens (project) WHERE revoked_at IS NULL`,
+  // A pass or turn started through \`squad serve\`: the token that made it, the container to look for
+  // after a restart, and the whole result as JSON (passes has no text). \`id\` is the passId the caller
+  // got in "started"; \`pass_id\` is the attempt that runs now (a busy account makes a new one).
+  `CREATE TABLE serve_passes (
+     id TEXT PRIMARY KEY,
+     token_id TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     pass_id TEXT NOT NULL,
+     container TEXT,
+     runner TEXT NOT NULL,
+     account TEXT,
+     started_at TEXT NOT NULL,
+     ended_at TEXT,
+     result TEXT
+   ) STRICT`,
+  // A conversation opened through \`squad serve\` belongs to the token that opened it.
+  `CREATE TABLE serve_conversations (
+     id TEXT PRIMARY KEY,
+     token_id TEXT NOT NULL
+   ) STRICT`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */
@@ -238,7 +258,26 @@ export interface SquadEvent {
   readonly detail?: string;
 }
 
-type SpoolLine = { readonly op: "start"; readonly row: PassStart } | { readonly op: "end"; readonly row: PassEnd } | { readonly op: "event"; readonly row: SquadEvent };
+/** A pass or turn of `squad serve`. Written at its start, and again at its end with the result. */
+export interface ServePassRow {
+  readonly id: string;
+  readonly tokenId: string;
+  readonly kind: "pass" | "turn";
+  readonly passId: string;
+  readonly container: string | null;
+  readonly runner: string;
+  readonly account: string | null;
+  readonly startedAt: string;
+  /** Both set at the end; the result is the JSON of the PassResult or TurnResult. */
+  readonly endedAt?: string;
+  readonly result?: string;
+}
+
+type SpoolLine =
+  | { readonly op: "start"; readonly row: PassStart }
+  | { readonly op: "end"; readonly row: PassEnd }
+  | { readonly op: "event"; readonly row: SquadEvent }
+  | { readonly op: "serve"; readonly row: ServePassRow };
 
 /** SQLITE_BUSY (5) or one of its extended codes, from node:sqlite's `errcode`. */
 export function isBusy(e: unknown): boolean {
@@ -253,6 +292,11 @@ export interface Store {
   startPass(row: PassStart): "db" | "spool";
   endPass(row: PassEnd): "db" | "spool";
   event(row: SquadEvent): "db" | "spool";
+  /**
+   * Writes a serve pass row. Every write carries the whole row, so a start that went to the spool and
+   * an end that went to the database still meet: an ended row never opens again.
+   */
+  servePass(row: ServePassRow): "db" | "spool";
   /** Applies every spool file in order, then removes it. Returns the lines applied. */
   foldSpool(): number;
   readonly db: DatabaseSync;
@@ -308,6 +352,16 @@ export function openStore(opts: StoreOptions): Store {
      WHERE id = ?`,
   );
   const insertEvent = db.prepare("INSERT INTO events (at, account, kind, code, pass_id, detail) VALUES (?, ?, ?, ?, ?, ?)");
+  const upsertServe = db.prepare(
+    `INSERT INTO serve_passes (id, token_id, kind, pass_id, container, runner, account, started_at, ended_at, result)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       pass_id = CASE WHEN serve_passes.ended_at IS NULL THEN excluded.pass_id ELSE serve_passes.pass_id END,
+       container = CASE WHEN serve_passes.ended_at IS NULL THEN excluded.container ELSE serve_passes.container END,
+       account = CASE WHEN serve_passes.ended_at IS NULL THEN excluded.account ELSE serve_passes.account END,
+       ended_at = COALESCE(serve_passes.ended_at, excluded.ended_at),
+       result = COALESCE(serve_passes.result, excluded.result)`,
+  );
 
   const apply = (line: SpoolLine): void => {
     if (line.op === "start") {
@@ -317,6 +371,9 @@ export function openStore(opts: StoreOptions): Store {
       const r = line.row;
       const t = r.tokens;
       updateEnd.run(r.endedAt, r.outcome, nul(r.failKind), nul(r.failCode), t.input, t.output, t.cacheRead, t.cacheWrite, t.reasoning, nul(r.costUsd), nul(r.priceSrc), nul(r.cliCostUsd), nul(r.catalogCostUsd), nul(r.left5hBefore), nul(r.left5hAfter), nul(r.leftWeekBefore), nul(r.leftWeekAfter), nul(r.turns), nul(r.exitCode), nul(r.model), r.id);
+    } else if (line.op === "serve") {
+      const r = line.row;
+      upsertServe.run(r.id, r.tokenId, r.kind, r.passId, r.container, r.runner, r.account, r.startedAt, nul(r.endedAt), nul(r.result));
     } else {
       const r = line.row;
       insertEvent.run(r.at, nul(r.account), r.kind, nul(r.code), nul(r.passId), nul(r.detail));
@@ -368,6 +425,7 @@ export function openStore(opts: StoreOptions): Store {
     startPass: (row) => write({ op: "start", row }),
     endPass: (row) => write({ op: "end", row }),
     event: (row) => write({ op: "event", row }),
+    servePass: (row) => write({ op: "serve", row }),
     foldSpool,
     db,
     close: () => db.close(),
