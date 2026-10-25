@@ -75,6 +75,18 @@ export interface AccountView {
   readonly cap5h?: number;
   readonly capWeek?: number;
   readonly cap30d?: number;
+  /**
+   * The balance the owner typed from the provider's console, in dollars, and when (ISO). squad never asks a
+   * provider for a balance. Unset when none is entered, and always for a seat. Display only: the pool
+   * never reads it.
+   */
+  readonly balanceUsd?: number;
+  readonly balanceAt?: string;
+  /**
+   * An estimate: balanceUsd minus what squad's own passes used since balanceAt. It may go below 0. Use
+   * outside squad does not count: squad cannot see it.
+   */
+  readonly balanceLeft?: number;
 }
 
 export type UsageBy = "project" | "flow" | "action" | "task" | "session" | "account" | "model" | "day" | "window";
@@ -186,6 +198,11 @@ export interface SetCapsBody {
   readonly cap5h: number | null;
   readonly capWeek: number | null;
   readonly cap30d: number | null;
+}
+
+export interface SetBalanceBody {
+  /** Dollars from 0 to CAP_MAX_USD, for a key account only. Null = no balance. Setting one stamps the time. */
+  readonly balance: number | null;
 }
 
 /** A login the owner started from the web app. The page shows only a code or a link, never a token. */
@@ -432,6 +449,7 @@ export const ROUTES = {
   getAccount: { method: "GET", path: "/api/accounts/:runner/:name" },
   setFloor: { method: "PUT", path: "/api/accounts/:runner/:name/floor" },
   setCaps: { method: "PUT", path: "/api/accounts/:runner/:name/caps" },
+  setBalance: { method: "PUT", path: "/api/accounts/:runner/:name/balance" },
   setEnabled: { method: "PUT", path: "/api/accounts/:runner/:name/enabled" },
   consent: { method: "POST", path: "/api/accounts/:runner/:name/consent" },
   startLogin: { method: "POST", path: "/api/accounts/:runner/:name/login" },
@@ -481,6 +499,8 @@ export interface Api {
   setFloor: { params: AccountParams; query: void; body: SetFloorBody; res: AccountView };
   /** Owner or admin, the same as floors. A key account only; any other kind is a 400. */
   setCaps: { params: AccountParams; query: void; body: SetCapsBody; res: AccountView };
+  /** Owner or admin, the same as caps. A key account only; any other kind is a 400. */
+  setBalance: { params: AccountParams; query: void; body: SetBalanceBody; res: AccountView };
   setEnabled: { params: AccountParams; query: void; body: { readonly enabled: boolean }; res: AccountView };
   /** The owner only. `agree: false` stops sharing: squad then refuses every pass on the account. */
   consent: { params: AccountParams; query: void; body: { readonly agree: boolean }; res: AccountView };

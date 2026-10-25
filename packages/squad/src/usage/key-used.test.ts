@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parsePiStream } from "../streams/pi.ts";
 import { openStore, type Store } from "../store/db.ts";
-import { keyUsed, usedCostOf } from "./key-used.ts";
+import { keyUsed, keyUsedSince, usedCostOf } from "./key-used.ts";
 
 const fixture = (name: string): string => readFileSync(new URL(`../../test/fixtures/captures/pi/${name}`, import.meta.url), "utf8");
 
@@ -68,5 +68,19 @@ test("keyUsed counts no other account; a pass with no cost or still running coun
   pass(s, "pi/dev", 0.5, {}, false);
   assert.deepEqual(keyUsed(s.db, "pi/dev", NOW), { used5h: 0.5, usedWeek: 0.5, used30d: 0.5 });
   assert.deepEqual(keyUsed(s.db, "pi/none", NOW), { used5h: 0, usedWeek: 0, used30d: 0 });
+  s.close();
+});
+
+test("keyUsedSince sums one account's passes that started at or after the time; a running pass counts 0", () => {
+  const s = store();
+  pass(s, "pi/dev", 50, { cli: 100 });
+  pass(s, "pi/dev", 48, { cli: 0.25 });
+  pass(s, "pi/dev", 10, { catalog: 0.5 });
+  pass(s, "pi/dev", 1, { cli: 2, catalog: 9 });
+  pass(s, "pi/dev", 0.5, {}, false);
+  pass(s, "pi/spare", 1, { cli: 7 });
+  assert.equal(keyUsedSince(s.db, "pi/dev", ago(48)), 2.75);
+  assert.equal(keyUsedSince(s.db, "pi/dev", ago(0)), 0);
+  assert.equal(keyUsedSince(s.db, "pi/none", ago(48)), 0);
   s.close();
 });

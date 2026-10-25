@@ -155,6 +155,10 @@ export const MIGRATIONS: readonly string[] = [
   `ALTER TABLE accounts ADD COLUMN cap_5h REAL`,
   `ALTER TABLE accounts ADD COLUMN cap_week REAL`,
   `ALTER TABLE accounts ADD COLUMN cap_30d REAL`,
+  // The balance the owner typed from the provider's console, and when (ISO). NULL = none entered.
+  // Display only: the pool never reads it.
+  `ALTER TABLE accounts ADD COLUMN balance_usd REAL`,
+  `ALTER TABLE accounts ADD COLUMN balance_at TEXT`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

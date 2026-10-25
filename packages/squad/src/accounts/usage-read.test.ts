@@ -196,7 +196,7 @@ test("applyRead suspect: sets suspect_since once and gives event usage-401; erro
 });
 
 // --- the schedule
-const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: null, loginEmail: null, consentBy: null, cap5h: null, capWeek: null, cap30d: null, ...more });
+const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: null, loginEmail: null, consentBy: null, cap5h: null, capWeek: null, cap30d: null, balanceUsd: null, balanceAt: null, ...more });
 const hmap = (...rows: HealthRow[]): Map<string, HealthRow> => new Map(rows.map((r) => [r.account, r]));
 const ago = (s: number): string => new Date(NOW.getTime() - s * 1000).toISOString();
 const INTERVAL = 300_000;

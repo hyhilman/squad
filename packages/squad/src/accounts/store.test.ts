@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { pick } from "../pool/pick.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { emptyHealth } from "./health.ts";
-import { addAccount, candidates, getAccount, getHealth, liveAccount, listAccounts, markRemoved, putHealth, resetHealth, reviveByLogin, setConsent, setOwnerCaps, setOwnerFloors, setSharing, setState } from "./store.ts";
+import { addAccount, candidates, getAccount, getHealth, liveAccount, listAccounts, markRemoved, putHealth, resetHealth, reviveByLogin, setConsent, setOwnerBalance, setOwnerCaps, setOwnerFloors, setSharing, setState } from "./store.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const mk = (): Store => {
@@ -135,6 +135,27 @@ test("SQUAD_NO_KEY_CAPS=1 makes the pool ignore caps; only exactly 1", () => {
   setOwnerCaps(s.db, "pi/a", 1, null, null);
   assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, { SQUAD_NO_KEY_CAPS: "1" }), NOW.getTime()).order, ["pi/a"]);
   assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, { SQUAD_NO_KEY_CAPS: "true" }), NOW.getTime()).order, []);
+});
+
+test("setOwnerBalance stores the entered balance with its time; null clears both", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "k", kind: "key" }, NOW);
+  assert.deepEqual([getAccount(s.db, "pi/k")!.balanceUsd, getAccount(s.db, "pi/k")!.balanceAt], [null, null]);
+  setOwnerBalance(s.db, "pi/k", 20, NOW);
+  assert.deepEqual([getAccount(s.db, "pi/k")!.balanceUsd, getAccount(s.db, "pi/k")!.balanceAt], [20, NOW.toISOString()]);
+  setOwnerBalance(s.db, "pi/k", 0, NOW);
+  assert.equal(getAccount(s.db, "pi/k")!.balanceUsd, 0);
+  setOwnerBalance(s.db, "pi/k", null, NOW);
+  assert.deepEqual([getAccount(s.db, "pi/k")!.balanceUsd, getAccount(s.db, "pi/k")!.balanceAt], [null, null]);
+  assert.throws(() => setOwnerBalance(s.db, "pi/none", 1, NOW), /unknown account/);
+});
+
+test("the pool does not read the balance: a key whose estimate is below 0 is still picked", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "a", kind: "key" }, NOW);
+  setOwnerBalance(s.db, "pi/a", 1, new Date(NOW.getTime() - 2 * 3_600_000));
+  usedPass(s, "P1", "pi/a", 1, 5);
+  assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, {}), NOW.getTime()).order, ["pi/a"]);
 });
 
 test("dead goes back to active only through reviveByLogin", () => {

@@ -139,7 +139,7 @@ test("a person sees only the accounts they own; email case does not matter; othe
   const unowned = await api<ApiError>(r, alice, "GET", "/api/accounts/pi/nobody");
   assert.equal(theirs.status, 404);
   assert.deepEqual([theirs.body, unowned.body], [missing.body, missing.body], "no difference between not yours and not there");
-  for (const [m, path, body] of [["PUT", "/floor", { floor5h: 1, floorWeek: 1 }], ["PUT", "/caps", { cap5h: 1, capWeek: null, cap30d: null }], ["PUT", "/enabled", { enabled: false }], ["POST", "/consent", { agree: true }], ["POST", "/login", undefined]] as const) {
+  for (const [m, path, body] of [["PUT", "/floor", { floor5h: 1, floorWeek: 1 }], ["PUT", "/caps", { cap5h: 1, capWeek: null, cap30d: null }], ["PUT", "/balance", { balance: 5 }], ["PUT", "/enabled", { enabled: false }], ["POST", "/consent", { agree: true }], ["POST", "/login", undefined]] as const) {
     const res = await api<ApiError>(r, alice, m, `/api/accounts/pi/bob${path}`, body);
     assert.equal(res.status, 404, path);
   }
@@ -201,6 +201,45 @@ test("setCaps sets dollar caps on a key, clears them with null, and refuses bad 
   const noCsrf = await fetch(`${r.base}${url}`, { method: "PUT", headers: { cookie: c, origin: PUBLIC, "content-type": "application/json" }, body: JSON.stringify({ cap5h: 1, capWeek: null, cap30d: null }) });
   assert.equal(noCsrf.status, 403);
   assert.equal(getAccount(r.store.db, "pi/alice-key")!.cap5h, null);
+  await r.close();
+});
+
+test("setBalance keeps the entered balance with the time; the view takes off what squad used since then", async () => {
+  const r = await rig();
+  seed(r);
+  const c = await signIn(r, "alice@example.test");
+  const url = "/api/accounts/pi/alice-key/balance";
+  const keys = ["balanceUsd", "balanceAt", "balanceLeft"];
+  const before = await api<AccountView>(r, c, "GET", "/api/accounts/pi/alice-key");
+  assert.deepEqual(keys.filter((k) => k in before.body), [], "no balance by default");
+  const set = await api<AccountView>(r, c, "PUT", url, { balance: 20 });
+  assert.deepEqual([set.status, set.body.balanceUsd, set.body.balanceAt, set.body.balanceLeft], [200, 20, NOW.toISOString(), 20]);
+  assert.equal(findForbidden(set.body), undefined);
+  // Passes from before the stamp do not count; passes after it do; a running pass counts 0.
+  const at = (h: number): string => new Date(NOW.getTime() + h * 3_600_000).toISOString();
+  const tok = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+  for (const [id, h, cli] of [["B1", -1, 4], ["B2", 1, 7.5], ["B3", 2, 13], ["B4", 3, null]] as const) {
+    r.store.startPass({ id, startedAt: at(h), project: "x", flow: "f", action: "a", runner: "pi", model: "m", account: "pi/alice-key" });
+    if (cli !== null) r.store.endPass({ id, endedAt: at(h), outcome: "ok", tokens: tok, cliCostUsd: cli });
+  }
+  const list = await api<AccountView[]>(r, c, "GET", "/api/accounts");
+  assert.equal(findForbidden(list.body), undefined);
+  const key = list.body.find((a) => a.account === "pi/alice-key")!;
+  assert.deepEqual([key.balanceUsd, key.balanceLeft], [20, -0.5], "below 0 is not clamped");
+  const seat = list.body.find((a) => a.account === "codex/alice")!;
+  assert.deepEqual(keys.filter((k) => k in seat), []);
+  const zero = await api<AccountView>(r, c, "PUT", url, { balance: 0 });
+  assert.deepEqual([zero.status, zero.body.balanceUsd], [200, 0]);
+  const cleared = await api<AccountView>(r, c, "PUT", url, { balance: null });
+  assert.deepEqual([cleared.status, keys.filter((k) => k in cleared.body)], [200, []]);
+  for (const bad of [{ balance: -1 }, { balance: 1_000_001 }, { balance: "5" }, {}, { balance: 1, extra: 1 }, [], null]) {
+    assert.equal((await api<ApiError>(r, c, "PUT", url, bad)).status, 400, JSON.stringify(bad));
+  }
+  const seatSet = await api<ApiError>(r, c, "PUT", "/api/accounts/codex/alice/balance", { balance: 1 });
+  assert.deepEqual([seatSet.status, seatSet.body.error], [400, "bad-request"]);
+  const noCsrf = await fetch(`${r.base}${url}`, { method: "PUT", headers: { cookie: c, origin: PUBLIC, "content-type": "application/json" }, body: JSON.stringify({ balance: 1 }) });
+  assert.equal(noCsrf.status, 403);
+  assert.equal(getAccount(r.store.db, "pi/alice-key")!.balanceUsd, null);
   await r.close();
 });
 
@@ -882,6 +921,8 @@ test("an admin may set floors and enable or disable any account; consent and log
   assert.deepEqual([floor.status, floor.body.floor5h, floor.body.floorWeek, floor.body.floorSource], [200, 30, 40, "owner"]);
   const caps = await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/caps", { cap5h: 2, capWeek: null, cap30d: 50 });
   assert.deepEqual([caps.status, caps.body.cap5h, caps.body.capWeek, caps.body.cap30d], [200, 2, undefined, 50]);
+  const bal = await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/balance", { balance: 10 });
+  assert.deepEqual([bal.status, bal.body.balanceUsd, bal.body.balanceLeft], [200, 10, 10]);
   assert.equal((await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/enabled", { enabled: false })).body.health, "disabled");
   assert.equal((await api<AccountView>(r, admin, "PUT", "/api/accounts/pi/bob/enabled", { enabled: true })).body.health, "ok");
   const consent = await api<ApiError>(r, admin, "POST", "/api/accounts/pi/bob/consent", { agree: false });
@@ -896,6 +937,8 @@ test("an admin may set floors and enable or disable any account; consent and log
   assert.equal(getAccount(r.store.db, "pi/bob")!.floor5h, 30);
   assert.equal((await api<ApiError>(r, alice, "PUT", "/api/accounts/pi/bob/caps", { cap5h: null, capWeek: null, cap30d: null })).status, 404);
   assert.equal(getAccount(r.store.db, "pi/bob")!.cap5h, 2);
+  assert.equal((await api<ApiError>(r, alice, "PUT", "/api/accounts/pi/bob/balance", { balance: null })).status, 404);
+  assert.equal(getAccount(r.store.db, "pi/bob")!.balanceUsd, 10);
   // An admin who owns an account may consent to it.
   addAccount(r.store.db, { runner: "pi", name: "mine", kind: "key", ownerEmail: "boss@example.test" }, NOW);
   assert.equal((await api<AccountView>(r, admin, "POST", "/api/accounts/pi/mine/consent", { agree: true })).status, 200);
@@ -1685,7 +1728,7 @@ test("removeAccount: owner or admin, a typed confirm that equals the id, 409 whi
   const hist = await api<PassView[]>(r, admin, "GET", "/api/passes");
   assert.deepEqual(hist.body.map((x) => [x.passId, x.account, x.accountRemoved]), [["Z1", "pi/bob", true]]);
   assert.equal((await api<ApiError>(r, admin, "DELETE", "/api/accounts/pi/bob", { confirm: "pi/bob" })).status, 409, "already removed");
-  for (const [m, path, body] of [["PUT", "/api/accounts/pi/bob/floor", { floor5h: 1, floorWeek: 1 }], ["PUT", "/api/accounts/pi/bob/caps", { cap5h: 1, capWeek: null, cap30d: null }], ["PUT", "/api/accounts/pi/bob/enabled", { enabled: false }], ["POST", "/api/accounts/pi/bob/reset", undefined]] as const) {
+  for (const [m, path, body] of [["PUT", "/api/accounts/pi/bob/floor", { floor5h: 1, floorWeek: 1 }], ["PUT", "/api/accounts/pi/bob/caps", { cap5h: 1, capWeek: null, cap30d: null }], ["PUT", "/api/accounts/pi/bob/balance", { balance: 5 }], ["PUT", "/api/accounts/pi/bob/enabled", { enabled: false }], ["POST", "/api/accounts/pi/bob/reset", undefined]] as const) {
     assert.equal((await api<ApiError>(r, admin, m, path, body)).status, 409, `${m} ${path} on a removed account`);
   }
   // A login whose lock a pass holds: 409, and nothing changes.

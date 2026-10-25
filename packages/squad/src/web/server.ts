@@ -3,7 +3,7 @@
 //
 // A person sees only the accounts whose owner email is theirs; any other id is a 404, so ids do not
 // leak. An admin (the ID token's groups hold SQUAD_OIDC_ADMIN_GROUP) sees every account and may set
-// floors and key caps, enable or disable, test, reset the health of and remove any of them; consent, login, a new
+// floors, key caps and a key's entered balance, enable or disable, test, reset the health of and remove any of them; consent, login, a new
 // secret and a limit reset stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -17,7 +17,7 @@ import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProvider
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
 import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
-import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerCaps, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
+import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerBalance, setOwnerCaps, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
 import { removeAccount, replacePiKey, replaceToken, revokeNote } from "../accounts/care.ts";
 import { servedModels } from "../accounts/serves.ts";
 import { TOKEN_EXACT } from "../claude-token.ts";
@@ -27,7 +27,7 @@ import { flockBusy, lockPathOf } from "../run.ts";
 import { ACCOUNT_NAME } from "../accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV, envNum, envOn, envOptional, type EnvSpec } from "../settings.ts";
 import type { Store } from "../store/db.ts";
-import { keyUsed } from "../usage/key-used.ts";
+import { keyUsed, keyUsedSince } from "../usage/key-used.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
@@ -127,6 +127,12 @@ const cap = (v: unknown): number | null => {
   throw bad(`a cap is dollars above 0 and at most ${CAP_MAX_USD}, or null`);
 };
 
+const balance = (v: unknown): number | null => {
+  if (v === null) return null;
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= CAP_MAX_USD) return v;
+  throw bad(`a balance is dollars from 0 to ${CAP_MAX_USD}, or null`);
+};
+
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
   me: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {}, connectStatus: {},
@@ -203,6 +209,12 @@ const INPUTS: Inputs = {
     body: (b) => {
       if (!isObj(b) || !onlyKeys(b, ["cap5h", "capWeek", "cap30d"]) || !("cap5h" in b) || !("capWeek" in b) || !("cap30d" in b)) throw bad("body must be {cap5h, capWeek, cap30d}");
       return { cap5h: cap(b.cap5h), capWeek: cap(b.capWeek), cap30d: cap(b.cap30d) };
+    },
+  },
+  setBalance: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["balance"]) || !("balance" in b)) throw bad("body must be {balance}");
+      return { balance: balance(b.balance) };
     },
   },
   setEnabled: {
@@ -335,6 +347,9 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       ...(a.kind === "key" && a.cap5h !== null ? { cap5h: a.cap5h } : {}),
       ...(a.kind === "key" && a.capWeek !== null ? { capWeek: a.capWeek } : {}),
       ...(a.kind === "key" && a.cap30d !== null ? { cap30d: a.cap30d } : {}),
+      ...(a.kind === "key" && a.balanceUsd !== null && a.balanceAt !== null
+        ? { balanceUsd: a.balanceUsd, balanceAt: a.balanceAt, balanceLeft: a.balanceUsd - keyUsedSince(db, a.id, a.balanceAt) }
+        : {}),
     };
   };
   /** A removed or moved account takes no act: it is history here. */
@@ -392,6 +407,12 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       const a = live(managed(session, params.runner, params.name));
       if (a.kind !== "key") throw bad("dollar caps are for a key account only; a seat has floors");
       setOwnerCaps(db, a.id, body.cap5h, body.capWeek, body.cap30d);
+      return view(getAccount(db, a.id)!);
+    },
+    setBalance: ({ session, params, body }) => {
+      const a = live(managed(session, params.runner, params.name));
+      if (a.kind !== "key") throw bad("a balance is for a key account only");
+      setOwnerBalance(db, a.id, body.balance, now());
       return view(getAccount(db, a.id)!);
     },
     setEnabled: ({ session, params, body }) => {

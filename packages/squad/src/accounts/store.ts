@@ -37,6 +37,9 @@ export interface AccountRow {
   readonly cap5h: number | null;
   readonly capWeek: number | null;
   readonly cap30d: number | null;
+  /** The balance the owner typed from the provider's console, and when. Display only: the pool never reads it. */
+  readonly balanceUsd: number | null;
+  readonly balanceAt: string | null;
 }
 
 export interface NewAccount {
@@ -64,12 +67,13 @@ interface Raw {
   id: string; runner: string; name: string; kind: string; owner_email: string | null; state: string;
   dead_code: string | null; dead_at: string | null; floor_5h: number | null; floor_week: number | null; created_at: string; consent_at: string | null; login_email: string | null;
   consent_by: string | null; cap_5h: number | null; cap_week: number | null; cap_30d: number | null;
+  balance_usd: number | null; balance_at: string | null;
 }
 
 const toAccount = (r: Raw): AccountRow => ({
   id: r.id, runner: r.runner as Runner, name: r.name, kind: r.kind as AccountKind, ownerEmail: r.owner_email, state: r.state as AccountState,
   deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at, loginEmail: r.login_email, consentBy: r.consent_by,
-  cap5h: r.cap_5h, capWeek: r.cap_week, cap30d: r.cap_30d,
+  cap5h: r.cap_5h, capWeek: r.cap_week, cap30d: r.cap_30d, balanceUsd: r.balance_usd, balanceAt: r.balance_at,
 });
 
 export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date()): AccountRow {
@@ -202,6 +206,12 @@ export function setOwnerFloors(db: DatabaseSync, id: string, floor5h: number | n
 export function setOwnerCaps(db: DatabaseSync, id: string, cap5h: number | null, capWeek: number | null, cap30d: number | null): void {
   if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
   db.prepare("UPDATE accounts SET cap_5h = ?, cap_week = ?, cap_30d = ? WHERE id = ?").run(cap5h, capWeek, cap30d, id);
+}
+
+/** The balance the owner typed, stamped with `now`; null clears the balance and its time. */
+export function setOwnerBalance(db: DatabaseSync, id: string, usd: number | null, now: Date): void {
+  if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
+  db.prepare("UPDATE accounts SET balance_usd = ?, balance_at = ? WHERE id = ?").run(usd, usd === null ? null : now.toISOString(), id);
 }
 
 /** A key's own passes reached one of its caps. squad sees only its own passes, never a provider balance. */

@@ -70,7 +70,7 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 27);
+  assert.equal(MIGRATIONS.length, 29);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
@@ -118,6 +118,16 @@ test("migrations 25-27: an account from before has no dollar cap", () => {
   db.prepare("INSERT INTO schema_version (n) VALUES (24)").run();
   for (const m of MIGRATIONS.slice(0, 24)) db.exec(m);
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
-  assert.equal(migrate(db), 27);
+  assert.equal(migrate(db), MIGRATIONS.length);
   assert.deepEqual({ ...(db.prepare("SELECT cap_5h, cap_week, cap_30d FROM accounts").get() as object) }, { cap_5h: null, cap_week: null, cap_30d: null });
+});
+
+test("migrations 28-29: an account from before has no entered balance", () => {
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
+  db.exec("CREATE TABLE schema_version (n INTEGER NOT NULL) STRICT");
+  db.prepare("INSERT INTO schema_version (n) VALUES (27)").run();
+  for (const m of MIGRATIONS.slice(0, 27)) db.exec(m);
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
+  assert.equal(migrate(db), 29);
+  assert.deepEqual({ ...(db.prepare("SELECT balance_usd, balance_at FROM accounts").get() as object) }, { balance_usd: null, balance_at: null });
 });

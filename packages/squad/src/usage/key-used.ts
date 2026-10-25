@@ -33,3 +33,9 @@ export function keyUsed(db: DatabaseSync, account: string, now: Date): KeyUsed {
   ).get(since(WINDOW_MS.used5h), since(WINDOW_MS.usedWeek), account, since(WINDOW_MS.used30d)) as { h5: number; week: number; d30: number };
   return { used5h: r.h5, usedWeek: r.week, used30d: r.d30 };
 }
+
+/** The used dollars of one account in passes that started at or after `since` (ISO). A running pass counts 0. */
+export function keyUsedSince(db: DatabaseSync, account: string, since: string): number {
+  const r = db.prepare(`SELECT COALESCE(SUM(${USED_COST_SQL}), 0) AS used FROM passes WHERE account = ? AND started_at >= ?`).get(account, since) as { used: number };
+  return r.used;
+}
