@@ -6,9 +6,10 @@
 // The pass belongs to serve, not to the connection: a dropped client never stops it, and its result
 // is kept for GET /api/passes/:passId. Every line and every JSON answer passes `findForbidden` first.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, rmSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createConnection } from "node:net";
+import { createConnection, createServer as createNetServer, type Server as NetServer } from "node:net";
+import { join } from "node:path";
 import {
   HIDDEN, NDJSON, SERVE_ROUTES, findForbidden, maskSecrets, matchPath,
   type Conversation as ApiConversation, type PassResult as ApiPassResult, type PassStatus, type ServeAccountView, type ServeRouteName, type TurnResult as ApiTurnResult,
@@ -64,6 +65,7 @@ export interface ServeHandle {
 const MAX_BODY = 8 * 1024 * 1024;
 const INTERNAL = "internal error";
 const NOT_FOUND = (): Refusal => new Refusal(404, "not found");
+const STOPPING = (): Refusal => new Refusal(503, "squad serve is stopping");
 
 type AnyResult = PassResult | TurnResult;
 
@@ -129,7 +131,7 @@ const within = (p: Promise<unknown>, ms: number): Promise<void> =>
   });
 
 /** A socket file another serve still listens on is refused; one a killed serve left behind is removed. */
-async function clearStaleSocket(path: string): Promise<void> {
+async function clearStaleSocket(path: string, what: string): Promise<void> {
   let st;
   try {
     st = lstatSync(path);
@@ -145,8 +147,25 @@ async function clearStaleSocket(path: string): Promise<void> {
     });
     c.on("error", () => resolve(false));
   });
-  if (alive) throw new Error(`another squad serve already listens on ${path}`);
+  if (alive) throw new Error(`another squad serve already listens on ${what}`);
   unlinkSync(path);
+}
+
+/** Listens on a unix socket that is born owner-only; the chmod after is for a umask that would allow more. */
+async function listenOwnerOnly(server: Server | NetServer, path: string): Promise<void> {
+  const old = process.umask(0o177);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(path, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+  } finally {
+    process.umask(old);
+  }
+  chmodSync(path, 0o600);
 }
 
 export async function startServe(o: ServeOpts): Promise<ServeHandle> {
@@ -245,18 +264,20 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       log.error("serve_pass_failed", { pass: e.passId });
       result = safeResult(failed(e.passId, err instanceof Error ? err.message.split("\n")[0]! : "the pass failed"));
     }
+    let where: "db" | "spool" | "failed" = "failed";
     try {
-      o.store.servePass({ ...rowOf(e), endedAt: now().toISOString(), result: JSON.stringify(result) });
+      where = o.store.servePass({ ...rowOf(e), endedAt: now().toISOString(), result: JSON.stringify(result) });
     } catch {
       log.error("serve_row_failed", { pass: e.handle });
     }
-    ended.set(e.handle, { tokenId: e.tokenId, result });
+    // Once the end is in the database, GET reads it there; memory holds only what the database lacks.
+    if (where !== "db") ended.set(e.handle, { tokenId: e.tokenId, result });
     live.delete(e.handle);
     log.info("serve-pass-end", { pass: e.handle, route, outcome: result.failure === undefined ? "ok" : result.failure.kind });
     writeLine(res, { type: "result", result });
     if (!res.destroyed && !res.writableEnded) res.end();
   }
-  /** Results of this run, so GET answers at once even when the end row went to the spool. */
+  /** Results whose end row went to the spool (or failed), so GET still answers them. */
   const ended = new Map<string, { tokenId: string; result: AnyResult }>();
 
   const failedPass = (account: string) => (passId: string, message: string): PassResult => ({ passId, account, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure: { kind: "provider", code: "setup", message }, logPath: null });
@@ -305,6 +326,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       case "startPass": {
         const b = passBody(await jsonBody(req));
         const s = scopeSetup(token, b, scopeCtx);
+        if (stopping) throw STOPPING();
         // A conversation's history is its own: only its turns route, and only its token, reach it.
         if (b.session !== undefined && db.prepare("SELECT 1 FROM conversations WHERE id = ?").get(b.session) !== undefined) throw new Refusal(403, "out of scope: session");
         const { identity, ...rest } = b;
@@ -314,6 +336,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       case "openConversation": {
         const b = openBody(await jsonBody(req));
         const s = scopeSetup(token, b, scopeCtx);
+        if (stopping) throw STOPPING();
         const { identity, ...rest } = b;
         let conv;
         try {
@@ -333,6 +356,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
         // The paths were checked at open; check them again, so a symlink swapped since cannot move a mount.
         const spec = JSON.parse(conv.spec) as Partial<ScopedSetup> & { image?: string };
         scopeSetup(token, { runner: conv.runner as "pi", account: conv.account, cwd: conv.cwd, ...(spec.gitDir === undefined ? {} : { gitDir: spec.gitDir }), ...(spec.skill === undefined ? {} : { skill: spec.skill }), ...(spec.mounts === undefined ? {} : { mounts: spec.mounts }), ...(spec.image === undefined ? {} : { image: spec.image }) }, scopeCtx);
+        if (stopping) throw STOPPING();
         const deps = depsFor(token, b.identity);
         return streamed(res, name, token, "turn", conv.runner, conv.account, (onStart, onOutput) => send(id, b.message, { onStart, onOutput, ...(b.idleMs === undefined ? {} : { idleMs: b.idleMs }), ...(b.deadlineMs === undefined ? {} : { deadlineMs: b.deadlineMs }) }, deps), failedTurn(conv.account));
       }
@@ -351,7 +375,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     req.on("error", () => {});
     res.on("error", () => {});
-    if (stopping) return sendJson(res, "stopping", 503, { error: "squad serve is stopping" });
+    if (stopping) return sendJson(res, "stopping", 503, { error: STOPPING().error });
     let token: ProjectToken;
     try {
       token = authenticate(db, req.headers.authorization, now());
@@ -408,8 +432,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       ...(result.failure === undefined ? {} : { failKind: result.failure.kind, failCode: result.failure.code }),
       ...(w === undefined ? {} : { turns: w.outcome.turns, ...(w.outcome.model === null ? {} : { model: w.outcome.model }), ...(w.exitCode === null ? {} : { exitCode: w.exitCode }) }),
     });
-    o.store.servePass({ id: row.id, tokenId: row.token_id, kind: row.kind, passId: row.pass_id, container: row.container, runner: row.runner, account: row.account, startedAt: row.started_at, endedAt: at, result: JSON.stringify(safe) });
-    ended.set(row.id, { tokenId: row.token_id, result: safe });
+    const where = o.store.servePass({ id: row.id, tokenId: row.token_id, kind: row.kind, passId: row.pass_id, container: row.container, runner: row.runner, account: row.account, startedAt: row.started_at, endedAt: at, result: JSON.stringify(safe) });
+    if (where !== "db") ended.set(row.id, { tokenId: row.token_id, result: safe });
     live.delete(row.id);
     log.info("serve-recovered", { pass: row.id, outcome: result.failure === undefined ? "ok" : `${result.failure.kind}:${result.failure.code}` });
   };
@@ -441,8 +465,18 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       const job = (async () => {
         try {
           const w = await watchContainer(docker, container, row.runner);
-          const failure = w.gone ? LOST : failureOf(w.outcome, w.exitCode, undefined, "");
-          endRecovered(row, recoveredResult(row, failure, w), w.gone ? "lost" : failure === undefined ? "ok" : "fail", w);
+          if (w.gone) {
+            // logs and wait both failed: the daemon may be down. Only a clear answer without the container is "lost".
+            const now = containerStates(docker);
+            if (now === null || now.has(container)) {
+              log.warn("serve-watch-unknown", { pass: row.id, container });
+              live.delete(row.id);
+              return;
+            }
+            return endRecovered(row, recoveredResult(row, LOST), "lost");
+          }
+          const failure = failureOf(w.outcome, w.exitCode, undefined, "");
+          endRecovered(row, recoveredResult(row, failure, w), failure === undefined ? "ok" : "fail", w);
         } catch {
           // The row stays running: a later start looks again.
           log.error("serve_watch_failed", { pass: row.id });
@@ -453,39 +487,39 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       void job.finally(() => work.delete(job));
     }
   }
-  recover();
+  // One serve per home, whatever its socket or port: two would both recover the same rows. The guard
+  // is a socket nobody talks to; it goes away with the process, even on SIGKILL.
+  mkdirSync(o.home.state, { recursive: true, mode: 0o700 });
+  const guardPath = join(o.home.state, "serve.guard");
+  await clearStaleSocket(guardPath, "this home");
+  const guard: NetServer = createNetServer((c) => c.destroy());
+  await listenOwnerOnly(guard, guardPath);
 
   const server: Server = createServer((req, res) => void handle(req, res));
   let address: string;
-  if (o.socket !== undefined) {
-    const sock = o.socket;
-    await clearStaleSocket(sock);
-    // The socket file is born owner-only; the chmod after is for a umask that would allow more.
-    const old = process.umask(0o177);
-    try {
+  try {
+    if (o.socket !== undefined) {
+      await clearStaleSocket(o.socket, o.socket);
+      await listenOwnerOnly(server, o.socket);
+      address = `unix:${o.socket}`;
+    } else {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
-        server.listen(sock, () => {
+        server.listen(o.port, "127.0.0.1", () => {
           server.off("error", reject);
           resolve();
         });
       });
-    } finally {
-      process.umask(old);
+      const a = server.address();
+      address = `http://127.0.0.1:${typeof a === "object" && a !== null ? a.port : o.port}`;
     }
-    chmodSync(sock, 0o600);
-    address = `unix:${sock}`;
-  } else {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(o.port, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const a = server.address();
-    address = `http://127.0.0.1:${typeof a === "object" && a !== null ? a.port : o.port}`;
+  } catch (e) {
+    await new Promise<void>((resolve) => guard.close(() => resolve()));
+    throw e;
   }
+  // Only now, with this serve the one for the home, may it end or watch earlier rows. No request runs
+  // before this: the handlers start on a later turn of the event loop.
+  recover();
   log.info("serve-listen", { address });
 
   let stopP: Promise<void> | undefined;
@@ -509,6 +543,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
       server.closeAllConnections();
       await closed;
       if (o.socket !== undefined) rmSync(o.socket, { force: true });
+      await new Promise<void>((resolve) => guard.close(() => resolve()));
+      rmSync(guardPath, { force: true });
       log.info("serve-stopped", { left: work.size });
     })());
   return { address, stop };

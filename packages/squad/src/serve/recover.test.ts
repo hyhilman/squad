@@ -123,3 +123,31 @@ test("a row that has ended is left alone", async (t) => {
   assert.deepEqual(c.fake.callsOf("ps"), []);
   assert.equal(passRow(c.store, c.passId).ended_at, null, "the pass row is not touched");
 });
+
+test("logs and wait fail while docker still lists the container: the row stays running, never lost", async (t) => {
+  const c = crashed();
+  c.fake.setPs(["squad-p1", c.passId, "running", "2026-10-25 10:00:00 +0000 UTC"]);
+  c.fake.setWatchFail(true);
+  const { logs } = await serveOn(t, c, c.fake, c.store);
+  const end = Date.now() + 5000;
+  while (!logs.some((l) => l.includes("event=serve-watch-unknown")) && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(logs.some((l) => l.includes("event=serve-watch-unknown")));
+  assert.equal(passRow(c.store, c.passId).ended_at, null);
+  assert.equal(c.store.db.prepare("SELECT ended_at FROM serve_passes WHERE id = ?").get(c.passId)!.ended_at, null);
+});
+
+test("logs and wait fail and docker then answers without the container: lost", async (t) => {
+  const c = crashed();
+  c.fake.setPs(["squad-p1", c.passId, "running", "2026-10-25 10:00:00 +0000 UTC"]);
+  c.fake.setPsNext();
+  c.fake.setWatchFail(true);
+  const { status } = await serveOn(t, c, c.fake, c.store);
+  const end = Date.now() + 5000;
+  let s = await status();
+  while (s.running && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 25));
+    s = await status();
+  }
+  assert.equal(s.running, false);
+  if (!s.running) assert.equal(s.result.failure?.code, "lost");
+});

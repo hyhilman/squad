@@ -191,7 +191,8 @@ close(conv, deps);
 conversations over HTTP. A pass over HTTP is code execution on the host: it mounts host paths and
 picks an image. So `serve` is its own listener, never the web app's port: a unix socket with mode
 0600 (default `<home>/serve.sock`, or `--socket <path>`), or `--port <n>` on 127.0.0.1 only. `squad
-web` serves none of these routes. It needs no OIDC settings.
+web` serves none of these routes. It needs no OIDC settings. One `serve` runs per home; a second
+one refuses to start.
 
 Each caller gets a project token:
 

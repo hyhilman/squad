@@ -4,7 +4,8 @@
 //
 // `ps` prints the file `ps` (tab-separated rows a test wrote with `setPs`), or fails as a daemon that
 // is down would (`setPsFail`); `rm <name>` drops that name's row, as the real daemon would. `logs`
-// prints the stream a test chose with `setLogs`; `wait` prints 0. None of them touches the modes.
+// prints the stream a test chose with `setLogs`; `wait` prints 0; both fail after `setWatchFail`.
+// None of them touches the modes.
 //
 // Modes: ok, slow (ok after half a second), claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
 // codex-reused (an inline shape-test stream: a permanent auth failure), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
@@ -28,9 +29,15 @@ case "$1" in
   stop|kill) : > "$d/stopped"; exit 0 ;;
   ps)
     if [ -f "$d/ps-fail" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
-    [ -f "$d/ps" ] && cat "$d/ps"; exit 0 ;;
-  logs) [ -f "$d/logs.jsonl" ] && cat "$d/logs.jsonl"; exit 0 ;;
-  wait) if [ -f "$d/wait" ]; then cat "$d/wait"; else echo 0; fi; exit 0 ;;
+    [ -f "$d/ps" ] && cat "$d/ps"
+    if [ -f "$d/ps-next" ]; then mv "$d/ps-next" "$d/ps"; fi
+    exit 0 ;;
+  logs)
+    if [ -f "$d/watch-fail" ]; then exit 1; fi
+    [ -f "$d/logs.jsonl" ] && cat "$d/logs.jsonl"; exit 0 ;;
+  wait)
+    if [ -f "$d/watch-fail" ]; then exit 1; fi
+    if [ -f "$d/wait" ]; then cat "$d/wait"; else echo 0; fi; exit 0 ;;
   rm)
     for last in "$@"; do :; done
     if [ -f "$d/ps" ]; then awk -F '\\t' -v n="$last" '$1 != n' "$d/ps" > "$d/ps.tmp" && mv "$d/ps.tmp" "$d/ps"; fi
@@ -88,6 +95,10 @@ export interface FakeDocker {
   setPsFail(fail: boolean): void;
   /** What `docker logs` prints: a stream file this fake holds, such as `ok.jsonl`. */
   setLogs(file: string): void;
+  /** The rows the second `ps` call and later ones print (the first prints the setPs rows). */
+  setPsNext(...rows: [name: string, passId: string, state: string, createdAt: string][]): void;
+  /** `logs` and `wait` fail with exit 1, as when the daemon goes away. */
+  setWatchFail(fail: boolean): void;
 }
 
 export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-docker-"))): FakeDocker {
@@ -139,5 +150,7 @@ export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-do
   };
   const setPsFail = (fail: boolean): void => (fail ? writeFileSync(join(dir, "ps-fail"), "") : rmSync(join(dir, "ps-fail"), { force: true }));
   const setLogs = (file: string): void => writeFileSync(join(dir, "logs.jsonl"), readFileSync(join(dir, file)));
-  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs, setPsFail, setLogs };
+  const setPsNext = (...rows: string[][]): void => writeFileSync(join(dir, "ps-next"), rows.map((r) => `${r.join("\t")}\n`).join(""));
+  const setWatchFail = (fail: boolean): void => (fail ? writeFileSync(join(dir, "watch-fail"), "") : rmSync(join(dir, "watch-fail"), { force: true }));
+  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs, setPsFail, setLogs, setPsNext, setWatchFail };
 }

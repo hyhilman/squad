@@ -321,10 +321,22 @@ test("a new connection while stopping is refused", async (t) => {
   await linesP;
 });
 
-test("a second serve on a live socket refuses; a stale socket file is replaced", async (t) => {
+test("a second serve on the same home refuses before it touches any row; a stale socket file is replaced", async (t) => {
   const r = await rig(t);
+  // A pass in flight: its row is open, and the fake docker lists no container.
+  r.fake.setModes("hang");
+  const linesP = collect(callStream(r.f, BASE, "startPass", { body: body(r) }, { headers: r.headers }));
+  await poll(async () => (r.fake.callsOf("run").length > 0 ? true : undefined));
+  const open = () => (r.store.db.prepare("SELECT count(*) AS n FROM serve_passes WHERE ended_at IS NULL").get() as { n: number }).n;
+  assert.equal(open(), 1);
   await assert.rejects(startServe({ env: { SQUAD_DOCKER: r.fake.path }, home: r.home, store: r.store, socket: r.sock, log: makeLog(() => {}), user: ME }), /already listens/);
+  // Another socket path or a port on the same home is refused too.
+  await assert.rejects(startServe({ env: { SQUAD_DOCKER: r.fake.path }, home: r.home, store: r.store, socket: join(r.root, "b.sock"), log: makeLog(() => {}), user: ME }), /already listens/);
+  await assert.rejects(startServe({ env: { SQUAD_DOCKER: r.fake.path }, home: r.home, store: r.store, port: 0, log: makeLog(() => {}), user: ME }), /already listens/);
+  assert.equal(open(), 1, "the running pass was not ended as lost");
+  assert.deepEqual([r.fake.callsOf("ps"), r.fake.callsOf("logs"), r.fake.callsOf("wait")], [[], [], []]);
   await r.serve.stop();
+  await linesP;
   // A socket file with nobody behind it, as a killed serve leaves.
   const stale = join(r.root, "stale.sock");
   spawnSync(process.execPath, ["-e", `require("node:net").createServer().listen(${JSON.stringify(stale)}, () => process.kill(process.pid, "SIGKILL"))`]);
@@ -336,11 +348,15 @@ test("a second serve on a live socket refuses; a stale socket file is replaced",
 
 test("--port binds 127.0.0.1 and works with the global fetch", async (t) => {
   const r = await rig(t);
+  // One serve per home: the socket one goes first.
+  await r.serve.stop();
   const byPort = await startServe({ env: { SQUAD_DOCKER: r.fake.path }, home: r.home, store: r.store, port: 0, log: makeLog(() => {}), user: ME });
   t.after(() => byPort.stop());
   assert.match(byPort.address, /^http:\/\/127\.0\.0\.1:\d+$/);
   const list = await call(fetch, byPort.address, "serveAccounts", {}, { headers: r.headers });
   assert.deepEqual(list.map((a) => a.account), ["pi/acct-one"]);
+  const lines = await collect(callStream(fetch, byPort.address, "startPass", { body: body(r) }, { headers: r.headers }));
+  assert.deepEqual([lines[0]!.type, lines.at(-1)!.type], ["started", "result"]);
 });
 
 test("an output piece and a result never carry a credential: masked, or dropped when masking is not enough", async () => {
