@@ -21,8 +21,8 @@ test("yellow from 24 h up to 3 days, in days and hours", () => {
 
 test("grey from 3 days on: the weekday and time in the given zone", () => {
   const b = weekResetBadge("2026-10-27T14:00:00.000Z", NOW, "UTC")!;
-  assert.deepEqual([b.tone, b.text], ["grey", "resets Tue 14:00"]);
-  assert.equal(weekResetBadge("2026-10-27T14:00:00.000Z", NOW, "Asia/Jakarta")!.text, "resets Tue 21:00");
+  assert.deepEqual([b.tone, b.text], ["grey", "Week resets Tue 14:00"]);
+  assert.equal(weekResetBadge("2026-10-27T14:00:00.000Z", NOW, "Asia/Jakarta")!.text, "Week resets Tue 21:00");
 });
 
 test("the hover text is the exact local time", () => {

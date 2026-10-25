@@ -121,7 +121,7 @@ export function Accounts() {
                   <Stack gap="3" mt="3" pl="11">
                     <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour" />
                     <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
-                    <AccountUserText a={a} fontSize="xs" color="fg.muted" />
+                    <AccountUserText a={a} />
                     <Text fontSize="xs" color="fg.subtle">
                       last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
                     </Text>
@@ -151,17 +151,17 @@ export function Accounts() {
                       <Table.Cell ps="5" py="3.5">
                         <NameCell a={a} />
                       </Table.Cell>
-                      <Table.Cell hideBelow="xl" maxW="64">
-                        <AccountUserText a={a} fontSize="sm" color="fg.muted" />
+                      <Table.Cell hideBelow="xl" maxW="72">
+                        <AccountUserText a={a} />
                       </Table.Cell>
                       <Table.Cell>
                         <HealthBadge health={a.health} />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" />
+                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" keepResetLine />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" resetsWeek={a.resetsWeek} />
+                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" resetsWeek={a.resetsWeek} keepResetLine />
                       </Table.Cell>
                       <Table.Cell hideBelow="lg" textAlign="end" color="fg.muted" fontSize="sm" whiteSpace="nowrap">
                         {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}

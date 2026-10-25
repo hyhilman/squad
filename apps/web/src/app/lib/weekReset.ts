@@ -1,5 +1,6 @@
 // The badge on a week room bar: how soon the week window resets. Red under a day, yellow under three
-// days (both also put the account in Overview → Needs attention), else grey with the weekday.
+// days (both also put the account in Overview → Needs attention), else grey with the weekday. Every
+// badge starts with "Week resets", so they read the same.
 
 export type WeekTone = "red" | "yellow" | "grey";
 
@@ -28,7 +29,7 @@ export function weekResetBadge(resetsWeek: string | undefined, now: Date, timeZo
   }
   const day = new Intl.DateTimeFormat("en-US", { weekday: "short", ...zone }).format(t);
   const time = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...zone }).format(t);
-  return { tone: "grey", text: `resets ${day} ${time}`, title };
+  return { tone: "grey", text: `Week resets ${day} ${time}`, title };
 }
 
 /** The week resets within three days (a red or yellow badge). */

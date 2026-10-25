@@ -251,7 +251,8 @@ export function WeekResetBadge({ resetsWeek }: { resetsWeek: string | undefined 
   );
 }
 
-export function RoomBar({ left, floor, width = "100%", label, resetsWeek }: { left: number | undefined; floor: number; width?: string; label?: string; resetsWeek?: string }) {
+/** `keepResetLine` holds the badge line empty when there is no badge, so table rows keep one height. */
+export function RoomBar({ left, floor, width = "100%", label, resetsWeek, keepResetLine = false }: { left: number | undefined; floor: number; width?: string; label?: string; resetsWeek?: string; keepResetLine?: boolean }) {
   const l = Math.max(0, Math.min(100, left ?? 0));
   const f = Math.max(0, Math.min(100, floor));
   const color = left === undefined ? "room.track" : ROOM_COLOR[roomState(l, f)];
@@ -276,7 +277,7 @@ export function RoomBar({ left, floor, width = "100%", label, resetsWeek }: { le
           <Legend color={color} text={`${parts.available}% available`} hint={availableHint(parts)} />
         )}
       </Flex>
-      <WeekResetBadge resetsWeek={resetsWeek} />
+      {keepResetLine && weekResetBadge(resetsWeek, new Date()) === undefined ? <Box h="5" aria-hidden /> : <WeekResetBadge resetsWeek={resetsWeek} />}
     </Stack>
   );
 }
