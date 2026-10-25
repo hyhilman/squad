@@ -456,7 +456,7 @@ test("CORS: with no setting, nobody gets headers and a preflight is refused", as
   await r.close();
 });
 
-test("/auth/logout/everywhere: POST with the csrf proof; clears the session and answers the provider's end-session URL with client_id and the signed-out page, never an ID token", async () => {
+test("/auth/logout/everywhere: POST with the csrf proof; clears the session and answers the provider's end-session URL with client_id only: no post-logout address to register, never an ID token", async () => {
   const r = await rig();
   const c = await signIn(r, "alice@example.test");
   const path = "/auth/logout/everywhere";
@@ -473,12 +473,12 @@ test("/auth/logout/everywhere: POST with the csrf proof; clears the session and 
   const to = new URL(body.to);
   assert.equal(`${to.origin}${to.pathname}`, `${p.issuer}/end-session`);
   assert.equal(to.searchParams.get("client_id"), CLIENT_ID);
-  assert.equal(to.searchParams.get("post_logout_redirect_uri"), `${PUBLIC}/signed-out`);
+  assert.equal(to.searchParams.has("post_logout_redirect_uri"), false, "nothing to register at the provider: its own page stays open in its own tab");
   assert.equal(to.searchParams.has("id_token_hint"), false, "squad keeps no ID token");
-  // The provider ends its session and sends the browser back to the signed-out page.
+  // The provider ends its session and shows its own signed-out page.
   const seen = p.endSessionRequests.length;
-  const back = await fetch(body.to, { redirect: "manual" });
-  assert.deepEqual([back.status, back.headers.get("location")], [302, `${PUBLIC}/signed-out`]);
+  const end = await fetch(body.to, { redirect: "manual" });
+  assert.equal(end.status, 200);
   assert.equal(p.endSessionRequests.length, seen + 1);
   assert.ok(!r.logs.join("\n").includes(c.split("=")[1]!), "no session cookie in a log");
   await r.close();

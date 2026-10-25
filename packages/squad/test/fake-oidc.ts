@@ -92,10 +92,12 @@ export async function startFakeOidc(kind: "RS256" | "ES256" = "RS256"): Promise<
       return json(200, { issuer: p.discoveryIssuer ?? issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`, ...(p.endSession ? { end_session_endpoint: `${issuer}/end-session` } : {}) });
     }
     if (url.pathname === "/end-session" && p.endSession) {
-      // As a provider does: end its own session, then send the browser to the post-logout address.
+      // As a provider does: end its own session, then send the browser to the post-logout address,
+      // or show its own signed-out page when there is none.
       p.endSessionRequests.push(url.searchParams);
       const back = url.searchParams.get("post_logout_redirect_uri");
-      if (url.searchParams.get("client_id") !== CLIENT_ID || back === null) return json(400, { error: "invalid_request" });
+      if (url.searchParams.get("client_id") !== CLIENT_ID) return json(400, { error: "invalid_request" });
+      if (back === null) return json(200, { signedOut: true });
       res.writeHead(302, { location: back });
       return res.end();
     }

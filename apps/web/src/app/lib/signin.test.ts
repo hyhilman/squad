@@ -35,6 +35,7 @@ test("signInUrl never sends the signed-out page back as the target", () => {
 test("signedOutNote: the signed-out page says the person signed out, and when the provider's session may still be on", () => {
   assert.equal(signedOutNote("/signed-out", ""), "signed-out");
   assert.equal(signedOutNote("/signed-out", "?provider=none"), "squad-only");
+  assert.equal(signedOutNote("/signed-out", "?provider=tab"), "provider-tab", "the provider's sign-out opened in its own tab");
   assert.equal(signedOutNote("/", ""), undefined, "a session that ran out is not a sign out");
   assert.equal(signedOutNote("/accounts", "?provider=none"), undefined);
 });

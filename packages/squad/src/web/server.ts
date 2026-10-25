@@ -846,7 +846,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
       res.setHeader("set-cookie", oidc.clearSessionCookie());
       let end: string | undefined;
       try {
-        end = await oidc.endSessionUrl(`${cfg.url}${SIGNED_OUT_PATH}`);
+        end = await oidc.endSessionUrl();
       } catch (e) {
         // squad's session is over either way; the page says the provider's may not be.
         log.warn("end_session_unavailable", e instanceof OidcError ? { reason: e.reason } : { reason: "unknown" });

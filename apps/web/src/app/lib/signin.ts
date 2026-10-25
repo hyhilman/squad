@@ -1,7 +1,7 @@
 // Signed out, the app never moves by itself: it shows a card with a Sign in button, and only the
 // button goes to the backend's sign-in. Going there on its own would sign a person straight back in
 // right after Sign out, since the identity provider still knows them.
-import { AUTH_PATHS, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY } from "@squad/contract";
+import { AUTH_PATHS, SIGNED_OUT_PATH, SIGNED_OUT_PROVIDER_TAB, SIGNED_OUT_SQUAD_ONLY } from "@squad/contract";
 import { inFrame } from "./embed.ts";
 
 /**
@@ -27,8 +27,12 @@ export function signInPlan(w: { readonly top: unknown; readonly self: unknown },
   return { kind: "popup", url: AUTH_PATHS.login };
 }
 
-/** What the signed-out card adds: the person signed out, or signed out of squad only. None after a session ran out. */
-export function signedOutNote(pathname: string, search: string): "signed-out" | "squad-only" | undefined {
+/**
+ * What the signed-out card adds: the person signed out, signed out of squad only, or the provider's
+ * sign-out opened in its own tab. None after a session ran out.
+ */
+export function signedOutNote(pathname: string, search: string): "signed-out" | "squad-only" | "provider-tab" | undefined {
   if (pathname !== SIGNED_OUT_PATH) return undefined;
-  return new URLSearchParams(search).toString() === SIGNED_OUT_SQUAD_ONLY ? "squad-only" : "signed-out";
+  const q = new URLSearchParams(search).toString();
+  return q === SIGNED_OUT_SQUAD_ONLY ? "squad-only" : q === SIGNED_OUT_PROVIDER_TAB ? "provider-tab" : "signed-out";
 }

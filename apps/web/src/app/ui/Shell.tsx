@@ -1,7 +1,7 @@
 // The frame around every page: a top bar and a centred container. Nothing depends on the viewport
 // height, so the app also works inside an iframe of another page.
 import { Badge, Box, Button, Flex, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
-import { AUTH_PATHS, SIGNED_OUT_PATH, type LogoutEverywhere, type Me } from "@squad/contract";
+import { AUTH_PATHS, SIGNED_OUT_PATH, SIGNED_OUT_PROVIDER_TAB, type LogoutEverywhere, type Me } from "@squad/contract";
 import { BarChart3, BookOpen, Check, ChevronDown, History, LayoutDashboard, LogOut, Menu as MenuIcon, Monitor, Moon, Sun, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
@@ -108,12 +108,27 @@ async function signOut() {
   window.location.assign(SIGNED_OUT_PATH);
 }
 
-/** Ends squad's session, then goes to the provider's end-session page, which sends the browser back to the signed-out page. */
+/**
+ * Ends squad's session, opens the provider's end-session page in a new tab and shows the signed-out
+ * page here. The provider never has to send the browser back, so nothing is registered there.
+ */
 async function signOutEverywhere() {
+  // Opened now, inside the click, so a popup blocker lets it through; it gets its address below.
+  const tab = window.open("", "_blank");
   const res = await fetch(AUTH_PATHS.logoutEverywhere, { method: "POST", headers: { "x-squad-csrf": "1" }, credentials: "same-origin" });
-  if (!res.ok) return signOut();
+  if (!res.ok) {
+    tab?.close();
+    return signOut();
+  }
   const body = (await res.json()) as LogoutEverywhere;
-  window.location.assign(body.to);
+  if (!body.provider || tab === null) {
+    // No provider link, or the tab was blocked: go there in this tab instead.
+    tab?.close();
+    return window.location.assign(body.to);
+  }
+  tab.opener = null;
+  tab.location.href = body.to;
+  window.location.assign(`${SIGNED_OUT_PATH}?${SIGNED_OUT_PROVIDER_TAB}`);
 }
 
 function SignOutItems({ onPick }: { onPick: (everywhere: boolean) => void }) {

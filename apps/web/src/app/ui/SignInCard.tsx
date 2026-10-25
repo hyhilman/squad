@@ -16,6 +16,7 @@ const POLL_MS = 2000;
 const NOTES = {
   "signed-out": "You're signed out.",
   "squad-only": "You're signed out of squad. Your sign-in provider has no sign-out link, so you may still be signed in there.",
+  "provider-tab": "You're signed out. Your sign-in provider's sign-out opened in a new tab.",
 } as const;
 
 export function SignInCard({ plan, note }: { plan: SignInPlan; note?: keyof typeof NOTES | undefined }) {

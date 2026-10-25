@@ -428,13 +428,12 @@ export const AUTH_PATHS = {
   logoutEverywhere: "/auth/logout/everywhere",
 } as const;
 
-/**
- * The app's signed-out page. The identity provider sends the browser back here after a sign out
- * everywhere, so `<SQUAD_WEB_URL>/signed-out` is the post-logout address to register there.
- */
+/** The app's signed-out page. Sign out and Sign out everywhere both end here. */
 export const SIGNED_OUT_PATH = "/signed-out";
 /** On the signed-out page: the provider had no end-session link, so only squad's session ended. */
 export const SIGNED_OUT_SQUAD_ONLY = "provider=none";
+/** On the signed-out page: the provider's own sign-out opened in a new tab. */
+export const SIGNED_OUT_PROVIDER_TAB = "provider=tab";
 
 export interface LogoutEverywhere {
   /** The provider's end-session URL, or the signed-out page when the provider has none. */

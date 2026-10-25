@@ -281,15 +281,15 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
 
     /**
      * The provider's end-session URL (OIDC RP-initiated logout), or undefined when it has none. The
-     * session keeps no ID token, so there is no id_token_hint: the spec then wants client_id, and
-     * `back` must be registered at the provider as a post-logout address.
+     * session keeps no ID token, so there is no id_token_hint: the spec then wants client_id. There is
+     * no post_logout_redirect_uri, so nothing has to be registered at the provider: the page opens
+     * this link in its own tab, and the provider shows its own signed-out page there.
      */
-    async endSessionUrl(back: string): Promise<string | undefined> {
+    async endSessionUrl(): Promise<string | undefined> {
       const end = (await discovery()).end_session_endpoint;
       if (end === undefined) return undefined;
       const u = new URL(end);
       u.searchParams.set("client_id", cfg.clientId);
-      u.searchParams.set("post_logout_redirect_uri", back);
       return u.toString();
     },
   };
