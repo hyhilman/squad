@@ -279,6 +279,20 @@ Each pass row keeps two costs:
 The older `cost_usd` and `price_src` columns stay. `cost_usd` equals `catalog_cost_usd` for a `key`
 account and is empty for a seat. The Usage page compares the two sums by provider/model.
 
+### Key use and caps
+
+A key account (an API key, today only on pi) has no 5-hour or week window from its provider. So
+squad shows what the key used in its own passes over the last 5 hours, 7 days and 30 days. A pass
+counts its CLI cost, or its catalog cost when the CLI said 0 or nothing. For a plan such as
+opencode-go, pi works the cost out from its own price table, so the number is an estimate, not
+money spent. squad never asks the provider for a balance. It cannot see use outside squad, and the
+provider's month may follow a billing cycle squad does not know.
+
+The owner (or an admin) may set a cap in dollars per window under Caps; there is none by default.
+When a window's used sum reaches its cap, the pool stops picking the key, the same way as an account
+under its floor. A cap stops only new passes: up to `SQUAD_KEY_PARALLEL` passes may already run on
+the key, so the use can go a little past the cap. `SQUAD_NO_KEY_CAPS=1` makes the pool ignore caps.
+
 `squad import <home>` also reads a doppelganger project (a folder with `creds/pi/<name>/` or
 `.doppelganger/creds/pi/<name>/` and no squad database). It copies the pi key accounts
 (`auth.json` and `models.json`) and never moves them; a folder with a login entry is refused.
