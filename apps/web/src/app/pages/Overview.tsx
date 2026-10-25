@@ -7,7 +7,7 @@ import { seriesTotals, utcDay } from "../lib/totals.ts";
 import { failedText } from "../lib/passFilter.ts";
 import { TODAY_PAGE, useAccounts, useTodayPasses, useUsageSeries } from "../queries.ts";
 import { TokensChart } from "../ui/charts.tsx";
-import { EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, StatCard, logoOfRunner } from "../ui/parts.tsx";
+import { EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, AccountRoom, StatCard, logoOfRunner } from "../ui/parts.tsx";
 
 export function Overview() {
   const accounts = useAccounts();
@@ -70,7 +70,7 @@ export function Overview() {
       </SimpleGrid>
 
       <Stack gap="6">
-        <Panel title="Needs attention" description="Dead, cooling, not shared or at the floor (the pool skips these), or the week resets within 3 days." flush>
+        <Panel title="Needs attention" description="Dead, cooling, not shared, at the floor or a key at its cap (the pool skips these), or the week resets within 3 days." flush>
           {accounts.isPending ? (
             <Stack gap="3" px="5" pb="5">
               {[0, 1, 2].map((i) => (
@@ -82,7 +82,7 @@ export function Overview() {
               <ErrorBlock error={accounts.error} onRetry={() => void accounts.refetch()} />
             </Box>
           ) : attention.length === 0 ? (
-            <EmptyBlock compact icon={CheckCircle2} title="All accounts are fine" description="No account is dead, cooling, not shared or at its floor, and no week resets soon." />
+            <EmptyBlock compact icon={CheckCircle2} title="All accounts are fine" description="No account is dead, cooling, not shared, at its floor or at its cap, and no week resets soon." />
           ) : (
             <Stack gap="0" borderTopWidth="1px" borderColor="border.subtle">
               {attention.map(({ account: a, reason }) => (
@@ -102,10 +102,10 @@ export function Overview() {
                       </HStack>
                       <Stack direction={{ base: "column", md: "row" }} gap={{ base: "3", md: "6" }} flexShrink={0} w={{ base: "full", md: "auto" }} align={{ base: "stretch", md: "flex-start" }}>
                         <Box w={{ base: "full", md: "200px" }} minW="0">
-                          <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5h" />
+                          <AccountRoom a={a} window="5h" label="5h" />
                         </Box>
                         <Box w={{ base: "full", md: "200px" }} minW="0">
-                          <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
+                          <AccountRoom a={a} window="week" label="Week" />
                         </Box>
                         <Box w="20" textAlign="right" hideBelow="md">
                           <HealthBadge health={a.health} />

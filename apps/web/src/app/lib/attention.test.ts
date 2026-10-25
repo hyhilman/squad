@@ -46,3 +46,8 @@ test("an account its owner does not share needs attention: the pool refuses ever
   assert.equal(attentionOf(acct({ sharing: false, health: "dead" })), "Login is dead");
   assert.equal(attentionOf(acct({ sharing: true })), undefined);
 });
+
+test("attentionOf: a key whose own passes reached a cap needs attention; one with no cap does not", () => {
+  assert.equal(attentionOf(acct({ account: "pi/dev", kind: "key", used5h: 3, cap5h: 2 })), "5-hour cap reached");
+  assert.equal(attentionOf(acct({ account: "pi/dev", kind: "key", used5h: 3 })), undefined);
+});

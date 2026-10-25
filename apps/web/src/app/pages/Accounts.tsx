@@ -10,7 +10,7 @@ import { useAccounts, useMe, usePasses } from "../queries.ts";
 import { AccountMenu } from "../ui/actions.tsx";
 import { AddAccount } from "../ui/AddAccount.tsx";
 import { AccountUserText } from "../ui/AccountUser.tsx";
-import { Chip, EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
+import { Chip, EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, AccountRoom, logoOfRunner } from "../ui/parts.tsx";
 
 type HealthFilter = "" | "attention" | Health;
 
@@ -119,8 +119,8 @@ export function Accounts() {
                     </HStack>
                   </Flex>
                   <Stack gap="3" mt="3" pl="11">
-                    <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5-hour" />
-                    <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
+                    <AccountRoom a={a} window="5h" label="5-hour" />
+                    <AccountRoom a={a} window="week" label="Week" />
                     <AccountUserText a={a} />
                     <Text fontSize="xs" color="fg.subtle">
                       last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
@@ -158,10 +158,10 @@ export function Accounts() {
                         <HealthBadge health={a.health} />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} width="200px" keepResetLine />
+                        <AccountRoom a={a} window="5h" width="200px" keepResetLine />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" resetsWeek={a.resetsWeek} keepResetLine />
+                        <AccountRoom a={a} window="week" width="200px" keepResetLine />
                       </Table.Cell>
                       <Table.Cell hideBelow="lg" textAlign="end" color="fg.muted" fontSize="sm" whiteSpace="nowrap">
                         {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}

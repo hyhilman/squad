@@ -3,6 +3,7 @@ import type { AccountView, Runner } from "@squad/contract";
 import { ChevronRight } from "lucide-react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router";
 import { agoText } from "../lib/format.ts";
+import { capsText } from "../lib/keyUse.ts";
 import { UNKNOWN_USER_HINT } from "../lib/accountUser.ts";
 import { isOwnerOf } from "../lib/login.ts";
 import { FillAccountUser } from "../ui/AccountUser.tsx";
@@ -10,7 +11,7 @@ import { useAccount, useMe, useRoomSeries } from "../queries.ts";
 import { AccountButtons } from "../ui/actions.tsx";
 import { RoomChart } from "../ui/charts.tsx";
 import { PassesBrowser } from "../ui/PassesBrowser.tsx";
-import { EmptyBlock, ErrorBlock, Fact, HealthBadge, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
+import { EmptyBlock, ErrorBlock, Fact, HealthBadge, Panel, ProviderLogo, AccountRoom, logoOfRunner } from "../ui/parts.tsx";
 
 const when = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
 const at = (iso: string | undefined) => (iso === undefined ? "-" : when.format(Date.parse(iso)));
@@ -19,10 +20,19 @@ function OverviewTab({ a }: { a: AccountView }) {
   const room = useRoomSeries(a.runner as Runner, a.name, "7d");
   return (
     <Grid templateColumns={{ base: "1fr", lg: "minmax(0, 2fr) minmax(0, 1fr)" }} gap="6" alignItems="start">
+      {a.kind === "key" ? (
+        // A key has no window from its provider and so no readings: it shows what squad's own passes used.
+        <Panel title="Used by squad" description="What this key's passes in squad used, in dollars. squad cannot see use outside squad. Set caps with Caps.">
+          <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6">
+            <AccountRoom a={a} window="5h" label="Last 5 hours" />
+            <AccountRoom a={a} window="week" label="Last 7 days" />
+          </Grid>
+        </Panel>
+      ) : (
       <Panel title="Room left" description={a.readAt === undefined ? "No usage read yet." : `Read ${agoText(a.readAt, new Date())}. The grey part is the floor the owner keeps.`}>
         <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6" mb="6">
-          <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5-hour window" />
-          <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week window" resetsWeek={a.resetsWeek} />
+          <AccountRoom a={a} window="5h" label="5-hour window" />
+          <AccountRoom a={a} window="week" label="Week window" />
         </Grid>
         <Text fontSize="xs" fontWeight="600" color="fg.muted" textTransform="uppercase" letterSpacing="0.06em" mb="2">
           Last 7 days
@@ -37,6 +47,7 @@ function OverviewTab({ a }: { a: AccountView }) {
           <RoomChart points={room.data} floor5h={a.floor5h} floorWeek={a.floorWeek} />
         )}
       </Panel>
+      )}
       <Stack gap="6">
         <Panel title="Status">
           <Fact label="Health">
@@ -70,7 +81,11 @@ function OverviewTab({ a }: { a: AccountView }) {
           </Fact>
           <Fact label="Owner">{a.ownerEmail === "" ? "-" : a.ownerEmail}</Fact>
           <Fact label="Shared">{a.sharing ? `Since ${at(a.consentAt)}${a.consentBy === undefined ? "" : ` (by ${a.consentBy})`}` : "No: squad refuses every pass"}</Fact>
-          <Fact label="Floors">{`${a.floor5h}% · ${a.floorWeek}% (${a.floorSource === "owner" ? "set by the owner" : "the default"})`}</Fact>
+          {a.kind === "key" ? (
+            <Fact label="Caps">{capsText(a)}</Fact>
+          ) : (
+            <Fact label="Floors">{`${a.floor5h}% · ${a.floorWeek}% (${a.floorSource === "owner" ? "set by the owner" : "the default"})`}</Fact>
+          )}
         </Panel>
       </Stack>
     </Grid>

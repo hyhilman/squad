@@ -1,16 +1,20 @@
 import type { AccountView } from "@squad/contract";
+import { capReachedText } from "./keyUse.ts";
 import { weekSoon } from "./weekReset.ts";
 
-type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "floorWeek"> & { readonly resetsWeek?: string; readonly sharing?: boolean };
+type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "floorWeek"> &
+  Partial<Pick<AccountView, "kind" | "used5h" | "usedWeek" | "used30d" | "cap5h" | "capWeek" | "cap30d">> & { readonly resetsWeek?: string; readonly sharing?: boolean };
 
 // The pool skips an account that is dead, cooling, or at or under its floor in either window
-// (packages/squad/src/pool/pick.ts), so those are the ones a person should look at. A disabled or
+// (packages/squad/src/pool/pick.ts), or a key whose own passes reached a dollar cap, so those are the ones a person should look at. A disabled or
 // moved account was put aside on purpose.
 export function attentionOf(a: Facts): string | undefined {
   if (a.health === "dead") return "Login is dead";
   if (a.health === "cooling") return "Cooling down";
   if (a.health === "disabled" || a.health === "moved" || a.health === "removed") return undefined;
   if (a.sharing === false) return "Not shared";
+  const cap = capReachedText(a);
+  if (cap !== undefined) return cap;
   if (a.left5h !== undefined && a.left5h <= a.floor5h) return "5-hour room at the floor";
   if (a.leftWeek !== undefined && a.leftWeek <= a.floorWeek) return "Week room at the floor";
   return undefined;

@@ -1,7 +1,7 @@
 // The acts on one account (lib/accountActions.ts says which a person may take). The accounts table
 // shows them in a "⋯" menu; the account page shows the urgent ones and Test as buttons, the rest in a
 // "⋯" menu. Both use this one hook.
-import { Button, CloseButton, Dialog, HStack, IconButton, Menu, Portal, Stack, Text } from "@chakra-ui/react";
+import { Box, Button, CloseButton, Dialog, Field, HStack, IconButton, Input, InputGroup, Menu, Portal, SimpleGrid, Stack, Text } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AccountView, LoginStart, Runner } from "@squad/contract";
 import { CirclePause, CirclePlay, FlaskConical, KeyRound, LogIn, MoreHorizontal, RotateCcw, ShieldCheck, ShieldOff, SlidersHorizontal, TimerReset, Trash2, type LucideIcon } from "lucide-react";
@@ -9,9 +9,11 @@ import { Fragment, useState, type ReactNode } from "react";
 import { api } from "../api.ts";
 import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
+import { CAP_HINT, capInput, capsBody, usdText } from "../lib/keyUse.ts";
 import { accountActions, splitActions, type ActionKey } from "../lib/accountActions.ts";
 import { useMe } from "../queries.ts";
 import { FloorEditor } from "./FloorEditor.tsx";
+import { Hint } from "./parts.tsx";
 import { LoginProgress } from "./LoginProgress.tsx";
 import { ClaudeLoginDialog, KeyDialog, LimitDialog, RemoveDialog, Shell, TestDialog } from "./careDialogs.tsx";
 import { toastError, toastOk } from "./toaster.tsx";
@@ -26,6 +28,77 @@ export interface Action {
 }
 
 const paramsOf = (a: AccountView) => ({ runner: a.runner as Runner, name: a.name });
+
+/**
+ * The caps form of a key account: dollars per window, empty = no cap. A key has no window from its
+ * provider, so it has no floor that could act: the caps take the floors' place.
+ */
+export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: () => void; onCancel?: () => void }) {
+  const qc = useQueryClient();
+  const start = [capInput(a.cap5h), capInput(a.capWeek), capInput(a.cap30d)] as const;
+  const [c5, setC5] = useState<string>(start[0]);
+  const [cw, setCw] = useState<string>(start[1]);
+  const [c30, setC30] = useState<string>(start[2]);
+  const [busy, setBusy] = useState(false);
+  const dirty = c5 !== start[0] || cw !== start[1] || c30 !== start[2];
+  const save = async () => {
+    const b = capsBody(c5, cw, c30);
+    if (!b.ok) return void toastError(b.errors.join(" "));
+    setBusy(true);
+    try {
+      await api("setCaps", { params: paramsOf(a), body: b.body });
+      await qc.invalidateQueries();
+      toastOk("Caps saved.");
+      onSaved?.();
+    } catch (e) {
+      toastError(failureText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const rows = [
+    { label: "5-hour cap", value: c5, set: setC5, used: a.used5h, span: "last 5 hours" },
+    { label: "Week cap", value: cw, set: setCw, used: a.usedWeek, span: "last 7 days" },
+    { label: "30-day cap", value: c30, set: setC30, used: a.used30d, span: "last 30 days" },
+  ];
+  return (
+    <Stack gap="5">
+      <Box>
+        <Hint text={CAP_HINT}>
+          <Text fontSize="sm" fontWeight="600" w="fit-content" cursor="help" textDecoration="underline dotted" textUnderlineOffset="3px">
+            Caps (dollars)
+          </Text>
+        </Hint>
+        <Text mt="1" fontSize="sm" color="fg.muted">
+          {CAP_HINT} Leave a box empty for no cap.
+        </Text>
+      </Box>
+      <SimpleGrid columns={{ base: 1, sm: 3 }} gap="4">
+        {rows.map((r) => (
+          <Field.Root key={r.label}>
+            <Field.Label fontSize="sm">{r.label}</Field.Label>
+            <InputGroup startElement="$">
+              <Input size="sm" inputMode="decimal" placeholder="No cap" value={r.value} onChange={(e) => r.set(e.target.value)} aria-label={`${r.label} in dollars`} fontVariantNumeric="tabular-nums" />
+            </InputGroup>
+            <Field.HelperText fontSize="xs" fontVariantNumeric="tabular-nums">
+              {usdText(r.used ?? 0)} used in the {r.span}
+            </Field.HelperText>
+          </Field.Root>
+        ))}
+      </SimpleGrid>
+      <HStack justify="flex-end" gap="2">
+        {onCancel === undefined ? null : (
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button colorPalette="brand" size="sm" onClick={() => void save()} loading={busy} disabled={!dirty}>
+          Save caps
+        </Button>
+      </HStack>
+    </Stack>
+  );
+}
 
 /** The floors form: one editor per window and a Save button. */
 export function FloorsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: () => void; onCancel?: () => void }) {
@@ -136,7 +209,7 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
     test: { label: "Test", icon: FlaskConical, run: () => setDialog("test") },
     reset: { label: "Reset health", icon: RotateCcw, run: () => void run("Health reset.", () => api("resetHealth", { params: paramsOf(a) })) },
     limit: { label: "Use limit reset", icon: TimerReset, run: () => setDialog("limit") },
-    floors: { label: "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
+    floors: { label: a.kind === "key" ? "Caps" : "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
     enable: { label: disabled ? "Enable" : "Disable", icon: disabled ? CirclePlay : CirclePause, danger: !disabled, run: () => setDialog("enable") },
     remove: { label: "Remove", icon: Trash2, danger: true, run: () => setDialog("remove") },
   };
@@ -144,8 +217,8 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
 
   const dialogs = (
     <>
-      <SimpleDialog open={dialog === "floors"} onClose={close} title={`Floors of ${a.account}`}>
-        <FloorsForm a={a} onSaved={close} onCancel={close} />
+      <SimpleDialog open={dialog === "floors"} onClose={close} title={a.kind === "key" ? `Caps of ${a.account}` : `Floors of ${a.account}`}>
+        {a.kind === "key" ? <CapsForm a={a} onSaved={close} onCancel={close} /> : <FloorsForm a={a} onSaved={close} onCancel={close} />}
       </SimpleDialog>
       <SimpleDialog
         open={dialog === "enable"}

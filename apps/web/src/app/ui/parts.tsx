@@ -1,12 +1,13 @@
 // Small building blocks every page uses, so spacing, type and colour stay the same everywhere.
 import { Badge, Box, Button, Clipboard, EmptyState, Flex, HStack, IconButton, LinkBox, LinkOverlay, Portal, Skeleton, Stack, Text, Tooltip, VStack } from "@chakra-ui/react";
-import type { Health } from "@squad/contract";
+import type { AccountView, Health } from "@squad/contract";
 import { AlertTriangle, Check, ChevronRight, Copy, Inbox, type LucideIcon } from "lucide-react";
 import { Link as RouterLink } from "react-router";
 import { useState, type ReactNode } from "react";
 import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
+import { CAP_HINT, NO_CAP_HINT, capReachedText, keyCell, thirtyDayText } from "../lib/keyUse.ts";
 import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
 import { fiveHourResetBadge, weekResetBadge, type WeekBadge, type WeekTone } from "../lib/weekReset.ts";
 
@@ -287,6 +288,75 @@ export function RoomBar({ left, floor, width = "100%", label, resets5h, resetsWe
       </Flex>
       {keepResetLine && badge === undefined ? <Box h="5" aria-hidden /> : <ResetBadge b={badge} />}
     </Stack>
+  );
+}
+
+const CAP_COLOR = { blue: "room.blue", yellow: "room.yellow", red: "room.red" } as const;
+
+/**
+ * What a key's own passes used in one window, in dollars. With a cap, a bar of used over cap: red when
+ * reached, yellow above 80%. With no cap there is no bar; an empty line of the same height keeps the
+ * text level with the seats' bars. `note` fills the line under it (where a seat shows its reset badge).
+ */
+export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAlert = false, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; note?: string; noteAlert?: boolean; keepResetLine?: boolean }) {
+  const c = keyCell(used, cap);
+  const usedHint = `Used by squad's own passes in the last ${span}. squad cannot see use outside squad.`;
+  return (
+    <Stack gap="1.5" w={width} minW="0">
+      {label === undefined ? null : (
+        <Text fontSize="xs" lineHeight="1" color="fg.muted">
+          {label}
+        </Text>
+      )}
+      <Box position="relative" h="1.5" rounded="full" bg={c.pct === undefined ? undefined : "room.track"} aria-hidden>
+        {c.pct === undefined || c.tone === undefined ? null : <Box position="absolute" insetY="0" left="0" rounded="full" bg={CAP_COLOR[c.tone]} style={{ width: `${c.pct}%` }} />}
+      </Box>
+      <Flex justify="space-between" gap="2" fontSize="xs" lineHeight="1" color="fg.muted">
+        {c.capText === undefined ? (
+          <Hint text={NO_CAP_HINT}>
+            <Text color="fg.subtle" cursor="help" tabIndex={0} whiteSpace="nowrap">
+              No cap
+            </Text>
+          </Hint>
+        ) : (
+          <Legend color="room.floor" text={c.capText} hint={CAP_HINT} />
+        )}
+        {c.tone === undefined ? (
+          <Hint text={usedHint}>
+            <Text cursor="help" tabIndex={0} whiteSpace="nowrap" fontVariantNumeric="tabular-nums">
+              {c.usedText}
+            </Text>
+          </Hint>
+        ) : (
+          <Legend color={CAP_COLOR[c.tone]} text={c.usedText} hint={usedHint} />
+        )}
+      </Flex>
+      {note !== undefined ? (
+        <Text h="5" display="flex" alignItems="center" fontSize="xs" lineHeight="1" color={noteAlert ? "fg.error" : "fg.subtle"} fontVariantNumeric="tabular-nums" truncate>
+          {note}
+        </Text>
+      ) : keepResetLine ? (
+        <Box h="5" aria-hidden />
+      ) : null}
+    </Stack>
+  );
+}
+
+/** One window of an account: a seat's room bar, or what a key used. */
+export function AccountRoom({ a, window, width, label, keepResetLine = false }: { a: AccountView; window: "5h" | "week"; width?: string; label?: string; keepResetLine?: boolean }) {
+  const w = width === undefined ? {} : { width };
+  const l = label === undefined ? {} : { label };
+  if (a.kind === "key") {
+    return window === "5h" ? (
+      <KeyUseBar used={a.used5h} cap={a.cap5h} span="5 hours" {...w} {...l} keepResetLine={keepResetLine} />
+    ) : (
+      <KeyUseBar used={a.usedWeek} cap={a.capWeek} span="7 days" {...w} {...l} note={thirtyDayText(a)} noteAlert={capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) !== undefined} keepResetLine={keepResetLine} />
+    );
+  }
+  return window === "5h" ? (
+    <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} {...w} {...l} keepResetLine={keepResetLine} />
+  ) : (
+    <RoomBar left={a.leftWeek} floor={a.floorWeek} resetsWeek={a.resetsWeek} {...w} {...l} keepResetLine={keepResetLine} />
   );
 }
 
