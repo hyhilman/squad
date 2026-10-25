@@ -18,12 +18,14 @@ import { close, open, send, type TurnResult } from "../conversations.ts";
 import { dockerStopArgv, stopGraceS } from "../docker.ts";
 import type { HomeLayout } from "../home.ts";
 import { makeLog, type Log } from "../log.ts";
-import { flockBusy, lockPathOf, runPass, type PassResult, type RunDeps } from "../run.ts";
+import { failureOf, flockBusy, lockPathOf, runPass, type PassResult, type RunDeps } from "../run.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_SERVE_DRAIN_S_ENV, envNum, envOptional } from "../settings.ts";
-import { NO_TOKENS, type ServePassRow, type Store } from "../store/db.ts";
+import { NO_TOKENS, isBusy, type ServePassRow, type Store } from "../store/db.ts";
+import type { Failure } from "../types.ts";
 import type { ImageInfo } from "../turn.ts";
 import { accountView } from "../web/account-view.ts";
 import { openBody, passBody, turnBody } from "./body.ts";
+import { LOST, containerStates, openServeRows, watchContainer, type OpenServeRow, type Watched } from "./recover.ts";
 import { Refusal, scopeSetup, type ScopedSetup } from "./scope.ts";
 import { authenticate, type ProjectToken } from "./tokens.ts";
 
@@ -389,6 +391,69 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
     }
     await job;
   }
+
+  /** The result of a pass serve found again after a restart: the same shape a live pass gives. */
+  const recoveredResult = (row: OpenServeRow, failure: Failure | undefined, w?: Watched): AnyResult => {
+    const base = {
+      passId: row.pass_id, text: w?.outcome.text ?? "", texts: w?.outcome.texts ?? [], turns: w?.outcome.turns ?? 0, model: w?.outcome.model ?? null, usage: w?.outcome.usage ?? NO_TOKENS,
+      ...(failure === undefined ? {} : { failure }),
+    };
+    return row.kind === "turn" ? { ...base, account: row.account ?? "" } : { ...base, account: row.account, logPath: null };
+  };
+  const endRecovered = (row: OpenServeRow, result: AnyResult, outcome: string, w?: Watched): void => {
+    const at = now().toISOString();
+    const safe = safeResult(result);
+    o.store.endPass({
+      id: row.pass_id, endedAt: at, outcome, tokens: result.usage,
+      ...(result.failure === undefined ? {} : { failKind: result.failure.kind, failCode: result.failure.code }),
+      ...(w === undefined ? {} : { turns: w.outcome.turns, ...(w.outcome.model === null ? {} : { model: w.outcome.model }), ...(w.exitCode === null ? {} : { exitCode: w.exitCode }) }),
+    });
+    o.store.servePass({ id: row.id, tokenId: row.token_id, kind: row.kind, passId: row.pass_id, container: row.container, runner: row.runner, account: row.account, startedAt: row.started_at, endedAt: at, result: JSON.stringify(safe) });
+    ended.set(row.id, { tokenId: row.token_id, result: safe });
+    live.delete(row.id);
+    log.info("serve-recovered", { pass: row.id, outcome: result.failure === undefined ? "ok" : `${result.failure.kind}:${result.failure.code}` });
+  };
+
+  /** Every pass this serve started and never ended: watch the ones still running, end the gone ones as lost. */
+  function recover(): void {
+    try {
+      o.store.foldSpool();
+    } catch (e) {
+      if (!isBusy(e)) throw e;
+      log.warn("serve-spool-busy", {});
+    }
+    const rows = openServeRows(db);
+    if (rows.length === 0) return;
+    const states = containerStates(docker);
+    if (states === null) {
+      // No answer is not "gone": the rows stay running until a later start can ask again.
+      log.warn("serve-recover-unknown", { rows: rows.length });
+      return;
+    }
+    for (const row of rows) {
+      if (row.container === null || !states.has(row.container)) {
+        endRecovered(row, recoveredResult(row, LOST), "lost");
+        continue;
+      }
+      const container = row.container;
+      live.set(row.id, { handle: row.id, tokenId: row.token_id, kind: row.kind, runner: row.runner, account: row.account, startedAt: row.started_at, passId: row.pass_id, container });
+      log.info("serve-watch", { pass: row.id, container });
+      const job = (async () => {
+        try {
+          const w = await watchContainer(docker, container, row.runner);
+          const failure = w.gone ? LOST : failureOf(w.outcome, w.exitCode, undefined, "");
+          endRecovered(row, recoveredResult(row, failure, w), w.gone ? "lost" : failure === undefined ? "ok" : "fail", w);
+        } catch {
+          // The row stays running: a later start looks again.
+          log.error("serve_watch_failed", { pass: row.id });
+          live.delete(row.id);
+        }
+      })();
+      work.add(job);
+      void job.finally(() => work.delete(job));
+    }
+  }
+  recover();
 
   const server: Server = createServer((req, res) => void handle(req, res));
   let address: string;

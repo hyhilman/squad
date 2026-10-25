@@ -2,8 +2,9 @@
 // per call), and acts on the first line of a `modes` file. A `run` call uses up the first line while
 // more than one is left, so a test can script "busy, then ok". `stop` and `kill` calls do not.
 //
-// `ps` prints the file `ps` (tab-separated rows a test wrote with `setPs`); `rm <name>` drops that
-// name's row, as the real daemon would. Neither touches the modes.
+// `ps` prints the file `ps` (tab-separated rows a test wrote with `setPs`), or fails as a daemon that
+// is down would (`setPsFail`); `rm <name>` drops that name's row, as the real daemon would. `logs`
+// prints the stream a test chose with `setLogs`; `wait` prints 0. None of them touches the modes.
 //
 // Modes: ok, slow (ok after half a second), claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
 // codex-reused (an inline shape-test stream: a permanent auth failure), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
@@ -25,7 +26,11 @@ call="$d/calls/$(date +%s%N)-$$"
 printf '%s\\0' "$@" > "$call.argv"
 case "$1" in
   stop|kill) : > "$d/stopped"; exit 0 ;;
-  ps) [ -f "$d/ps" ] && cat "$d/ps"; exit 0 ;;
+  ps)
+    if [ -f "$d/ps-fail" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
+    [ -f "$d/ps" ] && cat "$d/ps"; exit 0 ;;
+  logs) [ -f "$d/logs.jsonl" ] && cat "$d/logs.jsonl"; exit 0 ;;
+  wait) if [ -f "$d/wait" ]; then cat "$d/wait"; else echo 0; fi; exit 0 ;;
   rm)
     for last in "$@"; do :; done
     if [ -f "$d/ps" ]; then awk -F '\\t' -v n="$last" '$1 != n' "$d/ps" > "$d/ps.tmp" && mv "$d/ps.tmp" "$d/ps"; fi
@@ -79,6 +84,10 @@ export interface FakeDocker {
   /** The files (path -> body) a `login-files` run writes into the mounted account folder. */
   setLoginFiles(files: Record<string, string>): void;
   setPs(...rows: [name: string, passId: string, state: string, createdAt: string][]): void;
+  /** `ps` fails with exit 1, as when the daemon is down. */
+  setPsFail(fail: boolean): void;
+  /** What `docker logs` prints: a stream file this fake holds, such as `ok.jsonl`. */
+  setLogs(file: string): void;
 }
 
 export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-docker-"))): FakeDocker {
@@ -128,5 +137,7 @@ export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-do
       writeFileSync(join(root, f), body);
     }
   };
-  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs };
+  const setPsFail = (fail: boolean): void => (fail ? writeFileSync(join(dir, "ps-fail"), "") : rmSync(join(dir, "ps-fail"), { force: true }));
+  const setLogs = (file: string): void => writeFileSync(join(dir, "logs.jsonl"), readFileSync(join(dir, file)));
+  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs, setPsFail, setLogs };
 }
