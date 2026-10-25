@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
-import { CAP_HINT, NO_CAP_HINT, balanceLine, balancePlace, capReachedText, keyCell, thirtyDayText } from "../lib/keyUse.ts";
+import { CAP_HINT, NO_CAP_HINT, balanceRunway, keyCell, type BalanceTone, type RunwayBadge } from "../lib/keyUse.ts";
 import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
 import { fiveHourResetBadge, weekResetBadge, type WeekBadge, type WeekTone } from "../lib/weekReset.ts";
 
@@ -237,18 +237,19 @@ function Legend({ color, text, hint }: { color: string; text: string; hint: stri
  * takes the state colour; a tick marks the floor. Under the bar, the floor sits on the left and what
  * is available sits on the right, each in its own colour.
  */
-const WEEK_PALETTE: Readonly<Record<WeekTone, string>> = { red: "red", yellow: "yellow", grey: "gray" };
+const BADGE_PALETTE: Readonly<Record<WeekTone | BalanceTone, string>> = { red: "red", orange: "orange", yellow: "yellow", grey: "gray" };
 
 /** When the week window resets: red under a day, yellow under three, grey after. The hover says the exact time. */
 export function WeekResetBadge({ resetsWeek }: { resetsWeek: string | undefined }) {
   return <ResetBadge b={weekResetBadge(resetsWeek, new Date())} />;
 }
 
-function ResetBadge({ b }: { b: WeekBadge | undefined }) {
+/** A reset badge, or a key's balance badge: the same pill, with the exact facts on hover. */
+function ResetBadge({ b }: { b: { readonly text: string; readonly tone: WeekTone | BalanceTone; readonly title: string } | undefined }) {
   if (b === undefined) return null;
   return (
     <Hint text={b.title}>
-      <Badge colorPalette={WEEK_PALETTE[b.tone]} variant={b.tone === "grey" ? "outline" : "subtle"} size="sm" rounded="full" fontWeight="500" tabIndex={0} cursor="help" w="fit-content" whiteSpace="nowrap">
+      <Badge colorPalette={BADGE_PALETTE[b.tone]} variant={b.tone === "grey" ? "outline" : "subtle"} size="sm" rounded="full" fontWeight="500" tabIndex={0} cursor="help" w="fit-content" whiteSpace="nowrap">
         {b.text}
       </Badge>
     </Hint>
@@ -295,18 +296,10 @@ const CAP_COLOR = { blue: "room.blue", yellow: "room.yellow", red: "room.red" } 
 
 /**
  * What a key's own passes used in one window, in dollars, as a bar of used over cap: red when reached,
- * yellow above 80%. With no cap the bar is the same, empty, with "Cap ∞" on the right. `note` fills the
- * line under it (where a seat shows its reset badge): the 30-day cap or the balance estimate.
+ * yellow above 80%. With no cap the bar is the same, empty, with "Cap ∞" on the right. Under it, where a
+ * seat shows its reset badge, a key with an entered balance shows how long that lasts in this window.
  */
-export interface KeyNote {
-  readonly text: string;
-  readonly tone: keyof typeof NOTE_COLOR;
-  readonly hint?: string;
-}
-
-const NOTE_COLOR = { subtle: "fg.subtle", grey: "fg.muted", yellow: "yellow.fg", orange: "orange.fg", red: "fg.error" } as const;
-
-export function KeyUseBar({ used, cap, span, width = "100%", label, note, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; note?: KeyNote; keepResetLine?: boolean }) {
+export function KeyUseBar({ used, cap, span, width = "100%", label, badge, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; badge?: RunwayBadge; keepResetLine?: boolean }) {
   const c = keyCell(used, cap);
   const usedHint = `Used by squad's own passes in the last ${span}. squad cannot see use outside squad.`;
   return (
@@ -324,31 +317,9 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, keepRe
         <Legend color={CAP_COLOR[c.tone]} text={c.usedText} hint={usedHint} />
         <Legend color="room.floor" text={c.capText} hint={cap === undefined ? NO_CAP_HINT : CAP_HINT} />
       </Flex>
-      {note !== undefined ? (
-        <NoteLine note={note} />
-      ) : keepResetLine ? (
-        <Box h="5" aria-hidden />
-      ) : null}
+      {badge !== undefined ? <ResetBadge b={badge} /> : keepResetLine ? <Box h="5" aria-hidden /> : null}
     </Stack>
   );
-}
-
-function NoteLine({ note }: { note: KeyNote }) {
-  const line = (
-    <Text h="5" display="flex" alignItems="center" fontSize="xs" lineHeight="1" color={NOTE_COLOR[note.tone]} fontVariantNumeric="tabular-nums" truncate {...(note.hint === undefined ? {} : { cursor: "help", tabIndex: 0, w: "fit-content", maxW: "full" })}>
-      {note.text}
-    </Text>
-  );
-  return note.hint === undefined ? line : <Hint text={note.hint}>{line}</Hint>;
-}
-
-/** The notes under a key's two bars: the 30-day cap under the week bar, and the balance in a free line. */
-function keyNotes(a: AccountView): { "5h"?: KeyNote; week?: KeyNote } {
-  const notes: { "5h"?: KeyNote; week?: KeyNote } = {};
-  if (a.cap30d !== undefined) notes.week = { text: thirtyDayText(a), tone: capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) === undefined ? "subtle" : "red" };
-  const b = balanceLine(a);
-  if (b !== undefined) notes[balancePlace(a)] = b;
-  return notes;
 }
 
 /** One window of an account: a seat's room bar, or what a key used. */
@@ -356,8 +327,8 @@ export function AccountRoom({ a, window, width, label, keepResetLine = false }: 
   const w = width === undefined ? {} : { width };
   const l = label === undefined ? {} : { label };
   if (a.kind === "key") {
-    const note = keyNotes(a)[window];
-    const n = note === undefined ? {} : { note };
+    const badge = balanceRunway(a, window);
+    const n = badge === undefined ? {} : { badge };
     return window === "5h" ? (
       <KeyUseBar used={a.used5h} cap={a.cap5h} span="5 hours" {...w} {...l} {...n} keepResetLine={keepResetLine} />
     ) : (

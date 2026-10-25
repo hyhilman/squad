@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { balanceFact, balanceLine, balancePlace, balanceTone, perCycle, balanceUsedUp, capReachedText, capsBody, capsText, capTone, centsText, keyCell, parseBalance, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
+import { balanceFact, balanceLine, balanceRunway, balanceTone, perCycle, balanceUsedUp, capReachedText, capsBody, capsText, capTone, centsText, keyCell, parseBalance, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
 
 test("usdText: whole dollars drop the cents; small sums keep four places", () => {
   assert.equal(usdText(12), "$12");
@@ -75,16 +75,18 @@ test("perCycle: the higher of the last 5 hours and the 7-day average per 5 hours
   assert.equal(perCycle({}), 0);
 });
 
-test("balanceTone: by how many 5-hour cycles the balance lasts at the current pace", () => {
-  assert.equal(balanceTone(0, 1), "red", "used up");
-  assert.equal(balanceTone(-1, 0), "red");
-  assert.equal(balanceTone(0.9, 1), "red", "will not last the next cycle");
-  assert.equal(balanceTone(1, 1), "orange", "lasts the next cycle only");
-  assert.equal(balanceTone(1.9, 1), "orange");
-  assert.equal(balanceTone(2, 1), "yellow");
-  assert.equal(balanceTone(4, 1), "yellow", "gone within the next 4 cycles");
-  assert.equal(balanceTone(4.1, 1), "grey");
-  assert.equal(balanceTone(3, 0), "grey", "no use: it lasts");
+test("balanceTone: red under 1 cycle, orange under 2, yellow up to the window's limit, grey after", () => {
+  assert.equal(balanceTone(0, 1, 5), "red", "used up");
+  assert.equal(balanceTone(-1, 0, 5), "red");
+  assert.equal(balanceTone(0.9, 1, 5), "red", "will not last the next cycle");
+  assert.equal(balanceTone(1, 1, 5), "orange", "lasts the next cycle only");
+  assert.equal(balanceTone(1.9, 1, 5), "orange");
+  assert.equal(balanceTone(2, 1, 5), "yellow");
+  assert.equal(balanceTone(5, 1, 5), "yellow", "5 hours: gone within the next 5 cycles");
+  assert.equal(balanceTone(5.1, 1, 5), "grey");
+  assert.equal(balanceTone(4, 1, 4), "yellow", "7 days: gone within the next 4 weeks");
+  assert.equal(balanceTone(4.1, 1, 4), "grey");
+  assert.equal(balanceTone(3, 0, 5), "grey", "no use: it lasts");
 });
 
 const UTC = "UTC";
@@ -111,9 +113,18 @@ test("balanceLine: the pace picks the tone and the hover says how long it lasts"
   assert.equal(balanceLine({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 12, used5h: 1, usedWeek: 2 }, UTC)!.hint.includes("about 12 more 5-hour cycles"), true);
 });
 
-test("balancePlace: under the 7-day bar, or under the 5-hour bar when a 30-day cap note holds that line", () => {
-  assert.equal(balancePlace({}), "week");
-  assert.equal(balancePlace({ cap30d: 30 }), "5h");
+test("balanceRunway: one badge per window, in 5-hour cycles or in weeks", () => {
+  const a = { kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 1.5, used5h: 0.5, usedWeek: 2.5 } as const;
+  const h = balanceRunway(a, "5h", UTC)!;
+  assert.deepEqual([h.text, h.tone], ["≈ $1.50 · 3 cycles", "yellow"]);
+  assert.equal(h.title, "Entered $20.00 on Oct 25, 14:02, minus $18.50 squad used since. At about $0.50 per 5 hours, it lasts about 3 more 5-hour cycles. squad cannot see use outside squad.");
+  const w = balanceRunway(a, "week", UTC)!;
+  assert.deepEqual([w.text, w.tone], ["≈ $1.50 · 0.6 weeks", "red"]);
+  assert.match(w.title, /At about \$2\.50 per 7 days, it lasts about 0\.6 more weeks\./);
+  assert.equal(balanceRunway({ ...a, balanceLeft: 40 }, "week", UTC)!.text, "≈ $40.00 · 16 weeks");
+  assert.equal(balanceRunway({ ...a, used5h: 0, usedWeek: 0 }, "5h", UTC)!.text, "≈ $1.50 · no use yet");
+  assert.equal(balanceRunway({ ...a, balanceLeft: -0.4 }, "week", UTC)!.text, "≈ -$0.40 · used up");
+  assert.equal(balanceRunway({ kind: "key" }, "5h", UTC), undefined);
 });
 
 test("balanceFact: the estimate and what was entered, or None", () => {

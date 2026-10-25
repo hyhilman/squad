@@ -109,24 +109,32 @@ const CYCLES_PER_WEEK = (7 * 24) / 5;
 export const perCycle = (a: Partial<Pick<AccountView, "used5h" | "usedWeek">>): number => Math.max(a.used5h ?? 0, (a.usedWeek ?? 0) / CYCLES_PER_WEEK);
 
 /**
- * By how many 5-hour cycles the balance lasts at `pace` dollars per cycle: red when it will not last
- * the next one, orange when it lasts only the next one, yellow when it is gone within 4, grey after.
+ * By how many cycles the balance lasts at `pace` dollars per cycle: red when it will not last the next
+ * one, orange when it lasts only the next one, yellow when it is gone within `yellowUpTo`, grey after.
  */
-export function balanceTone(left: number, pace: number): BalanceTone {
+export function balanceTone(left: number, pace: number, yellowUpTo: number): BalanceTone {
   if (left <= 0) return "red";
   if (pace <= 0) return "grey";
   const cycles = left / pace;
   if (cycles < 1) return "red";
   if (cycles < 2) return "orange";
-  if (cycles <= 4) return "yellow";
+  if (cycles <= yellowUpTo) return "yellow";
   return "grey";
 }
 
-const paceText = (left: number, pace: number): string => {
-  if (pace <= 0) return "squad used nothing in the last 7 days.";
-  const cycles = Math.max(0, left / pace);
-  return `At about ${centsText(pace)} per 5 hours, it lasts about ${cycles < 10 ? String(Math.round(cycles * 10) / 10) : String(Math.round(cycles))} more 5-hour cycles.`;
-};
+const countText = (n: number): string => (n < 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n)));
+
+/**
+ * The two windows a balance is measured in. 5 hours: the pace is `perCycle`, yellow within 5 cycles.
+ * 7 days: the pace is the last 7 days' use, yellow within 4 weeks.
+ */
+const WINDOWS = {
+  "5h": { pace: perCycle, yellowUpTo: 5, unit: "cycles", per: "per 5 hours", more: "more 5-hour cycles" },
+  week: { pace: (a: BalanceFacts) => a.usedWeek ?? 0, yellowUpTo: 4, unit: "weeks", per: "per 7 days", more: "more weeks" },
+} as const;
+
+const paceText = (left: number, pace: number, w: (typeof WINDOWS)[keyof typeof WINDOWS]): string =>
+  pace <= 0 ? "squad used nothing in the last 7 days." : `At about ${centsText(pace)} ${w.per}, it lasts about ${countText(Math.max(0, left / pace))} ${w.more}.`;
 
 const whenText = (iso: string, timeZone: string | undefined, time: boolean): string =>
   new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", ...(time ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : {}), ...(timeZone === undefined ? {} : { timeZone }) }).format(Date.parse(iso));
@@ -146,13 +154,30 @@ export function balanceLine(a: BalanceFacts, timeZone?: string): BalanceLine | u
   if (b === undefined) return undefined;
   return {
     text: `≈ ${centsText(b.left)} balance`,
-    tone: balanceTone(b.left, perCycle(a)),
-    hint: `Entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, true)}, minus ${centsText(b.usd - b.left)} squad used since. ${paceText(b.left, perCycle(a))} squad cannot see use outside squad.`,
+    tone: balanceTone(b.left, perCycle(a), WINDOWS["5h"].yellowUpTo),
+    hint: enteredHint(b, timeZone, paceText(b.left, perCycle(a), WINDOWS["5h"])),
   };
 }
 
-/** Which bar's spare line holds the balance: the 7-day one, unless a 30-day cap note already uses it. */
-export const balancePlace = (a: Partial<Pick<AccountView, "cap30d">>): "5h" | "week" => (a.cap30d === undefined ? "week" : "5h");
+const enteredHint = (b: { usd: number; at: string; left: number }, timeZone: string | undefined, pace: string): string =>
+  `Entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, true)}, minus ${centsText(b.usd - b.left)} squad used since. ${pace} squad cannot see use outside squad.`;
+
+export interface RunwayBadge {
+  readonly text: string;
+  readonly tone: BalanceTone;
+  /** The hover: what was entered, the pace and how long it lasts. */
+  readonly title: string;
+}
+
+/** The badge under a key's bar in one window: "≈ $1.50 · 3 cycles" or "≈ $1.50 · 0.6 weeks". */
+export function balanceRunway(a: BalanceFacts, window: keyof typeof WINDOWS, timeZone?: string): RunwayBadge | undefined {
+  const b = entered(a);
+  if (b === undefined) return undefined;
+  const w = WINDOWS[window];
+  const pace = w.pace(a);
+  const howLong = b.left <= 0 ? "used up" : pace <= 0 ? "no use yet" : `${countText(b.left / pace)} ${w.unit}`;
+  return { text: `≈ ${centsText(b.left)} · ${howLong}`, tone: balanceTone(b.left, pace, w.yellowUpTo), title: enteredHint(b, timeZone, paceText(b.left, pace, w)) };
+}
 
 /** The Balance fact: "≈ $12.40 (entered $20.00 on Oct 25)", or "None". */
 export function balanceFact(a: BalanceFacts, timeZone?: string): string {
