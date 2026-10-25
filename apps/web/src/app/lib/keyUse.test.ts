@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { balanceFact, balanceLine, balancePlace, balanceTone, balanceUsedUp, capReachedText, capsBody, capsText, capTone, centsText, keyCell, parseBalance, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
+import { balanceFact, balanceLine, balancePlace, balanceTone, perCycle, balanceUsedUp, capReachedText, capsBody, capsText, capTone, centsText, keyCell, parseBalance, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
 
 test("usdText: whole dollars drop the cents; small sums keep four places", () => {
   assert.equal(usdText(12), "$12");
@@ -69,13 +69,22 @@ test("centsText: always two decimals, a minus sign before the dollar, no minus z
   assert.equal(centsText(1234.5), "$1,234.50");
 });
 
-test("balanceTone: red at or below $0, yellow under $5 or under 20% of the entered amount, grey else", () => {
-  assert.equal(balanceTone(0, 20), "red");
-  assert.equal(balanceTone(-1, 20), "red");
-  assert.equal(balanceTone(4.99, 100), "yellow");
-  assert.equal(balanceTone(19, 100), "yellow");
-  assert.equal(balanceTone(20, 100), "grey");
-  assert.equal(balanceTone(12.4, 20), "grey");
+test("perCycle: the higher of the last 5 hours and the 7-day average per 5 hours", () => {
+  assert.equal(perCycle({ used5h: 0.53, usedWeek: 2.53 }), 0.53);
+  assert.equal(perCycle({ used5h: 0, usedWeek: 33.6 }), 1);
+  assert.equal(perCycle({}), 0);
+});
+
+test("balanceTone: by how many 5-hour cycles the balance lasts at the current pace", () => {
+  assert.equal(balanceTone(0, 1), "red", "used up");
+  assert.equal(balanceTone(-1, 0), "red");
+  assert.equal(balanceTone(0.9, 1), "red", "will not last the next cycle");
+  assert.equal(balanceTone(1, 1), "orange", "lasts the next cycle only");
+  assert.equal(balanceTone(1.9, 1), "orange");
+  assert.equal(balanceTone(2, 1), "yellow");
+  assert.equal(balanceTone(4, 1), "yellow", "gone within the next 4 cycles");
+  assert.equal(balanceTone(4.1, 1), "grey");
+  assert.equal(balanceTone(3, 0), "grey", "no use: it lasts");
 });
 
 const UTC = "UTC";
@@ -85,14 +94,21 @@ test("balanceLine: the estimate, its tone and a hover that says what squad canno
   assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 12.4 }, UTC), {
     text: "≈ $12.40 balance",
     tone: "grey",
-    hint: "Entered $20.00 on Oct 25, 14:02, minus $7.60 squad used since. squad cannot see use outside squad.",
+    hint: "Entered $20.00 on Oct 25, 14:02, minus $7.60 squad used since. squad used nothing in the last 7 days. squad cannot see use outside squad.",
   });
   assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.4 }, UTC)?.text, "≈ -$0.40 balance");
   assert.equal(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.4 }, UTC)?.tone, "red");
   // Rounded to cents first: a tiny minus reads $0.00 and is still red.
-  assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.001 }, UTC), { text: "≈ $0.00 balance", tone: "red", hint: "Entered $5.00 on Oct 25, 14:02, minus $5.00 squad used since. squad cannot see use outside squad." });
+  assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.001 }, UTC), { text: "≈ $0.00 balance", tone: "red", hint: "Entered $5.00 on Oct 25, 14:02, minus $5.00 squad used since. squad used nothing in the last 7 days. squad cannot see use outside squad." });
   assert.equal(balanceLine({ kind: "key" }, UTC), undefined);
   assert.equal(balanceLine({ kind: "login", balanceUsd: 5, balanceAt: AT, balanceLeft: 5 }, UTC), undefined);
+});
+
+test("balanceLine: the pace picks the tone and the hover says how long it lasts", () => {
+  const l = balanceLine({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 1.5, used5h: 1, usedWeek: 2 }, UTC)!;
+  assert.equal(l.tone, "orange");
+  assert.equal(l.hint, "Entered $20.00 on Oct 25, 14:02, minus $18.50 squad used since. At about $1.00 per 5 hours, it lasts about 1.5 more 5-hour cycles. squad cannot see use outside squad.");
+  assert.equal(balanceLine({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 12, used5h: 1, usedWeek: 2 }, UTC)!.hint.includes("about 12 more 5-hour cycles"), true);
 });
 
 test("balancePlace: under the 7-day bar, or under the 5-hour bar when a 30-day cap note holds that line", () => {

@@ -304,7 +304,7 @@ export interface KeyNote {
   readonly hint?: string;
 }
 
-const NOTE_COLOR = { subtle: "fg.subtle", grey: "fg.muted", yellow: "yellow.fg", red: "fg.error" } as const;
+const NOTE_COLOR = { subtle: "fg.subtle", grey: "fg.muted", yellow: "yellow.fg", orange: "orange.fg", red: "fg.error" } as const;
 
 export function KeyUseBar({ used, cap, span, width = "100%", label, note, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; note?: KeyNote; keepResetLine?: boolean }) {
   const c = keyCell(used, cap);

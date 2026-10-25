@@ -86,7 +86,7 @@ export function capsText(a: Partial<Pick<AccountView, "cap5h" | "capWeek" | "cap
 
 // ---- the balance the owner typed, and squad's estimate (display only: the pool never reads it) ----
 
-type BalanceFacts = Partial<Pick<AccountView, "kind" | "balanceUsd" | "balanceAt" | "balanceLeft">>;
+type BalanceFacts = Partial<Pick<AccountView, "kind" | "balanceUsd" | "balanceAt" | "balanceLeft" | "used5h" | "usedWeek">>;
 
 const round = (v: number): number => Math.round(v * 100) / 100;
 
@@ -97,13 +97,36 @@ export function centsText(v: number): string {
   return r < 0 ? `-${t}` : t;
 }
 
-export type BalanceTone = "grey" | "yellow" | "red";
+export type BalanceTone = "grey" | "yellow" | "orange" | "red";
 
-export function balanceTone(left: number, entered: number): BalanceTone {
+/** 5-hour windows in 7 days. */
+const CYCLES_PER_WEEK = (7 * 24) / 5;
+
+/**
+ * What a key uses per 5 hours: the higher of the last 5 hours and the 7-day average, so a busy hour
+ * counts at once and a quiet hour does not hide a busy week.
+ */
+export const perCycle = (a: Partial<Pick<AccountView, "used5h" | "usedWeek">>): number => Math.max(a.used5h ?? 0, (a.usedWeek ?? 0) / CYCLES_PER_WEEK);
+
+/**
+ * By how many 5-hour cycles the balance lasts at `pace` dollars per cycle: red when it will not last
+ * the next one, orange when it lasts only the next one, yellow when it is gone within 4, grey after.
+ */
+export function balanceTone(left: number, pace: number): BalanceTone {
   if (left <= 0) return "red";
-  if (left < 5 || left < entered * 0.2) return "yellow";
+  if (pace <= 0) return "grey";
+  const cycles = left / pace;
+  if (cycles < 1) return "red";
+  if (cycles < 2) return "orange";
+  if (cycles <= 4) return "yellow";
   return "grey";
 }
+
+const paceText = (left: number, pace: number): string => {
+  if (pace <= 0) return "squad used nothing in the last 7 days.";
+  const cycles = Math.max(0, left / pace);
+  return `At about ${centsText(pace)} per 5 hours, it lasts about ${cycles < 10 ? String(Math.round(cycles * 10) / 10) : String(Math.round(cycles))} more 5-hour cycles.`;
+};
 
 const whenText = (iso: string, timeZone: string | undefined, time: boolean): string =>
   new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", ...(time ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : {}), ...(timeZone === undefined ? {} : { timeZone }) }).format(Date.parse(iso));
@@ -123,8 +146,8 @@ export function balanceLine(a: BalanceFacts, timeZone?: string): BalanceLine | u
   if (b === undefined) return undefined;
   return {
     text: `≈ ${centsText(b.left)} balance`,
-    tone: balanceTone(b.left, b.usd),
-    hint: `Entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, true)}, minus ${centsText(b.usd - b.left)} squad used since. squad cannot see use outside squad.`,
+    tone: balanceTone(b.left, perCycle(a)),
+    hint: `Entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, true)}, minus ${centsText(b.usd - b.left)} squad used since. ${paceText(b.left, perCycle(a))} squad cannot see use outside squad.`,
   };
 }
 
