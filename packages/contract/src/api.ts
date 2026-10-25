@@ -60,6 +60,14 @@ export interface AccountView {
   readonly resetsWeek?: string;
   /** "Reset health" would be taken: cooling, suspect, or dead without a permanent code. */
   readonly canResetHealth: boolean;
+  // ---- key use: a key account only (kind `key`) ----
+  /**
+   * Dollars this key used in squad's own passes over the last 5 hours, 7 days and 30 days. Use outside
+   * squad does not count: squad cannot see it. Unset for a seat (a login or a token account).
+   */
+  readonly used5h?: number;
+  readonly usedWeek?: number;
+  readonly used30d?: number;
 }
 
 export type UsageBy = "project" | "flow" | "action" | "task" | "session" | "account" | "model" | "day" | "window";

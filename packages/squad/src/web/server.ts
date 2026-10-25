@@ -27,6 +27,7 @@ import { flockBusy, lockPathOf } from "../run.ts";
 import { ACCOUNT_NAME } from "../accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_PRICES_URL_ENV, SQUAD_PROBE_MODEL_CLAUDE_ENV, SQUAD_PROBE_MODEL_CODEX_ENV, SQUAD_PROBE_MODEL_PI_ENV, envNum, envOn, envOptional, type EnvSpec } from "../settings.ts";
 import type { Store } from "../store/db.ts";
+import { keyUsed } from "../usage/key-used.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
@@ -318,6 +319,7 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       ...(h.resets5h === null ? {} : { resets5h: h.resets5h }),
       ...(h.resetsWeek === null ? {} : { resetsWeek: h.resetsWeek }),
       canResetHealth: health === "cooling" || health === "suspect" || (a.state === "dead" && !needsLogin(a)),
+      ...(a.kind === "key" ? keyUsed(db, a.id, now()) : {}),
     };
   };
   /** A removed or moved account takes no act: it is history here. */

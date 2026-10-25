@@ -162,6 +162,25 @@ test("the account view carries health, floors, usage left and busy", async () =>
   await r.close();
 });
 
+test("a key account view carries what its passes used in each window; a seat has none", async () => {
+  const r = await rig();
+  seed(r);
+  const at = (h: number): string => new Date(NOW.getTime() - h * 3_600_000).toISOString();
+  const tok = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+  for (const [id, account, h, cli] of [["U1", "pi/alice-key", 1, 0.5], ["U2", "pi/alice-key", 48, 2], ["U3", "pi/alice-key", 24 * 20, 4], ["U4", "pi/bob", 1, 9], ["U5", "codex/alice", 1, 3]] as const) {
+    r.store.startPass({ id, startedAt: at(h), project: "x", flow: "f", action: "a", runner: "pi", model: "m", account });
+    r.store.endPass({ id, endedAt: at(h), outcome: "ok", tokens: tok, cliCostUsd: cli });
+  }
+  const c = await signIn(r, "alice@example.test");
+  const list = await api<AccountView[]>(r, c, "GET", "/api/accounts");
+  assert.equal(findForbidden(list.body), undefined);
+  const key = list.body.find((a) => a.account === "pi/alice-key")!;
+  assert.deepEqual([key.used5h, key.usedWeek, key.used30d], [0.5, 2.5, 6.5]);
+  const seat = list.body.find((a) => a.account === "codex/alice")!;
+  assert.deepEqual(["used5h", "usedWeek", "used30d"].filter((k) => k in seat), []);
+  await r.close();
+});
+
 test("setFloor sets, resets with null, and refuses bad numbers", async () => {
   const r = await rig();
   seed(r);
