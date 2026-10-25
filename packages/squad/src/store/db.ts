@@ -159,6 +159,20 @@ export const MIGRATIONS: readonly string[] = [
   // Display only: the pool never reads it.
   `ALTER TABLE accounts ADD COLUMN balance_usd REAL`,
   `ALTER TABLE accounts ADD COLUMN balance_at TEXT`,
+  // Project tokens for `squad serve`. Only the sha256 of a token is kept, never the token. A revoked
+  // row stays, so a pass or a conversation still names the token it was made with.
+  `CREATE TABLE serve_tokens (
+     id TEXT PRIMARY KEY,
+     project TEXT NOT NULL,
+     hash TEXT NOT NULL UNIQUE,
+     accounts TEXT NOT NULL,
+     roots TEXT NOT NULL,
+     images TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     last_used_at TEXT,
+     revoked_at TEXT
+   ) STRICT`,
+  `CREATE UNIQUE INDEX serve_tokens_live ON serve_tokens (project) WHERE revoked_at IS NULL`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

@@ -70,11 +70,11 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 29);
+  assert.equal(MIGRATIONS.length, 31);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(tables, ["accounts", "conversations", "events", "health", "passes", "price_history", "room_reads", "schema_version", "sessions"]);
+  assert.deepEqual(tables, ["accounts", "conversations", "events", "health", "passes", "price_history", "room_reads", "schema_version", "serve_tokens", "sessions"]);
 });
 
 test("migration 11: login_email is set from owner_email for codex and claude login rows only; room_reads exists", () => {
@@ -128,6 +128,6 @@ test("migrations 28-29: an account from before has no entered balance", () => {
   db.prepare("INSERT INTO schema_version (n) VALUES (27)").run();
   for (const m of MIGRATIONS.slice(0, 27)) db.exec(m);
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
-  assert.equal(migrate(db), 29);
+  assert.equal(migrate(db), MIGRATIONS.length);
   assert.deepEqual({ ...(db.prepare("SELECT balance_usd, balance_at FROM accounts").get() as object) }, { balance_usd: null, balance_at: null });
 });

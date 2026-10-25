@@ -33,6 +33,7 @@ import { SQUAD_DOCKER_ENV, SQUAD_DRY_RUN_ENV, SQUAD_NO_GC_ENV, SQUAD_NO_USAGE_RE
 import type { SupportedRunner } from "../runners/table.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { startWeb } from "../web/server.ts";
+import { addToken as addProjectToken, listTokens, revokeToken } from "../serve/tokens.ts";
 import { runConnect } from "./connect.ts";
 import { USAGE_BYS, usageBy, type UsageBy, type UsageRow } from "../usage/report.ts";
 
@@ -78,6 +79,10 @@ const USAGE = `usage: squad <verb>
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
                                            (not --api-only) it also runs a background loop: usage reads, auto probes, prices
+  token add <project> --accounts <id,...> --roots <abs path,...> [--images <ref,...>]
+                                           make the project's token for squad serve; only the token goes to stdout
+  token list                               the live tokens: project, accounts, roots, images, times (never a token)
+  token revoke <project>                   end the project's token at once
   connect --url <origin> --pair <code>     on your own computer: sign in to claude in your browser and send the
                                            token to squad web (the web page gives the command)
 `;
@@ -615,6 +620,44 @@ async function web(store: Store, io: Io, args: readonly string[]): Promise<numbe
   return 0;
 }
 
+const commaList = (v: string | undefined): string[] => (v === undefined ? [] : v.split(",").map((x) => x.trim()).filter((x) => x !== ""));
+
+/** `squad token`: project tokens for squad serve. The token is on stdout once, alone, so a script can take it. */
+function tokenCmd(store: Store, io: Io, args: readonly string[]): number {
+  const [sub, ...rest] = args;
+  const now = (io.now ?? (() => new Date()))();
+  if (sub === "add") {
+    const { rest: pos, opts } = options(rest, ["accounts", "roots", "images"]);
+    if (pos.length !== 1 || !opts.has("accounts") || !opts.has("roots")) throw new UsageError("token add needs <project>, --accounts and --roots");
+    let token: string;
+    try {
+      token = addProjectToken(store.db, pos[0]!, { accounts: commaList(opts.get("accounts")), roots: commaList(opts.get("roots")), images: commaList(opts.get("images")) }, now).token;
+    } catch (e) {
+      io.stderr(`${e instanceof Error ? e.message : "cannot make the token"}\n`);
+      return 1;
+    }
+    io.stderr(`token for ${pos[0]}: shown once; store it now. squad keeps only its hash.\n`);
+    io.stdout(`${token}\n`);
+    return 0;
+  }
+  if (sub === "list") {
+    if (rest.length > 0) throw new UsageError("token list takes no arguments");
+    const rows = listTokens(store.db).map((t) => [t.project, t.accounts.join(","), t.roots.join(","), t.images.length === 0 ? "-" : t.images.join(","), t.createdAt, t.lastUsedAt ?? "-"]);
+    io.stdout(table(["PROJECT", "ACCOUNTS", "ROOTS", "IMAGES", "CREATED", "LAST USED"], rows));
+    return 0;
+  }
+  if (sub === "revoke") {
+    if (rest.length !== 1) throw new UsageError("token revoke needs <project>");
+    if (!revokeToken(store.db, rest[0]!, now)) {
+      io.stderr(`${rest[0]} has no live token\n`);
+      return 1;
+    }
+    io.stdout(`revoked the token of ${rest[0]}\n`);
+    return 0;
+  }
+  throw new UsageError("token takes add, list or revoke");
+}
+
 const VERBS: Record<string, (store: Store, io: Io, args: readonly string[]) => number | Promise<number>> = {
   list: (s, io, args) => (args.length === 0 ? list(s, io) : fail("list takes no arguments")),
   usage,
@@ -632,6 +675,7 @@ const VERBS: Record<string, (store: Store, io: Io, args: readonly string[]) => n
   shell,
   log: logCmd,
   web,
+  token: tokenCmd,
 };
 
 function fail(msg: string): never {
