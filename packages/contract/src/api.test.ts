@@ -74,3 +74,22 @@ test("the sign-in paths are under /auth and match no /api route; the signed-out 
   }
   assert.equal(SIGNED_OUT_PATH, "/signed-out");
 });
+
+test("serve routes: under /api/, unique per method, no shadowing, and none of their names is a web route's", async () => {
+  const { SERVE_ROUTES, STREAM_ROUTES, LINE_TYPES } = await import("./api.ts");
+  const entries = Object.entries(SERVE_ROUTES);
+  const seen = new Set<string>();
+  for (const [name, r] of entries) {
+    assert.match(r.path, /^\/api\//, name);
+    assert.ok(!seen.has(`${r.method} ${r.path}`), name);
+    seen.add(`${r.method} ${r.path}`);
+    assert.ok(!Object.hasOwn(ROUTES, name), `${name} is also a web route name`);
+    const sample = r.path.replace(/:([a-zA-Z]+)/g, (_, k: string) => `x${k}`);
+    for (const [other, o] of entries) if (other !== name && o.method === r.method) assert.equal(matchPath(o.path, sample), undefined, `${other} matches ${sample}`);
+  }
+  assert.deepEqual(Object.keys(SERVE_ROUTES).sort(), ["closeConversation", "openConversation", "passStatus", "sendTurn", "serveAccounts", "startPass"]);
+  assert.deepEqual([...STREAM_ROUTES], ["startPass", "sendTurn"]);
+  assert.deepEqual([...LINE_TYPES], ["started", "output", "result"]);
+  assert.deepEqual(matchPath(SERVE_ROUTES.sendTurn.path, "/api/conversations/abc/turns"), { id: "abc" });
+  assert.equal(matchPath(SERVE_ROUTES.closeConversation.path, "/api/conversations/abc/turns"), undefined);
+});

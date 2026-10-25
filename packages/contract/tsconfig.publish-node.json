@@ -1,0 +1,12 @@
+{
+  // The Node entry of the SDK (`@squad/contract/node`). It may use Node types; the main entry may not.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "files": ["src/node.ts"]
+}

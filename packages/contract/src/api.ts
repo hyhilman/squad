@@ -551,10 +551,203 @@ export interface Api {
   catalogModel: { params: { readonly modelId: string }; query: void; body: void; res: CatalogModelCompare };
 }
 
+// ---- provider mode: `squad serve` ----
+//
+// `squad serve` is a separate local listener (a unix socket or 127.0.0.1) for machine callers. It
+// serves exactly SERVE_ROUTES, and `squad web` serves none of them. Two of its paths are also web
+// paths with other shapes (GET /api/accounts, GET /api/passes/:passId), so the routes live in their
+// own table. Every call carries `Authorization: Bearer <project token>`. A refusal is a status of 300
+// or more with the JSON `{ "error": "<reason>" }`.
+
+/** The runners a pass may name. */
+export type PassRunner = "claude" | "codex" | "pi";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export type FailureKind = "quota" | "rate-limit" | "auth" | "provider" | "idle" | "timeout" | "no-account" | "busy";
+
+export interface Failure {
+  readonly kind: FailureKind;
+  /** The exact provider code or HTTP status, or "" when there is none. `lost`: squad serve restarted and the container was gone. */
+  readonly code: string;
+  readonly message: string;
+}
+
+/** The same five counts as PassTokens. */
+export type Usage = PassTokens;
+
+/** Who the commits of the pass are by: GIT_AUTHOR_* and GIT_COMMITTER_* in the container. */
+export interface Identity {
+  readonly name: string;
+  readonly email: string;
+}
+
+/** A folder that holds `SKILL.md`. `name` is also the folder name the CLI sees. */
+export interface SkillRef {
+  readonly name: string;
+  readonly dir: string;
+}
+
+/** A host path the caller wants inside the container. */
+export interface ExtraMount {
+  readonly host: string;
+  readonly container: string;
+  readonly ro: boolean;
+}
+
+/**
+ * The setup fields a pass and a conversation take. Every host path (cwd, gitDir, skill.dir, each
+ * mount host) must exist and sit inside one of the token's roots after symlinks are resolved.
+ */
+export interface ServeSetup {
+  readonly model: string;
+  readonly cwd: string;
+  /** The main repo's .git; default `<cwd>/.git`. A linked worktree must pass it. */
+  readonly gitDir?: string;
+  readonly caller: { readonly flow: string; readonly action: string };
+  readonly task?: { readonly kind: string; readonly id: string };
+  readonly env?: Readonly<Record<string, string>>;
+  readonly system?: string;
+  readonly skill?: SkillRef;
+  readonly effort?: Effort;
+  readonly mounts?: readonly ExtraMount[];
+  /** squad's own image when unset. Any other image must be in the token's image list. */
+  readonly image?: string;
+  readonly container?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly identity: Identity;
+}
+
+/** POST /api/passes: squad's PassRequest without `onOutput` and `pool`, plus the identity. The account must be one of the token's. */
+export interface ServePassBody extends ServeSetup {
+  readonly runner: PassRunner;
+  /** `pi/alice` or `alice`. */
+  readonly account: string;
+  readonly prompt: string;
+  /** A pi session id. A conversation's id is not one: use its turns route. */
+  readonly session?: string;
+  readonly idleMs?: number;
+  readonly deadlineMs?: number;
+}
+
+/** POST /api/conversations: squad's OpenRequest plus the identity. */
+export interface ServeOpenBody extends ServeSetup {
+  readonly runner: PassRunner;
+  /** `pi/alice` or `alice`. */
+  readonly account: string;
+}
+
+/** POST /api/conversations/:id/turns. */
+export interface ServeTurnBody {
+  readonly message: string;
+  readonly idleMs?: number;
+  readonly deadlineMs?: number;
+  readonly identity: Identity;
+}
+
+export interface PassResult {
+  readonly passId: string;
+  readonly account: string | null;
+  readonly text: string;
+  readonly texts: readonly string[];
+  readonly turns: number;
+  /** The model the stream reported, else null. */
+  readonly model: string | null;
+  readonly usage: Usage;
+  readonly failure?: Failure;
+  readonly logPath: string | null;
+}
+
+export interface Conversation {
+  readonly id: string;
+  readonly runner: string;
+  /** `<runner>/<name>`. */
+  readonly account: string;
+  readonly model: string;
+  readonly cwd: string;
+  readonly createdAt: string;
+}
+
+export interface TurnResult {
+  readonly passId: string;
+  readonly account: string;
+  readonly text: string;
+  readonly texts: readonly string[];
+  readonly turns: number;
+  readonly model: string | null;
+  readonly usage: Usage;
+  readonly failure?: Failure;
+  /** Set when this turn ended the conversation, so the caller can open again on another account. */
+  readonly closed?: "first-turn-refused";
+}
+
+/** One account as `squad serve` shows it: no owner or account-user email. */
+export type ServeAccountView = Omit<AccountView, "ownerEmail" | "loginEmail" | "consentBy">;
+
+/** GET /api/passes/:passId on `squad serve`. */
+export type PassStatus =
+  | { readonly running: true; readonly passId: string; readonly account: string | null; readonly startedAt: string }
+  | { readonly running: false; readonly result: PassResult | TurnResult };
+
+/** The first line of a stream: the pass row is written. Poll GET /api/passes/:passId with this id after a dropped connection. */
+export interface StartedLine {
+  readonly type: "started";
+  readonly passId: string;
+}
+/** A piece of the CLI's stdout as it came, secrets masked. */
+export interface OutputLine {
+  readonly type: "output";
+  readonly chunk: string;
+}
+/** The last line. After "started", every failure arrives here as `result.failure`, never as a status. */
+export interface ResultLine<R> {
+  readonly type: "result";
+  readonly result: R;
+}
+export type PassLine = StartedLine | OutputLine | ResultLine<PassResult>;
+export type TurnLine = StartedLine | OutputLine | ResultLine<TurnResult>;
+/** The line types a client knows. A client skips any other type, so a new one breaks nobody. */
+export const LINE_TYPES = ["started", "output", "result"] as const;
+export const NDJSON = "application/x-ndjson";
+
+export const SERVE_ROUTES = {
+  serveAccounts: { method: "GET", path: "/api/accounts" },
+  startPass: { method: "POST", path: "/api/passes" },
+  passStatus: { method: "GET", path: "/api/passes/:passId" },
+  openConversation: { method: "POST", path: "/api/conversations" },
+  sendTurn: { method: "POST", path: "/api/conversations/:id/turns" },
+  closeConversation: { method: "DELETE", path: "/api/conversations/:id" },
+} as const satisfies Record<string, { readonly method: "GET" | "POST" | "PUT" | "DELETE"; readonly path: `/api/${string}` }>;
+
+export type ServeRouteName = keyof typeof SERVE_ROUTES;
+/** The routes that answer with an ndjson stream (`callStream`); `res` is their line type. */
+export const STREAM_ROUTES = ["startPass", "sendTurn"] as const satisfies readonly ServeRouteName[];
+export type StreamRouteName = (typeof STREAM_ROUTES)[number];
+
+export interface ServeApi {
+  serveAccounts: { params: void; query: void; body: void; res: readonly ServeAccountView[] };
+  startPass: { params: void; query: void; body: ServePassBody; res: PassLine };
+  /** Only a pass made with the same token; any other id is a 404. */
+  passStatus: { params: { readonly passId: string }; query: void; body: void; res: PassStatus };
+  openConversation: { params: void; query: void; body: ServeOpenBody; res: Conversation };
+  /** Only a conversation the same token opened; any other id is a 404. */
+  sendTurn: { params: { readonly id: string }; query: void; body: ServeTurnBody; res: TurnLine };
+  /** 204, no body. */
+  closeConversation: { params: { readonly id: string }; query: void; body: void; res: void };
+}
+
+/** Every route of both listeners. The names never clash, so one `call` serves both. */
+export interface AllApi extends Api, ServeApi {}
+export type AnyRouteName = RouteName | ServeRouteName;
+export const ALL_ROUTES = { ...ROUTES, ...SERVE_ROUTES } as const;
+
 // Every route has a type entry, and every type entry a route.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const routesMatchApi: Same<RouteName, keyof Api> = true;
 void routesMatchApi;
+const serveRoutesMatchApi: Same<ServeRouteName, keyof ServeApi> = true;
+void serveRoutesMatchApi;
+// A name in both tables would make `call` reach the wrong listener's route.
+const noSharedName: Same<Extract<RouteName, ServeRouteName>, never> = true;
+void noSharedName;
 
 /** The path of a route with its params filled in, each one URL-encoded. */
 export function pathOf(path: string, params: Readonly<Record<string, string>> | void): string {

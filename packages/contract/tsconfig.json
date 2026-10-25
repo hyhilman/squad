@@ -2,8 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // The web app reads this package too, so its code may not lean on Node types.
+    // src/node.ts is the Node entry: tsconfig.test.json checks it, tsconfig.publish-node.json builds it.
     "types": []
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/node.ts"]
 }

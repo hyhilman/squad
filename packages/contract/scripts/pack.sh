@@ -10,6 +10,7 @@ cd "$here"
 # A stale file from an older build must not ship.
 rm -rf dist
 "$repo/node_modules/.bin/tsc" -p tsconfig.publish.json
+"$repo/node_modules/.bin/tsc" -p tsconfig.publish-node.json
 # The version is squad's, so one release number names every tarball. The licence is the repo's (MIT).
 node -e '
 const fs = require("node:fs");
@@ -20,7 +21,7 @@ const pkg = {
   type: "module",
   description: "Typed client and shapes for the squad HTTP API",
   license: "MIT",
-  exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
+  exports: { ".": { types: "./index.d.ts", default: "./index.js" }, "./node": { types: "./node.d.ts", default: "./node.js" } },
   files: ["*.js", "*.d.ts", "README.md", "LICENSE"],
 };
 fs.writeFileSync("dist/package.json", JSON.stringify(pkg, null, 2) + "\n");
@@ -30,6 +31,7 @@ cat > dist/README.md <<'EOT'
 # @squad/contract
 
 A typed client for the squad HTTP API. It has no dependency and needs no DOM or Node types.
+`@squad/contract/node` adds `nodeSocketFetch`, for `squad serve` on a unix socket.
 
 ## Install
 
@@ -48,6 +50,22 @@ Use the tarball from a squad release:
     } catch (e) {
       if (e instanceof ApiFailure) console.log(e.status, e.body.error);
     }
+
+## squad serve (provider mode)
+
+A machine caller talks to `squad serve` with a project token (`squad token add`):
+
+    import { call, callStream } from "@squad/contract";
+    import { nodeSocketFetch } from "@squad/contract/node";
+
+    const f = nodeSocketFetch("/path/to/.squad/serve.sock");
+    const headers = { authorization: `Bearer ${token}` };
+    const accounts = await call(f, "http://squad", "serveAccounts", {}, { headers });
+    for await (const line of callStream(f, "http://squad", "startPass", { body }, { headers })) {
+      if (line.type === "result") console.log(line.result.text);
+    }
+
+With `squad serve --port <n>`, use the global fetch and `http://127.0.0.1:<n>` as the base.
 
 ## Same site only
 
