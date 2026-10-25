@@ -68,6 +68,13 @@ export interface AccountView {
   readonly used5h?: number;
   readonly usedWeek?: number;
   readonly used30d?: number;
+  /**
+   * The owner's caps in dollars, per window, on a key account. When the used sum of a window reaches its
+   * cap, the pool stops picking the key. Unset = no cap (the default).
+   */
+  readonly cap5h?: number;
+  readonly capWeek?: number;
+  readonly cap30d?: number;
 }
 
 export type UsageBy = "project" | "flow" | "action" | "task" | "session" | "account" | "model" | "day" | "window";
@@ -169,6 +176,16 @@ export interface SetFloorBody {
   /** Percent of each window left for the owner, 0 to 100. Null = back to the default. */
   readonly floor5h: number | null;
   readonly floorWeek: number | null;
+}
+
+/** The highest dollar cap the API takes. */
+export const CAP_MAX_USD = 1_000_000;
+
+export interface SetCapsBody {
+  /** Dollars above 0, at most CAP_MAX_USD, for a key account only. Null = no cap in that window. */
+  readonly cap5h: number | null;
+  readonly capWeek: number | null;
+  readonly cap30d: number | null;
 }
 
 /** A login the owner started from the web app. The page shows only a code or a link, never a token. */
@@ -414,6 +431,7 @@ export const ROUTES = {
   listAccounts: { method: "GET", path: "/api/accounts" },
   getAccount: { method: "GET", path: "/api/accounts/:runner/:name" },
   setFloor: { method: "PUT", path: "/api/accounts/:runner/:name/floor" },
+  setCaps: { method: "PUT", path: "/api/accounts/:runner/:name/caps" },
   setEnabled: { method: "PUT", path: "/api/accounts/:runner/:name/enabled" },
   consent: { method: "POST", path: "/api/accounts/:runner/:name/consent" },
   startLogin: { method: "POST", path: "/api/accounts/:runner/:name/login" },
@@ -461,6 +479,8 @@ export interface Api {
   listAccounts: { params: void; query: { readonly all?: "1" }; body: void; res: readonly AccountView[] };
   getAccount: { params: AccountParams; query: void; body: void; res: AccountView };
   setFloor: { params: AccountParams; query: void; body: SetFloorBody; res: AccountView };
+  /** Owner or admin, the same as floors. A key account only; any other kind is a 400. */
+  setCaps: { params: AccountParams; query: void; body: SetCapsBody; res: AccountView };
   setEnabled: { params: AccountParams; query: void; body: { readonly enabled: boolean }; res: AccountView };
   /** The owner only. `agree: false` stops sharing: squad then refuses every pass on the account. */
   consent: { params: AccountParams; query: void; body: { readonly agree: boolean }; res: AccountView };

@@ -70,7 +70,7 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 24);
+  assert.equal(MIGRATIONS.length, 27);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
@@ -107,7 +107,17 @@ test("migrations 23-24: every account that has no consent yet is marked shared b
   }
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at, consent_at) VALUES ('pi/b', 'pi', 'b', 'key', '2026-01-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z')").run();
-  assert.equal(migrate(db), 24);
+  assert.equal(migrate(db), MIGRATIONS.length);
   const rows = db.prepare("SELECT id, consent_at, consent_by FROM accounts ORDER BY id").all() as { id: string; consent_at: string; consent_by: string | null }[];
   assert.deepEqual(rows.map((r) => [r.id, r.consent_at, r.consent_by]), [["pi/a", "2026-01-01T00:00:00.000Z", "migration"], ["pi/b", "2026-02-02T00:00:00.000Z", null]]);
+});
+
+test("migrations 25-27: an account from before has no dollar cap", () => {
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
+  db.exec("CREATE TABLE schema_version (n INTEGER NOT NULL) STRICT");
+  db.prepare("INSERT INTO schema_version (n) VALUES (24)").run();
+  for (const m of MIGRATIONS.slice(0, 24)) db.exec(m);
+  db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
+  assert.equal(migrate(db), 27);
+  assert.deepEqual({ ...(db.prepare("SELECT cap_5h, cap_week, cap_30d FROM accounts").get() as object) }, { cap_5h: null, cap_week: null, cap_30d: null });
 });

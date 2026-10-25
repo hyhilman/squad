@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { pick } from "../pool/pick.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { emptyHealth } from "./health.ts";
-import { addAccount, candidates, getAccount, getHealth, liveAccount, listAccounts, markRemoved, putHealth, resetHealth, reviveByLogin, setConsent, setOwnerFloors, setSharing, setState } from "./store.ts";
+import { addAccount, candidates, getAccount, getHealth, liveAccount, listAccounts, markRemoved, putHealth, resetHealth, reviveByLogin, setConsent, setOwnerCaps, setOwnerFloors, setSharing, setState } from "./store.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const mk = (): Store => {
@@ -81,6 +81,60 @@ test("candidates map state, suspicion and cool-down to the pick health", () => {
   const h = Object.fromEntries(candidates(s.db, "pi", NOW, never, {}).map((c) => [c.account, c.health]));
   assert.deepEqual(h, { "pi/dead": "dead", "pi/off": "disabled", "pi/sus": "suspect", "pi/cool": "cooling", "pi/past": "ok" });
   assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, {}), NOW.getTime()).order, ["pi/past"]);
+});
+
+const TOK = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+const usedPass = (s: Store, id: string, account: string, hoursAgo: number, cli: number): void => {
+  const at = new Date(NOW.getTime() - hoursAgo * 3_600_000).toISOString();
+  s.startPass({ id, startedAt: at, project: "x", flow: "f", action: "a", runner: "pi", model: "m", account });
+  s.endPass({ id, endedAt: at, outcome: "ok", tokens: TOK, cliCostUsd: cli });
+};
+
+test("setOwnerCaps stores the dollar caps; null clears one", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "k", kind: "key" }, NOW);
+  assert.deepEqual([getAccount(s.db, "pi/k")!.cap5h, getAccount(s.db, "pi/k")!.capWeek, getAccount(s.db, "pi/k")!.cap30d], [null, null, null]);
+  setOwnerCaps(s.db, "pi/k", 1.5, null, 40);
+  const a = getAccount(s.db, "pi/k")!;
+  assert.deepEqual([a.cap5h, a.capWeek, a.cap30d], [1.5, null, 40]);
+  assert.throws(() => setOwnerCaps(s.db, "pi/none", 1, 1, 1), /unknown account/);
+});
+
+test("no cap: the pick is the same as before caps, whatever the key used", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "a", kind: "key" }, NOW);
+  addAccount(s.db, { runner: "pi", name: "b", kind: "key" }, NOW);
+  usedPass(s, "P1", "pi/a", 1, 500);
+  const c = candidates(s.db, "pi", NOW, never, {});
+  assert.deepEqual(c.map((x) => x.capReached), [false, false]);
+  assert.deepEqual(pick(c, NOW.getTime()).order, ["pi/a", "pi/b"]);
+});
+
+test("a cap reached in its window refuses the key; under the cap, or used outside the window, it is picked", () => {
+  const s = mk();
+  for (const n of ["h5", "week", "d30", "under", "old"]) addAccount(s.db, { runner: "pi", name: n, kind: "key" }, NOW);
+  usedPass(s, "P1", "pi/h5", 1, 2);
+  setOwnerCaps(s.db, "pi/h5", 2, null, null);
+  usedPass(s, "P2", "pi/week", 48, 10);
+  setOwnerCaps(s.db, "pi/week", 100, 9.5, null);
+  usedPass(s, "P3", "pi/d30", 24 * 20, 30);
+  setOwnerCaps(s.db, "pi/d30", null, null, 30);
+  usedPass(s, "P4", "pi/under", 1, 1.99);
+  setOwnerCaps(s.db, "pi/under", 2, 2, 2);
+  usedPass(s, "P5", "pi/old", 6, 50);
+  setOwnerCaps(s.db, "pi/old", 1, null, null);
+  const r = pick(candidates(s.db, "pi", NOW, never, {}), NOW.getTime());
+  assert.deepEqual(r.order, ["pi/old", "pi/under"]);
+  assert.deepEqual(r.skipped, { "pi/d30": "under-floor", "pi/h5": "under-floor", "pi/week": "under-floor" });
+});
+
+test("SQUAD_NO_KEY_CAPS=1 makes the pool ignore caps; only exactly 1", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "pi", name: "a", kind: "key" }, NOW);
+  usedPass(s, "P1", "pi/a", 1, 5);
+  setOwnerCaps(s.db, "pi/a", 1, null, null);
+  assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, { SQUAD_NO_KEY_CAPS: "1" }), NOW.getTime()).order, ["pi/a"]);
+  assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, { SQUAD_NO_KEY_CAPS: "true" }), NOW.getTime()).order, []);
 });
 
 test("dead goes back to active only through reviveByLogin", () => {

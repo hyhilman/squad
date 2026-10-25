@@ -6,7 +6,7 @@ import type { AccountRow } from "./store.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const ago = (s: number): string => new Date(NOW.getTime() - s * 1000).toISOString();
-const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: "2026-01-01T00:00:00.000Z", loginEmail: null, consentBy: "cli", ...more });
+const acct = (name: string, more: Partial<AccountRow> = {}): AccountRow => ({ id: `codex/${name}`, runner: "codex", name, kind: "login", ownerEmail: null, state: "active", deadCode: null, deadAt: null, floor5h: null, floorWeek: null, createdAt: "x", consentAt: "2026-01-01T00:00:00.000Z", loginEmail: null, consentBy: "cli", cap5h: null, capWeek: null, cap30d: null, ...more });
 const hm = (...rows: HealthRow[]) => new Map(rows.map((r) => [r.account, r]));
 
 test("dueProbes: suspect accounts with no pass in the last hour", () => {

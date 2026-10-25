@@ -26,6 +26,8 @@ export interface Candidate {
   readonly lastUsedAt?: string;
   /** False: the owner stopped sharing it, so squad refuses every pass on it. Unset = shared. */
   readonly sharing?: boolean;
+  /** A key account whose own passes reached an owner's dollar cap in that cap's window. */
+  readonly capReached?: boolean;
 }
 
 export type Skip = "dead" | "disabled" | "moved" | "removed" | "no-consent" | "cooling" | "suspect" | "under-floor" | "busy";
@@ -83,7 +85,8 @@ export function pick(candidates: readonly Candidate[], now: number = Date.now(),
     }
     const readAge = now - time(c.readAt);
     const fresh = Number.isFinite(readAge) && readAge <= maxReadAgeMs;
-    if (fresh && c.left5h !== undefined && c.leftWeek !== undefined && (c.left5h <= c.floor5h || c.leftWeek <= c.floorWeek)) {
+    // A reached dollar cap is the key's floor: the room the owner keeps is gone.
+    if (c.capReached === true || (fresh && c.left5h !== undefined && c.leftWeek !== undefined && (c.left5h <= c.floor5h || c.leftWeek <= c.floorWeek))) {
       skipped[c.account] = "under-floor";
       continue;
     }

@@ -3,7 +3,7 @@
 //
 // A person sees only the accounts whose owner email is theirs; any other id is a 404, so ids do not
 // leak. An admin (the ID token's groups hold SQUAD_OIDC_ADMIN_GROUP) sees every account and may set
-// floors, enable or disable, test, reset the health of and remove any of them; consent, login, a new
+// floors and key caps, enable or disable, test, reset the health of and remove any of them; consent, login, a new
 // secret and a limit reset stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -11,13 +11,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
 import { bundledPath } from "../paths.ts";
-import { AUTH_PATHS, isAccountUserEmail, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY, type LogoutEverywhere, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
+import { AUTH_PATHS, CAP_MAX_USD, isAccountUserEmail, LIMIT_RESET_WHICH, NO_SESSION_ROUTES, ROUTES, SIGNED_OUT_PATH, SIGNED_OUT_SQUAD_ONLY, type LogoutEverywhere, findForbidden, matchPath, type AccountView, type LimitResetWhich, type ProviderView, type Api, type ApiError, type ErrorCode, type RoomPoint, type RouteName, type UsageRow as ApiUsageRow } from "@squad/contract";
 import { AccountExists, createFileAccount, secretShapeError } from "../accounts/add.ts";
 import { catalogCtx, catalogModelCompare, catalogProviderDetail, catalogProviderList, isModelIdParam, isProviderIdParam, priceHistory } from "../catalog.ts";
 import { getLogo } from "../logos.ts";
 import { loadProviders } from "../prices.ts";
 import { authJsonFor, modelsJsonFor, piProvidersIn, providerEntries } from "../providers.ts";
-import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
+import { getAccount, getHealth, healthOf, listAccounts, needsLogin, resetHealth, roomSince, setOwnerCaps, setOwnerFloors, setSharing, setState, type AccountRow } from "../accounts/store.ts";
 import { removeAccount, replacePiKey, replaceToken, revokeNote } from "../accounts/care.ts";
 import { servedModels } from "../accounts/serves.ts";
 import { TOKEN_EXACT } from "../claude-token.ts";
@@ -121,6 +121,12 @@ const floor = (v: unknown): number | null => {
   throw bad("a floor is a number from 0 to 100, or null");
 };
 
+const cap = (v: unknown): number | null => {
+  if (v === null) return null;
+  if (typeof v === "number" && Number.isFinite(v) && v > 0 && v <= CAP_MAX_USD) return v;
+  throw bad(`a cap is dollars above 0 and at most ${CAP_MAX_USD}, or null`);
+};
+
 type Inputs = { [N in RouteName]: { query?: (q: URLSearchParams) => Api[N]["query"]; body?: (b: unknown) => Api[N]["body"] } };
 const INPUTS: Inputs = {
   me: {}, getAccount: {}, startLogin: {}, loginStatus: {}, getPass: {}, connectStatus: {},
@@ -191,6 +197,12 @@ const INPUTS: Inputs = {
     body: (b) => {
       if (!isObj(b) || !onlyKeys(b, ["floor5h", "floorWeek"]) || !("floor5h" in b) || !("floorWeek" in b)) throw bad("body must be {floor5h, floorWeek}");
       return { floor5h: floor(b.floor5h), floorWeek: floor(b.floorWeek) };
+    },
+  },
+  setCaps: {
+    body: (b) => {
+      if (!isObj(b) || !onlyKeys(b, ["cap5h", "capWeek", "cap30d"]) || !("cap5h" in b) || !("capWeek" in b) || !("cap30d" in b)) throw bad("body must be {cap5h, capWeek, cap30d}");
+      return { cap5h: cap(b.cap5h), capWeek: cap(b.capWeek), cap30d: cap(b.cap30d) };
     },
   },
   setEnabled: {
@@ -320,6 +332,9 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
       ...(h.resetsWeek === null ? {} : { resetsWeek: h.resetsWeek }),
       canResetHealth: health === "cooling" || health === "suspect" || (a.state === "dead" && !needsLogin(a)),
       ...(a.kind === "key" ? keyUsed(db, a.id, now()) : {}),
+      ...(a.kind === "key" && a.cap5h !== null ? { cap5h: a.cap5h } : {}),
+      ...(a.kind === "key" && a.capWeek !== null ? { capWeek: a.capWeek } : {}),
+      ...(a.kind === "key" && a.cap30d !== null ? { cap30d: a.cap30d } : {}),
     };
   };
   /** A removed or moved account takes no act: it is history here. */
@@ -371,6 +386,12 @@ function makeHandlers(o: WebOpts, logins: DeviceLogins, setups: SetupTokenLogins
     setFloor: ({ session, params, body }) => {
       const a = live(managed(session, params.runner, params.name));
       setOwnerFloors(db, a.id, body.floor5h, body.floorWeek);
+      return view(getAccount(db, a.id)!);
+    },
+    setCaps: ({ session, params, body }) => {
+      const a = live(managed(session, params.runner, params.name));
+      if (a.kind !== "key") throw bad("dollar caps are for a key account only; a seat has floors");
+      setOwnerCaps(db, a.id, body.cap5h, body.capWeek, body.cap30d);
       return view(getAccount(db, a.id)!);
     },
     setEnabled: ({ session, params, body }) => {

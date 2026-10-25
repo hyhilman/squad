@@ -51,6 +51,13 @@ test("at or under a floor on either window skips, from a fresh read only", () =>
   assert.equal(r.skipped["codex/b"], "under-floor");
 });
 
+test("a key that reached a cap is refused as under its floor, also for a probe; one with no flag is picked", () => {
+  const r = pick([base("pi/a", { capReached: true }), base("pi/b", { capReached: false }), base("pi/c")], NOW);
+  assert.deepEqual(r.order, ["pi/b", "pi/c"]);
+  assert.deepEqual(r.skipped, { "pi/a": "under-floor" });
+  assert.deepEqual(pick([base("pi/a", { capReached: true })], NOW, undefined, { probe: true }).skipped, { "pi/a": "under-floor" });
+});
+
 test("most room on the tighter window first; ties go to the least recently used", () => {
   const r = pick(
     [

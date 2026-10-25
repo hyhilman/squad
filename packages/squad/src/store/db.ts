@@ -151,6 +151,10 @@ export const MIGRATIONS: readonly string[] = [
   // `migration` for every account that was in use before the gate, so none of them stops.
   `ALTER TABLE accounts ADD COLUMN consent_by TEXT`,
   `UPDATE accounts SET consent_at = created_at, consent_by = 'migration' WHERE consent_at IS NULL`,
+  // The owner's dollar caps on a key account, one per window (5 hours, 7 days, 30 days). NULL = no cap.
+  `ALTER TABLE accounts ADD COLUMN cap_5h REAL`,
+  `ALTER TABLE accounts ADD COLUMN cap_week REAL`,
+  `ALTER TABLE accounts ADD COLUMN cap_30d REAL`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

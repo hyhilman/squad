@@ -9,7 +9,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { PERMANENT_AUTH_CODES } from "../classify.ts";
 import type { AccountKind, Runner } from "../docker.ts";
 import type { Candidate, Health } from "../pool/pick.ts";
-import { envNum, SQUAD_FLOOR_DEFAULT_ENV } from "../settings.ts";
+import { envNum, envOn, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_NO_KEY_CAPS_ENV } from "../settings.ts";
+import { keyUsed } from "../usage/key-used.ts";
 import { emptyHealth, type HealthRow } from "./health.ts";
 
 export type AccountState = "active" | "dead" | "disabled" | "moved" | "removed";
@@ -32,6 +33,10 @@ export interface AccountRow {
   readonly loginEmail: string | null;
   /** Who consented: an email, `cli`, or `migration`. null while not shared. */
   readonly consentBy: string | null;
+  /** The owner's dollar caps on a key account per window; null = no cap. */
+  readonly cap5h: number | null;
+  readonly capWeek: number | null;
+  readonly cap30d: number | null;
 }
 
 export interface NewAccount {
@@ -58,12 +63,13 @@ export const accountId = (runner: string, name: string): string => `${runner}/${
 interface Raw {
   id: string; runner: string; name: string; kind: string; owner_email: string | null; state: string;
   dead_code: string | null; dead_at: string | null; floor_5h: number | null; floor_week: number | null; created_at: string; consent_at: string | null; login_email: string | null;
-  consent_by: string | null;
+  consent_by: string | null; cap_5h: number | null; cap_week: number | null; cap_30d: number | null;
 }
 
 const toAccount = (r: Raw): AccountRow => ({
   id: r.id, runner: r.runner as Runner, name: r.name, kind: r.kind as AccountKind, ownerEmail: r.owner_email, state: r.state as AccountState,
   deadCode: r.dead_code, deadAt: r.dead_at, floor5h: r.floor_5h, floorWeek: r.floor_week, createdAt: r.created_at, consentAt: r.consent_at, loginEmail: r.login_email, consentBy: r.consent_by,
+  cap5h: r.cap_5h, capWeek: r.cap_week, cap30d: r.cap_30d,
 });
 
 export function addAccount(db: DatabaseSync, a: NewAccount, now: Date = new Date()): AccountRow {
@@ -192,6 +198,19 @@ export function setOwnerFloors(db: DatabaseSync, id: string, floor5h: number | n
   db.prepare("UPDATE accounts SET floor_5h = ?, floor_week = ? WHERE id = ?").run(floor5h, floorWeek, id);
 }
 
+/** The owner's dollar caps on a key account, one per window; null clears one. */
+export function setOwnerCaps(db: DatabaseSync, id: string, cap5h: number | null, capWeek: number | null, cap30d: number | null): void {
+  if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
+  db.prepare("UPDATE accounts SET cap_5h = ?, cap_week = ?, cap_30d = ? WHERE id = ?").run(cap5h, capWeek, cap30d, id);
+}
+
+/** A key's own passes reached one of its caps. squad sees only its own passes, never a provider balance. */
+export function capReached(db: DatabaseSync, a: AccountRow, now: Date): boolean {
+  if (a.kind !== "key" || (a.cap5h === null && a.capWeek === null && a.cap30d === null)) return false;
+  const u = keyUsed(db, a.id, now);
+  return (a.cap5h !== null && u.used5h >= a.cap5h) || (a.capWeek !== null && u.usedWeek >= a.capWeek) || (a.cap30d !== null && u.used30d >= a.cap30d);
+}
+
 /** The owner's consent. The first stamp stays: a second call changes nothing. */
 export function setConsent(db: DatabaseSync, id: string, now: Date): void {
   if (getAccount(db, id) === undefined) throw new Error(`unknown account ${id}`);
@@ -243,6 +262,7 @@ export function resetHealth(db: DatabaseSync, id: string): "reset" | "log-in-aga
 /** Every account of a runner as `pick` sees it. Busy comes from the caller: it knows the locks. */
 export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (id: string) => boolean, env?: Readonly<Record<string, string | undefined>>): Candidate[] {
   const floor = envNum(SQUAD_FLOOR_DEFAULT_ENV, env);
+  const caps = !envOn(SQUAD_NO_KEY_CAPS_ENV, env);
   return listAccounts(db, runner).map((a) => {
     const h = getHealth(db, a.id);
     const health = healthOf(a, h, now);
@@ -258,6 +278,7 @@ export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (i
       busy: busy(a.id),
       lastUsedAt: orUndef(h.lastUsedAt),
       sharing: a.consentAt !== null,
+      capReached: caps && capReached(db, a, now),
     };
   });
 }
