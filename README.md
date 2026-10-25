@@ -94,6 +94,9 @@ current git repo, or the folder in `SQUAD_HOME`. It is mode 0700 and must never 
 | `log <passId>` | the end of a pass log |
 | `gc [--dry-run]` | remove orphan containers, lost passes, old files and old sessions |
 | `web [--api-only]` | the web view and its API |
+| `serve [--socket <path> \| --port <n>]` | provider mode: passes and conversations for machine callers (see below) |
+| `token add <project> --accounts <id,...> --roots <path,...> [--images <ref,...>]` | make a project token for `serve`; only the token goes to stdout |
+| `token list` / `token revoke <project>` | the live tokens (never the token itself) / end one at once |
 | `connect --url <origin> --pair <code>` | on your own computer: sign in to claude in your browser and send the token to squad web |
 
 `SQUAD_DRY_RUN=1` prints every Docker command and plan and runs nothing.
@@ -181,6 +184,55 @@ close(conv, deps);
 - `listAccountsWithServes({ home, store }, runner?)` lists each account with its health, `busy`, room
   left in both windows with their reset times, and `serves`: the providers (and, when pi's
   `models.json` lists them, the model ids) it can run. It never returns a key or token.
+
+## Provider mode
+
+`squad serve` lets another program on the same host (such as doppelganger) run passes and
+conversations over HTTP. A pass over HTTP is code execution on the host: it mounts host paths and
+picks an image. So `serve` is its own listener, never the web app's port: a unix socket with mode
+0600 (default `<home>/serve.sock`, or `--socket <path>`), or `--port <n>` on 127.0.0.1 only. `squad
+web` serves none of these routes. It needs no OIDC settings.
+
+Each caller gets a project token:
+
+```sh
+token=$(squad token add dg --accounts pi/one,pi/two --roots /srv/dg/worktrees)
+```
+
+The token is shown once; squad keeps only its sha256. Every call sends `Authorization: Bearer
+<token>`. A wrong, unknown or revoked token is a 401 with no detail. The token limits:
+
+- the accounts a pass may name;
+- the host paths: `cwd`, `gitDir`, `skill.dir` and every mount host must exist and be inside one of
+  the roots after symlinks are resolved, and must not touch the squad home;
+- the image: squad's own, or one given with `--images`.
+
+Out of scope is a 403 that names the field only.
+
+Run `squad serve` as the project's user: passes run with serve's uid and gid, and a `cwd` owned by
+another uid is refused.
+
+| Route | What it does |
+|---|---|
+| `GET /api/accounts` | the token's accounts (no emails) |
+| `POST /api/passes` | one pass; the answer is ndjson: `started`, `output`..., `result` |
+| `GET /api/passes/:passId` | `{running: true, ...}` or `{running: false, result}`; only the token's own passes |
+| `POST /api/conversations` | open a conversation; it belongs to the token |
+| `POST /api/conversations/:id/turns` | one turn, ndjson as a pass |
+| `DELETE /api/conversations/:id` | close it (204) |
+
+The pass row is written before the `started` line. After `started`, a failure comes only as
+`result.failure`. A dropped connection does not stop the pass: poll `GET /api/passes/:passId`. The
+SDK has `callStream` and, in `@squad/contract/node`, `nodeSocketFetch` (see [SDK](#sdk)).
+
+On SIGTERM or SIGINT, `serve` stops taking requests, lets running passes finish for
+`SQUAD_SERVE_DRAIN_S` seconds, stops what is left with `docker stop` (the `SQUAD_STOP_GRACE_S`
+grace), removes the socket and exits 0. `SQUAD_NO_SERVE=1` makes it refuse to start.
+
+After a restart, `serve` checks each pass it left running by its container name. A container that
+still runs is watched to its end. Only when `docker ps` answers and the container is not there does
+the pass end as lost: `failure {kind: "provider", code: "lost"}`. When docker gives no answer, the
+pass stays running, because a wrong "lost" could start a second agent in the same folder.
 
 ## Web view
 
@@ -331,6 +383,18 @@ package `@squad/contract`.
 ```ts
 import { call } from "@squad/contract";
 await call(fetch, "https://squad.example.com", "listAccounts", {}, { credentials: "include" });
+```
+
+For `squad serve`, a Node program uses the socket fetch and a bearer token:
+
+```ts
+import { call, callStream } from "@squad/contract";
+import { nodeSocketFetch } from "@squad/contract/node";
+const f = nodeSocketFetch("/srv/dg/.squad/serve.sock");
+const headers = { authorization: `Bearer ${token}` };
+for await (const line of callStream(f, "http://squad", "startPass", { body }, { headers })) {
+  if (line.type === "result") console.log(line.result.text);
+}
 ```
 
 The server must list the app's origin: `SQUAD_WEB_API_ORIGINS=https://app.example.com`. The session
