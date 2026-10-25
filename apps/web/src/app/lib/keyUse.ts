@@ -34,7 +34,7 @@ export const thirtyDayText = (a: Pick<AccountView, "used30d" | "cap30d">): strin
   a.cap30d === undefined ? `${usdText(a.used30d ?? 0)} in 30 d` : `${usdText(a.used30d ?? 0)} of ${usdText(a.cap30d)} cap in 30 d`;
 
 export const CAP_HINT = "squad stops picking this key when its own passes reach the cap. squad cannot see use outside squad.";
-export const NO_CAP_HINT = "No cap: squad picks this key whatever it used. The owner can set one with Caps. squad cannot see use outside squad.";
+export const NO_CAP_HINT = "No cap: squad picks this key whatever it used. The owner can set one with Caps & balance. squad cannot see use outside squad.";
 
 type CapFacts = Partial<Pick<AccountView, "kind" | "used5h" | "usedWeek" | "used30d" | "cap5h" | "capWeek" | "cap30d">>;
 
@@ -83,3 +83,76 @@ export function capsText(a: Partial<Pick<AccountView, "cap5h" | "capWeek" | "cap
   const set = parts.flatMap(([k, v]) => (v === undefined ? [] : [`${k} ${usdText(v)}`]));
   return set.length === 0 ? "None" : set.join(" · ");
 }
+
+// ---- the balance the owner typed, and squad's estimate (display only: the pool never reads it) ----
+
+type BalanceFacts = Partial<Pick<AccountView, "kind" | "balanceUsd" | "balanceAt" | "balanceLeft">>;
+
+const round = (v: number): number => Math.round(v * 100) / 100;
+
+/** Always two decimals, with the minus before the dollar ("-$0.40"). A value that rounds to 0 reads "$0.00". */
+export function centsText(v: number): string {
+  const r = round(v);
+  const t = `$${Math.abs(r).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return r < 0 ? `-${t}` : t;
+}
+
+export type BalanceTone = "grey" | "yellow" | "red";
+
+export function balanceTone(left: number, entered: number): BalanceTone {
+  if (left <= 0) return "red";
+  if (left < 5 || left < entered * 0.2) return "yellow";
+  return "grey";
+}
+
+const whenText = (iso: string, timeZone: string | undefined, time: boolean): string =>
+  new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", ...(time ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : {}), ...(timeZone === undefined ? {} : { timeZone }) }).format(Date.parse(iso));
+
+const entered = (a: BalanceFacts): { usd: number; at: string; left: number } | undefined =>
+  a.kind === "key" && a.balanceUsd !== undefined && a.balanceAt !== undefined && a.balanceLeft !== undefined ? { usd: a.balanceUsd, at: a.balanceAt, left: round(a.balanceLeft) } : undefined;
+
+export interface BalanceLine {
+  readonly text: string;
+  readonly tone: BalanceTone;
+  readonly hint: string;
+}
+
+/** The line under a key's use: "≈ $12.40 balance". Undefined when no balance is entered. */
+export function balanceLine(a: BalanceFacts, timeZone?: string): BalanceLine | undefined {
+  const b = entered(a);
+  if (b === undefined) return undefined;
+  return {
+    text: `≈ ${centsText(b.left)} balance`,
+    tone: balanceTone(b.left, b.usd),
+    hint: `Entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, true)}, minus ${centsText(b.usd - b.left)} squad used since. squad cannot see use outside squad.`,
+  };
+}
+
+/** Which bar's spare line holds the balance: the 7-day one, unless a 30-day cap note already uses it. */
+export const balancePlace = (a: Partial<Pick<AccountView, "cap30d">>): "5h" | "week" => (a.cap30d === undefined ? "week" : "5h");
+
+/** The Balance fact: "≈ $12.40 (entered $20.00 on Oct 25)", or "None". */
+export function balanceFact(a: BalanceFacts, timeZone?: string): string {
+  const b = entered(a);
+  return b === undefined ? "None" : `≈ ${centsText(b.left)} (entered ${centsText(b.usd)} on ${whenText(b.at, timeZone, false)})`;
+}
+
+/** The estimate is at or below $0. The pool still picks the key: squad cannot see the real balance. */
+export const balanceUsedUp = (a: BalanceFacts): boolean => {
+  const b = entered(a);
+  return b !== undefined && b.left <= 0;
+};
+
+const BALANCE_ERROR = `Use dollars from 0 (at most two decimals, up to ${CAP_MAX_USD}), or leave it empty for no balance.`;
+
+/** Empty = no balance (null). A leading "$" is fine. Unlike a cap, 0 is a real balance. */
+export function parseBalance(text: string): CapParse {
+  const t = text.trim().replace(/^\$/, "");
+  if (t === "") return { ok: true, value: null };
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(t)) return { ok: false, error: BALANCE_ERROR };
+  const n = Number(t);
+  if (!(n >= 0 && n <= CAP_MAX_USD)) return { ok: false, error: BALANCE_ERROR };
+  return { ok: true, value: n };
+}
+
+export const BALANCE_HELP = "Type the balance your provider's console shows. squad takes off what its own passes use from now on.";

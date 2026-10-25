@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { capReachedText, capsBody, capsText, capTone, keyCell, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
+import { balanceFact, balanceLine, balancePlace, balanceTone, balanceUsedUp, capReachedText, capsBody, capsText, capTone, centsText, keyCell, parseBalance, parseCap, thirtyDayText, usdText } from "./keyUse.ts";
 
 test("usdText: whole dollars drop the cents; small sums keep four places", () => {
   assert.equal(usdText(12), "$12");
@@ -59,4 +59,62 @@ test("capsText: only the caps that are set, or None", () => {
   assert.equal(capsText({}), "None");
   assert.equal(capsText({ cap5h: 2, cap30d: 50 }), "5 h $2 · 30 d $50");
   assert.equal(capsText({ cap5h: 0.5, capWeek: 9, cap30d: 30 }), "5 h $0.50 · 7 d $9 · 30 d $30");
+});
+
+test("centsText: always two decimals, a minus sign before the dollar, no minus zero", () => {
+  assert.equal(centsText(12.4), "$12.40");
+  assert.equal(centsText(20), "$20.00");
+  assert.equal(centsText(-0.4), "-$0.40");
+  assert.equal(centsText(-0.001), "$0.00");
+  assert.equal(centsText(1234.5), "$1,234.50");
+});
+
+test("balanceTone: red at or below $0, yellow under $5 or under 20% of the entered amount, grey else", () => {
+  assert.equal(balanceTone(0, 20), "red");
+  assert.equal(balanceTone(-1, 20), "red");
+  assert.equal(balanceTone(4.99, 100), "yellow");
+  assert.equal(balanceTone(19, 100), "yellow");
+  assert.equal(balanceTone(20, 100), "grey");
+  assert.equal(balanceTone(12.4, 20), "grey");
+});
+
+const UTC = "UTC";
+const AT = "2026-10-25T14:02:00.000Z";
+
+test("balanceLine: the estimate, its tone and a hover that says what squad cannot see", () => {
+  assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 12.4 }, UTC), {
+    text: "≈ $12.40 balance",
+    tone: "grey",
+    hint: "Entered $20.00 on Oct 25, 14:02, minus $7.60 squad used since. squad cannot see use outside squad.",
+  });
+  assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.4 }, UTC)?.text, "≈ -$0.40 balance");
+  assert.equal(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.4 }, UTC)?.tone, "red");
+  // Rounded to cents first: a tiny minus reads $0.00 and is still red.
+  assert.deepEqual(balanceLine({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -0.001 }, UTC), { text: "≈ $0.00 balance", tone: "red", hint: "Entered $5.00 on Oct 25, 14:02, minus $5.00 squad used since. squad cannot see use outside squad." });
+  assert.equal(balanceLine({ kind: "key" }, UTC), undefined);
+  assert.equal(balanceLine({ kind: "login", balanceUsd: 5, balanceAt: AT, balanceLeft: 5 }, UTC), undefined);
+});
+
+test("balancePlace: under the 7-day bar, or under the 5-hour bar when a 30-day cap note holds that line", () => {
+  assert.equal(balancePlace({}), "week");
+  assert.equal(balancePlace({ cap30d: 30 }), "5h");
+});
+
+test("balanceFact: the estimate and what was entered, or None", () => {
+  assert.equal(balanceFact({ kind: "key", balanceUsd: 20, balanceAt: AT, balanceLeft: 12.4 }, UTC), "≈ $12.40 (entered $20.00 on Oct 25)");
+  assert.equal(balanceFact({ kind: "key" }, UTC), "None");
+});
+
+test("balanceUsedUp: a key whose estimate is at or below $0", () => {
+  assert.equal(balanceUsedUp({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: 0 }), true);
+  assert.equal(balanceUsedUp({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: -2 }), true);
+  assert.equal(balanceUsedUp({ kind: "key", balanceUsd: 5, balanceAt: AT, balanceLeft: 0.01 }), false);
+  assert.equal(balanceUsedUp({ kind: "key" }), false);
+});
+
+test("parseBalance: empty is no balance; dollars from 0 with at most two decimals", () => {
+  assert.deepEqual(parseBalance(""), { ok: true, value: null });
+  assert.deepEqual(parseBalance("0"), { ok: true, value: 0 });
+  assert.deepEqual(parseBalance(" $25.5 "), { ok: true, value: 25.5 });
+  for (const bad of ["-1", "abc", "1.234", "1e3", "1000001"]) assert.equal(parseBalance(bad).ok, false, bad);
 });

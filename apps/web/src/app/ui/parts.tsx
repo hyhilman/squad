@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
-import { CAP_HINT, NO_CAP_HINT, capReachedText, keyCell, thirtyDayText } from "../lib/keyUse.ts";
+import { CAP_HINT, NO_CAP_HINT, balanceLine, balancePlace, capReachedText, keyCell, thirtyDayText } from "../lib/keyUse.ts";
 import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
 import { fiveHourResetBadge, weekResetBadge, type WeekBadge, type WeekTone } from "../lib/weekReset.ts";
 
@@ -296,9 +296,18 @@ const CAP_COLOR = { blue: "room.blue", yellow: "room.yellow", red: "room.red" } 
 /**
  * What a key's own passes used in one window, in dollars. With a cap, a bar of used over cap: red when
  * reached, yellow above 80%. With no cap there is no bar; an empty line of the same height keeps the
- * text level with the seats' bars. `note` fills the line under it (where a seat shows its reset badge).
+ * text level with the seats' bars. `note` fills the line under it (where a seat shows its reset badge):
+ * the 30-day cap or the balance estimate.
  */
-export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAlert = false, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; note?: string; noteAlert?: boolean; keepResetLine?: boolean }) {
+export interface KeyNote {
+  readonly text: string;
+  readonly tone: keyof typeof NOTE_COLOR;
+  readonly hint?: string;
+}
+
+const NOTE_COLOR = { subtle: "fg.subtle", grey: "fg.muted", yellow: "yellow.fg", red: "fg.error" } as const;
+
+export function KeyUseBar({ used, cap, span, width = "100%", label, note, keepResetLine = false }: { used: number | undefined; cap: number | undefined; span: string; width?: string; label?: string; note?: KeyNote; keepResetLine?: boolean }) {
   const c = keyCell(used, cap);
   const usedHint = `Used by squad's own passes in the last ${span}. squad cannot see use outside squad.`;
   return (
@@ -333,9 +342,7 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAl
         )}
       </Flex>
       {note !== undefined ? (
-        <Text h="5" display="flex" alignItems="center" fontSize="xs" lineHeight="1" color={noteAlert ? "fg.error" : "fg.subtle"} fontVariantNumeric="tabular-nums" truncate>
-          {note}
-        </Text>
+        <NoteLine note={note} />
       ) : keepResetLine ? (
         <Box h="5" aria-hidden />
       ) : null}
@@ -343,15 +350,35 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAl
   );
 }
 
+function NoteLine({ note }: { note: KeyNote }) {
+  const line = (
+    <Text h="5" display="flex" alignItems="center" fontSize="xs" lineHeight="1" color={NOTE_COLOR[note.tone]} fontVariantNumeric="tabular-nums" truncate {...(note.hint === undefined ? {} : { cursor: "help", tabIndex: 0, w: "fit-content", maxW: "full" })}>
+      {note.text}
+    </Text>
+  );
+  return note.hint === undefined ? line : <Hint text={note.hint}>{line}</Hint>;
+}
+
+/** The notes under a key's two bars: the 30-day cap under the week bar, and the balance in a free line. */
+function keyNotes(a: AccountView): { "5h"?: KeyNote; week?: KeyNote } {
+  const notes: { "5h"?: KeyNote; week?: KeyNote } = {};
+  if (a.cap30d !== undefined) notes.week = { text: thirtyDayText(a), tone: capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) === undefined ? "subtle" : "red" };
+  const b = balanceLine(a);
+  if (b !== undefined) notes[balancePlace(a)] = b;
+  return notes;
+}
+
 /** One window of an account: a seat's room bar, or what a key used. */
 export function AccountRoom({ a, window, width, label, keepResetLine = false }: { a: AccountView; window: "5h" | "week"; width?: string; label?: string; keepResetLine?: boolean }) {
   const w = width === undefined ? {} : { width };
   const l = label === undefined ? {} : { label };
   if (a.kind === "key") {
+    const note = keyNotes(a)[window];
+    const n = note === undefined ? {} : { note };
     return window === "5h" ? (
-      <KeyUseBar used={a.used5h} cap={a.cap5h} span="5 hours" {...w} {...l} keepResetLine={keepResetLine} />
+      <KeyUseBar used={a.used5h} cap={a.cap5h} span="5 hours" {...w} {...l} {...n} keepResetLine={keepResetLine} />
     ) : (
-      <KeyUseBar used={a.usedWeek} cap={a.capWeek} span="7 days" {...w} {...l} {...(a.cap30d === undefined ? {} : { note: thirtyDayText(a) })} noteAlert={capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) !== undefined} keepResetLine={keepResetLine} />
+      <KeyUseBar used={a.usedWeek} cap={a.capWeek} span="7 days" {...w} {...l} {...n} keepResetLine={keepResetLine} />
     );
   }
   return window === "5h" ? (

@@ -1,9 +1,9 @@
 import type { AccountView } from "@squad/contract";
-import { capReachedText } from "./keyUse.ts";
+import { balanceUsedUp, capReachedText } from "./keyUse.ts";
 import { weekSoon } from "./weekReset.ts";
 
 type Facts = Pick<AccountView, "health" | "left5h" | "leftWeek" | "floor5h" | "floorWeek"> &
-  Partial<Pick<AccountView, "kind" | "used5h" | "usedWeek" | "used30d" | "cap5h" | "capWeek" | "cap30d">> & { readonly resetsWeek?: string; readonly sharing?: boolean };
+  Partial<Pick<AccountView, "kind" | "used5h" | "usedWeek" | "used30d" | "cap5h" | "capWeek" | "cap30d" | "balanceUsd" | "balanceAt" | "balanceLeft">> & { readonly resetsWeek?: string; readonly sharing?: boolean };
 
 // The pool skips an account that is dead, cooling, or at or under its floor in either window
 // (packages/squad/src/pool/pick.ts), or a key whose own passes reached a dollar cap, so those are the ones a person should look at. A disabled or
@@ -21,12 +21,14 @@ export function attentionOf(a: Facts): string | undefined {
 }
 
 /**
- * The accounts to look at: those the pool skips, then those whose week resets within 3 days (the room
- * comes back soon; worth knowing, but the pool still uses them, so countHealth does not count them).
+ * The accounts to look at: those the pool skips, then a key whose balance estimate is used up, then
+ * those whose week resets within 3 days. The pool still uses the last two, so countHealth does not count
+ * them: a balance is display only, and squad cannot see use outside squad.
  */
 export function needsAttention<A extends Facts>(list: readonly A[], now: Date = new Date()): { account: A; reason: string }[] {
   return list.flatMap((account) => {
-    const reason = attentionOf(account) ?? (account.health !== "disabled" && account.health !== "moved" && account.health !== "removed" && weekSoon(account.resetsWeek, now) ? "Week resets soon" : undefined);
+    const live = account.health !== "disabled" && account.health !== "moved" && account.health !== "removed";
+    const reason = attentionOf(account) ?? (live && balanceUsedUp(account) ? "Balance used up" : undefined) ?? (live && weekSoon(account.resetsWeek, now) ? "Week resets soon" : undefined);
     return reason === undefined ? [] : [{ account, reason }];
   });
 }

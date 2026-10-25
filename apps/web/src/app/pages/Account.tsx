@@ -3,7 +3,7 @@ import type { AccountView, Runner } from "@squad/contract";
 import { ChevronRight } from "lucide-react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router";
 import { agoText } from "../lib/format.ts";
-import { capsText } from "../lib/keyUse.ts";
+import { balanceFact, capsText } from "../lib/keyUse.ts";
 import { UNKNOWN_USER_HINT } from "../lib/accountUser.ts";
 import { isOwnerOf } from "../lib/login.ts";
 import { FillAccountUser } from "../ui/AccountUser.tsx";
@@ -22,7 +22,7 @@ function OverviewTab({ a }: { a: AccountView }) {
     <Grid templateColumns={{ base: "1fr", lg: "minmax(0, 2fr) minmax(0, 1fr)" }} gap="6" alignItems="start">
       {a.kind === "key" ? (
         // A key has no window from its provider and so no readings: it shows what squad's own passes used.
-        <Panel title="Used by squad" description="What this key's passes in squad used, in dollars. squad cannot see use outside squad. Set caps with Caps.">
+        <Panel title="Used by squad" description="What this key's passes in squad used, in dollars. squad cannot see use outside squad. Set caps and the balance with Caps & balance.">
           <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6">
             <AccountRoom a={a} window="5h" label="Last 5 hours" />
             <AccountRoom a={a} window="week" label="Last 7 days" />
@@ -82,7 +82,10 @@ function OverviewTab({ a }: { a: AccountView }) {
           <Fact label="Owner">{a.ownerEmail === "" ? "-" : a.ownerEmail}</Fact>
           <Fact label="Shared">{a.sharing ? `Since ${at(a.consentAt)}${a.consentBy === undefined ? "" : ` (by ${a.consentBy})`}` : "No: squad refuses every pass"}</Fact>
           {a.kind === "key" ? (
-            <Fact label="Caps">{capsText(a)}</Fact>
+            <>
+              <Fact label="Caps">{capsText(a)}</Fact>
+              <Fact label="Balance">{balanceFact(a)}</Fact>
+            </>
           ) : (
             <Fact label="Floors">{`${a.floor5h}% · ${a.floorWeek}% (${a.floorSource === "owner" ? "set by the owner" : "the default"})`}</Fact>
           )}

@@ -51,3 +51,12 @@ test("attentionOf: a key whose own passes reached a cap needs attention; one wit
   assert.equal(attentionOf(acct({ account: "pi/dev", kind: "key", used5h: 3, cap5h: 2 })), "5-hour cap reached");
   assert.equal(attentionOf(acct({ account: "pi/dev", kind: "key", used5h: 3 })), undefined);
 });
+
+test("needsAttention: a key whose balance estimate is used up; the pool still uses it, so countHealth does not count it", () => {
+  const now = new Date("2026-10-24T12:00:00.000Z");
+  const up = acct({ account: "pi/dev", kind: "key", balanceUsd: 5, balanceAt: "2026-10-22T12:00:00.000Z", balanceLeft: -0.4 });
+  const fine = acct({ account: "pi/spare", kind: "key", balanceUsd: 40, balanceAt: "2026-10-23T12:00:00.000Z", balanceLeft: 39 });
+  assert.deepEqual(needsAttention([up, fine], now).map((x) => [x.account.account, x.reason]), [["pi/dev", "Balance used up"]]);
+  assert.equal(attentionOf(up), undefined);
+  assert.deepEqual(countHealth([up, fine]), { total: 2, ok: 2, attention: 0 });
+});

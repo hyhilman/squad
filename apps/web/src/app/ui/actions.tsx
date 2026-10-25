@@ -9,7 +9,7 @@ import { Fragment, useState, type ReactNode } from "react";
 import { api } from "../api.ts";
 import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
-import { CAP_HINT, capInput, capsBody, usdText } from "../lib/keyUse.ts";
+import { BALANCE_HELP, CAP_HINT, balanceLine, capInput, capsBody, parseBalance, usdText } from "../lib/keyUse.ts";
 import { accountActions, splitActions, type ActionKey } from "../lib/accountActions.ts";
 import { useMe } from "../queries.ts";
 import { FloorEditor } from "./FloorEditor.tsx";
@@ -31,24 +31,34 @@ const paramsOf = (a: AccountView) => ({ runner: a.runner as Runner, name: a.name
 
 /**
  * The caps form of a key account: dollars per window, empty = no cap. A key has no window from its
- * provider, so it has no floor that could act: the caps take the floors' place.
+ * provider, so it has no floor that could act: the caps take the floors' place. Under the caps, the
+ * balance the owner reads in the provider's console; saving a changed one stamps a new time.
  */
 export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: () => void; onCancel?: () => void }) {
   const qc = useQueryClient();
   const start = [capInput(a.cap5h), capInput(a.capWeek), capInput(a.cap30d)] as const;
   const [c5, setC5] = useState<string>(start[0]);
   const [cw, setCw] = useState<string>(start[1]);
+  const balanceStart = capInput(a.balanceUsd);
+  const [bal, setBal] = useState<string>(balanceStart);
   const [busy, setBusy] = useState(false);
-  const dirty = c5 !== start[0] || cw !== start[1];
+  const capsDirty = c5 !== start[0] || cw !== start[1];
+  const balanceDirty = bal.trim() !== balanceStart;
+  const now = balanceLine(a);
   const save = async () => {
     // The page sets no 30-day cap; one set through the API or the CLI stays as it is.
     const b = capsBody(c5, cw, start[2]);
-    if (!b.ok) return void toastError(b.errors.join(" "));
+    const nb = parseBalance(bal);
+    // Check both first, so a bad balance never leaves the caps half saved.
+    const errors = [...(b.ok ? [] : b.errors), ...(nb.ok ? [] : [`Balance: ${nb.error}`])];
+    if (!b.ok || !nb.ok) return void toastError(errors.join(" "));
     setBusy(true);
     try {
-      await api("setCaps", { params: paramsOf(a), body: b.body });
+      if (capsDirty) await api("setCaps", { params: paramsOf(a), body: b.body });
+      // Only a changed box sends the balance: sending it stamps a new time.
+      if (balanceDirty) await api("setBalance", { params: paramsOf(a), body: { balance: nb.value } });
       await qc.invalidateQueries();
-      toastOk("Caps saved.");
+      toastOk("Saved.");
       onSaved?.();
     } catch (e) {
       toastError(failureText(e));
@@ -85,14 +95,26 @@ export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: (
           </Field.Root>
         ))}
       </SimpleGrid>
+      <Field.Root>
+        <Field.Label fontSize="sm">Balance now</Field.Label>
+        <InputGroup startElement="$" maxW={{ base: "full", sm: "calc(50% - 0.5rem)" }}>
+          <Input size="sm" inputMode="decimal" placeholder="No balance" value={bal} onChange={(e) => setBal(e.target.value)} aria-label="Balance now in dollars" fontVariantNumeric="tabular-nums" />
+        </InputGroup>
+        <Field.HelperText fontSize="xs">{BALANCE_HELP}</Field.HelperText>
+        {now === undefined ? null : (
+          <Field.HelperText fontSize="xs" fontVariantNumeric="tabular-nums">
+            {now.text}. {now.hint}
+          </Field.HelperText>
+        )}
+      </Field.Root>
       <HStack justify="flex-end" gap="2">
         {onCancel === undefined ? null : (
           <Button variant="outline" size="sm" onClick={onCancel}>
             Cancel
           </Button>
         )}
-        <Button colorPalette="brand" size="sm" onClick={() => void save()} loading={busy} disabled={!dirty}>
-          Save caps
+        <Button colorPalette="brand" size="sm" onClick={() => void save()} loading={busy} disabled={!capsDirty && !balanceDirty}>
+          Save
         </Button>
       </HStack>
     </Stack>
@@ -208,7 +230,7 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
     test: { label: "Test", icon: FlaskConical, run: () => setDialog("test") },
     reset: { label: "Reset health", icon: RotateCcw, run: () => void run("Health reset.", () => api("resetHealth", { params: paramsOf(a) })) },
     limit: { label: "Use limit reset", icon: TimerReset, run: () => setDialog("limit") },
-    floors: { label: a.kind === "key" ? "Caps" : "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
+    floors: { label: a.kind === "key" ? "Caps & balance" : "Floors", icon: SlidersHorizontal, run: () => setDialog("floors") },
     enable: { label: disabled ? "Enable" : "Disable", icon: disabled ? CirclePlay : CirclePause, danger: !disabled, run: () => setDialog("enable") },
     remove: { label: "Remove", icon: Trash2, danger: true, run: () => setDialog("remove") },
   };
@@ -216,7 +238,7 @@ export function useAccountActions(a: AccountView): { actions: Action[]; dialogs:
 
   const dialogs = (
     <>
-      <SimpleDialog open={dialog === "floors"} onClose={close} title={a.kind === "key" ? `Caps of ${a.account}` : `Floors of ${a.account}`}>
+      <SimpleDialog open={dialog === "floors"} onClose={close} title={a.kind === "key" ? `Caps and balance of ${a.account}` : `Floors of ${a.account}`}>
         {a.kind === "key" ? <CapsForm a={a} onSaved={close} onCancel={close} /> : <FloorsForm a={a} onSaved={close} onCancel={close} />}
       </SimpleDialog>
       <SimpleDialog
