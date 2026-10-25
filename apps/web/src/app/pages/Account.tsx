@@ -21,7 +21,7 @@ function OverviewTab({ a }: { a: AccountView }) {
     <Grid templateColumns={{ base: "1fr", lg: "minmax(0, 2fr) minmax(0, 1fr)" }} gap="6" alignItems="start">
       <Panel title="Room left" description={a.readAt === undefined ? "No usage read yet." : `Read ${agoText(a.readAt, new Date())}. The grey part is the floor the owner keeps.`}>
         <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6" mb="6">
-          <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour window" />
+          <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5-hour window" />
           <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week window" resetsWeek={a.resetsWeek} />
         </Grid>
         <Text fontSize="xs" fontWeight="600" color="fg.muted" textTransform="uppercase" letterSpacing="0.06em" mb="2">

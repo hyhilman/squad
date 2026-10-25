@@ -119,7 +119,7 @@ export function Accounts() {
                     </HStack>
                   </Flex>
                   <Stack gap="3" mt="3" pl="11">
-                    <RoomBar left={a.left5h} floor={a.floor5h} label="5-hour" />
+                    <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5-hour" />
                     <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />
                     <AccountUserText a={a} />
                     <Text fontSize="xs" color="fg.subtle">
@@ -158,7 +158,7 @@ export function Accounts() {
                         <HealthBadge health={a.health} />
                       </Table.Cell>
                       <Table.Cell>
-                        <RoomBar left={a.left5h} floor={a.floor5h} width="200px" keepResetLine />
+                        <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} width="200px" keepResetLine />
                       </Table.Cell>
                       <Table.Cell>
                         <RoomBar left={a.leftWeek} floor={a.floorWeek} width="200px" resetsWeek={a.resetsWeek} keepResetLine />

@@ -8,7 +8,7 @@ import { healthColor, outcomeBadge, type BadgeColor } from "../lib/badges.ts";
 import { failureText } from "../lib/errors.ts";
 import { badgeLetter, logoIdOf, logoSrc } from "../lib/providers.ts";
 import { availableHint, floorHint, roomParts, roomState } from "../lib/room.ts";
-import { weekResetBadge, type WeekTone } from "../lib/weekReset.ts";
+import { fiveHourResetBadge, weekResetBadge, type WeekBadge, type WeekTone } from "../lib/weekReset.ts";
 
 export function PageHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
@@ -240,7 +240,10 @@ const WEEK_PALETTE: Readonly<Record<WeekTone, string>> = { red: "red", yellow: "
 
 /** When the week window resets: red under a day, yellow under three, grey after. The hover says the exact time. */
 export function WeekResetBadge({ resetsWeek }: { resetsWeek: string | undefined }) {
-  const b = weekResetBadge(resetsWeek, new Date());
+  return <ResetBadge b={weekResetBadge(resetsWeek, new Date())} />;
+}
+
+function ResetBadge({ b }: { b: WeekBadge | undefined }) {
   if (b === undefined) return null;
   return (
     <Hint text={b.title}>
@@ -251,8 +254,13 @@ export function WeekResetBadge({ resetsWeek }: { resetsWeek: string | undefined 
   );
 }
 
-/** `keepResetLine` holds the badge line empty when there is no badge, so table rows keep one height. */
-export function RoomBar({ left, floor, width = "100%", label, resetsWeek, keepResetLine = false }: { left: number | undefined; floor: number; width?: string; label?: string; resetsWeek?: string; keepResetLine?: boolean }) {
+/**
+ * Pass `resets5h` on a 5-hour bar or `resetsWeek` on a week bar for its reset badge. `keepResetLine` holds
+ * the badge line empty when there is no badge, so table rows keep one height.
+ */
+export function RoomBar({ left, floor, width = "100%", label, resets5h, resetsWeek, keepResetLine = false }: { left: number | undefined; floor: number; width?: string; label?: string; resets5h?: string; resetsWeek?: string; keepResetLine?: boolean }) {
+  const now = new Date();
+  const badge = resetsWeek !== undefined ? weekResetBadge(resetsWeek, now) : fiveHourResetBadge(resets5h, now);
   const l = Math.max(0, Math.min(100, left ?? 0));
   const f = Math.max(0, Math.min(100, floor));
   const color = left === undefined ? "room.track" : ROOM_COLOR[roomState(l, f)];
@@ -277,7 +285,7 @@ export function RoomBar({ left, floor, width = "100%", label, resetsWeek, keepRe
           <Legend color={color} text={`${parts.available}% available`} hint={availableHint(parts)} />
         )}
       </Flex>
-      {keepResetLine && weekResetBadge(resetsWeek, new Date()) === undefined ? <Box h="5" aria-hidden /> : <WeekResetBadge resetsWeek={resetsWeek} />}
+      {keepResetLine && badge === undefined ? <Box h="5" aria-hidden /> : <ResetBadge b={badge} />}
     </Stack>
   );
 }

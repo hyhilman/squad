@@ -102,7 +102,7 @@ export function Overview() {
                       </HStack>
                       <Stack direction={{ base: "column", md: "row" }} gap={{ base: "3", md: "6" }} flexShrink={0} w={{ base: "full", md: "auto" }} align={{ base: "stretch", md: "flex-start" }}>
                         <Box w={{ base: "full", md: "200px" }} minW="0">
-                          <RoomBar left={a.left5h} floor={a.floor5h} label="5h" />
+                          <RoomBar left={a.left5h} floor={a.floor5h} resets5h={a.resets5h} label="5h" />
                         </Box>
                         <Box w={{ base: "full", md: "200px" }} minW="0">
                           <RoomBar left={a.leftWeek} floor={a.floorWeek} label="Week" resetsWeek={a.resetsWeek} />

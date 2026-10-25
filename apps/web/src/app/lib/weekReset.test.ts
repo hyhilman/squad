@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { weekResetBadge, weekSoon } from "./weekReset.ts";
+import { fiveHourResetBadge, weekResetBadge, weekSoon } from "./weekReset.ts";
 
 const NOW = new Date("2026-10-24T12:00:00.000Z"); // a Saturday
 const at = (h: number) => new Date(NOW.getTime() + h * 3_600_000).toISOString();
@@ -40,4 +40,19 @@ test("weekSoon: red or yellow only", () => {
   assert.equal(weekSoon(at(52), NOW), true);
   assert.equal(weekSoon(at(100), NOW), false);
   assert.equal(weekSoon(undefined, NOW), false);
+});
+
+test("fiveHourResetBadge: grey, hours and minutes left, the exact time on hover", () => {
+  const b = fiveHourResetBadge(new Date(NOW.getTime() + (2 * 60 + 10) * 60_000).toISOString(), NOW, "UTC")!;
+  assert.deepEqual([b.tone, b.text], ["grey", "5-hour resets in 2 h 10 m"]);
+  assert.match(b.title, /^Resets /);
+  assert.equal(fiveHourResetBadge(new Date(NOW.getTime() + 3 * 3_600_000).toISOString(), NOW, "UTC")!.text, "5-hour resets in 3 h");
+  assert.equal(fiveHourResetBadge(new Date(NOW.getTime() + 25 * 60_000).toISOString(), NOW, "UTC")!.text, "5-hour resets in 25 m");
+  assert.equal(fiveHourResetBadge(new Date(NOW.getTime() + 20_000).toISOString(), NOW, "UTC")!.text, "5-hour resets in 1 m", "under a minute still says 1 m");
+});
+
+test("fiveHourResetBadge: nothing for no time, a bad time or a time gone by", () => {
+  assert.equal(fiveHourResetBadge(undefined, NOW, "UTC"), undefined);
+  assert.equal(fiveHourResetBadge("nope", NOW, "UTC"), undefined);
+  assert.equal(fiveHourResetBadge(new Date(NOW.getTime() - 1).toISOString(), NOW, "UTC"), undefined);
 });

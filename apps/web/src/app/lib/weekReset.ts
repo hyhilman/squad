@@ -32,6 +32,24 @@ export function weekResetBadge(resetsWeek: string | undefined, now: Date, timeZo
   return { tone: "grey", text: `Week resets ${day} ${time}`, title };
 }
 
+const MINUTE = 60_000;
+
+/**
+ * The badge on a 5-hour room bar: how long until that window resets. Always grey: it is never more
+ * than five hours away, so there is nothing to warn about.
+ */
+export function fiveHourResetBadge(resets5h: string | undefined, now: Date, timeZone?: string): WeekBadge | undefined {
+  const t = resets5h === undefined ? NaN : Date.parse(resets5h);
+  if (!Number.isFinite(t) || t <= now.getTime()) return undefined;
+  const mins = Math.max(1, Math.round((t - now.getTime()) / MINUTE));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const left = h === 0 ? `${m} m` : m === 0 ? `${h} h` : `${h} h ${m} m`;
+  const zone = timeZone === undefined ? {} : { timeZone };
+  const title = `Resets ${new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short", ...zone }).format(t)}`;
+  return { tone: "grey", text: `5-hour resets in ${left}`, title };
+}
+
 /** The week resets within three days (a red or yellow badge). */
 export const weekSoon = (resetsWeek: string | undefined, now: Date): boolean => {
   const tone = weekResetBadge(resetsWeek, now, "UTC")?.tone;
