@@ -70,7 +70,7 @@ export function Overview() {
       </SimpleGrid>
 
       <Stack gap="6">
-        <Panel title="Needs attention" description="Dead, cooling, not shared, at the floor or a key at its cap (the pool skips these), or the week resets within 3 days." flush>
+        <Panel title="Needs attention" description="Dead, cooling, not shared, at the floor or a key at its cap (the pool skips these), a key whose balance estimate is used up, or the week resets within 3 days." flush>
           {accounts.isPending ? (
             <Stack gap="3" px="5" pb="5">
               {[0, 1, 2].map((i) => (
