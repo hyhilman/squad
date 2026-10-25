@@ -33,6 +33,13 @@ mkdir "$work/npx"
 set +e; out=$(cd "$work/npx" && npx -y "http://127.0.0.1:$(cat "$work/port")/$tgz" connect --url http://example.com --pair x 2>&1); rc=$?; set -e
 kill "$srv"
 echo "$out" | grep "squad connect" | head -1; [ "$rc" = 2 ] || { echo "exit $rc, want 2"; exit 1; }
+echo "== squad serve from the installed package: listens on a socket, SIGTERM exits 0"
+SQUAD_HOME="$home" node node_modules/squad/dist/cli/squad.js serve --socket "$home/s.sock" > "$work/serve.out" 2>/dev/null & srv=$!
+for _ in $(seq 50); do grep -q "listening on" "$work/serve.out" 2>/dev/null && break; sleep 0.1; done
+cat "$work/serve.out"; [ -S "$home/s.sock" ] || { echo "no socket"; exit 1; }
+kill -TERM "$srv"; set +e; wait "$srv"; rc=$?; set -e
+[ "$rc" = 0 ] || { echo "serve exit $rc, want 0"; exit 1; }; [ ! -e "$home/s.sock" ] || { echo "socket left"; exit 1; }
+echo "serve ok"
 echo "== files exist"; ls node_modules/squad/dist/webapp/index.html node_modules/squad/dist/images/entry.sh node_modules/squad/dist/assets/codex-config.toml
 echo "== types"; echo 'import type { PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider } from "squad"; export const x: [PassRequest, PassResult, RunDeps, Failure, FailureKind, Usage, AccountRow, Log, Effort, SkillRef, ExtraMount, TurnOptions, Conversation, OpenRequest, TurnResult, AccountInfo, ServedProvider] | undefined = undefined;' > t.ts
 "$repo/node_modules/.bin/tsc" --noEmit --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node --typeRoots "$repo/node_modules/@types" t.ts && echo "types ok"

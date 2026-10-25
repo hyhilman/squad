@@ -12,7 +12,7 @@ export interface ByteStream {
   getReader(): { read(): Promise<{ readonly done: boolean; readonly value?: Uint8Array | undefined }>; releaseLock?(): void };
 }
 
-/** A fetch whose answer also gives its body as a stream. The global fetch is one; so is `nodeSocketFetch` (`@squad/contract/node`). */
+/** A fetch whose answer also gives its body as a stream. The global fetch is one; so is `nodeSocketFetch`, in the node entry of this package. */
 export type StreamFetchLike = (
   url: string,
   init: Init,
