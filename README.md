@@ -288,10 +288,16 @@ opencode-go, pi works the cost out from its own price table, so the number is an
 money spent. squad never asks the provider for a balance. It cannot see use outside squad, and the
 provider's month may follow a billing cycle squad does not know.
 
-The owner (or an admin) may set a cap in dollars per window under Caps; there is none by default.
+The owner (or an admin) may set a cap in dollars per window under Caps & balance; there is none by default.
 When a window's used sum reaches its cap, the pool stops picking the key, the same way as an account
 under its floor. A cap stops only new passes: up to `SQUAD_KEY_PARALLEL` passes may already run on
 the key, so the use can go a little past the cap. `SQUAD_NO_KEY_CAPS=1` makes the pool ignore caps.
+
+The owner may also type the balance the provider's console shows, under the same item. squad keeps
+it with the time it was entered and shows an estimate: that balance minus what squad's own passes
+used since then. The estimate cannot see use outside squad (another tool on the same key, a refund,
+a top-up), so it drifts; type the console's number again to reset it. It is display only: the pool
+never reads it.
 
 `squad import <home>` also reads a doppelganger project (a folder with `creds/pi/<name>/` or
 `.doppelganger/creds/pi/<name>/` and no squad database). It copies the pi key accounts
