@@ -17,16 +17,16 @@ export function capTone(used: number, cap: number): CapTone {
 
 export interface KeyCell {
   readonly usedText: string;
-  /** Set only with a cap: the bar's legend, fill and colour. */
-  readonly capText?: string;
-  readonly pct?: number;
-  readonly tone?: CapTone;
+  /** The bar's right legend, fill and colour. With no cap the bar stays empty and blue, and reads "Cap ∞". */
+  readonly capText: string;
+  readonly pct: number;
+  readonly tone: CapTone;
 }
 
 export function keyCell(used: number | undefined, cap: number | undefined): KeyCell {
   const u = used ?? 0;
   const usedText = `${usdText(u)} used`;
-  if (cap === undefined) return { usedText };
+  if (cap === undefined) return { usedText, capText: "Cap ∞", pct: 0, tone: "blue" };
   return { usedText, capText: `Cap ${usdText(cap)}`, pct: Math.min(100, Math.max(0, (u / cap) * 100)), tone: capTone(u, cap) };
 }
 

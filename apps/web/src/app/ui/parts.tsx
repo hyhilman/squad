@@ -294,10 +294,9 @@ export function RoomBar({ left, floor, width = "100%", label, resets5h, resetsWe
 const CAP_COLOR = { blue: "room.blue", yellow: "room.yellow", red: "room.red" } as const;
 
 /**
- * What a key's own passes used in one window, in dollars. With a cap, a bar of used over cap: red when
- * reached, yellow above 80%. With no cap there is no bar; an empty line of the same height keeps the
- * text level with the seats' bars. `note` fills the line under it (where a seat shows its reset badge):
- * the 30-day cap or the balance estimate.
+ * What a key's own passes used in one window, in dollars, as a bar of used over cap: red when reached,
+ * yellow above 80%. With no cap the bar is the same, empty, with "Cap ∞" on the right. `note` fills the
+ * line under it (where a seat shows its reset badge): the 30-day cap or the balance estimate.
  */
 export interface KeyNote {
   readonly text: string;
@@ -317,29 +316,13 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, keepRe
           {label}
         </Text>
       )}
-      <Box position="relative" h="1.5" rounded="full" bg={c.pct === undefined ? undefined : "room.track"} aria-hidden>
-        {c.pct === undefined || c.tone === undefined ? null : <Box position="absolute" insetY="0" left="0" rounded="full" bg={CAP_COLOR[c.tone]} style={{ width: `${c.pct}%` }} />}
+      <Box position="relative" h="1.5" rounded="full" bg="room.track" aria-hidden>
+        {c.pct > 0 ? <Box position="absolute" insetY="0" left="0" rounded="full" bg={CAP_COLOR[c.tone]} style={{ width: `${c.pct}%` }} /> : null}
       </Box>
       {/* Use on the left and the cap on the right, the way a seat shows its floor and what is available. */}
       <Flex justify="space-between" gap="2" fontSize="xs" lineHeight="1" color="fg.muted">
-        {c.tone === undefined ? (
-          <Hint text={usedHint}>
-            <Text cursor="help" tabIndex={0} whiteSpace="nowrap" fontVariantNumeric="tabular-nums">
-              {c.usedText}
-            </Text>
-          </Hint>
-        ) : (
-          <Legend color={CAP_COLOR[c.tone]} text={c.usedText} hint={usedHint} />
-        )}
-        {c.capText === undefined ? (
-          <Hint text={NO_CAP_HINT}>
-            <Text color="fg.subtle" cursor="help" tabIndex={0} whiteSpace="nowrap">
-              No cap
-            </Text>
-          </Hint>
-        ) : (
-          <Legend color="room.floor" text={c.capText} hint={CAP_HINT} />
-        )}
+        <Legend color={CAP_COLOR[c.tone]} text={c.usedText} hint={usedHint} />
+        <Legend color="room.floor" text={c.capText} hint={cap === undefined ? NO_CAP_HINT : CAP_HINT} />
       </Flex>
       {note !== undefined ? (
         <NoteLine note={note} />

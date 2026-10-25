@@ -87,7 +87,7 @@ export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: (
           <Field.Root key={r.label}>
             <Field.Label fontSize="sm">{r.label}</Field.Label>
             <InputGroup startElement="$">
-              <Input size="sm" inputMode="decimal" placeholder="No cap" value={r.value} onChange={(e) => r.set(e.target.value)} aria-label={`${r.label} in dollars`} fontVariantNumeric="tabular-nums" />
+              <Input size="sm" inputMode="decimal" placeholder="∞ (no cap)" value={r.value} onChange={(e) => r.set(e.target.value)} aria-label={`${r.label} in dollars`} fontVariantNumeric="tabular-nums" />
             </InputGroup>
             <Field.HelperText fontSize="xs" fontVariantNumeric="tabular-nums">
               {usdText(r.used ?? 0)} used in the {r.span}

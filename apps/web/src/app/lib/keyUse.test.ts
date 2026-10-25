@@ -18,9 +18,9 @@ test("capTone: red when reached, yellow above 80%, blue under", () => {
   assert.equal(capTone(0, 12), "blue");
 });
 
-test("keyCell: no cap gives text only; a cap gives a bar part, its tone and the cap text", () => {
-  assert.deepEqual(keyCell(0.42, undefined), { usedText: "$0.42 used" });
-  assert.deepEqual(keyCell(undefined, undefined), { usedText: "$0.00 used" });
+test("keyCell: no cap is the same bar, empty and blue, with Cap ∞; a cap gives its fill, tone and text", () => {
+  assert.deepEqual(keyCell(0.42, undefined), { usedText: "$0.42 used", capText: "Cap ∞", pct: 0, tone: "blue" });
+  assert.deepEqual(keyCell(undefined, undefined), { usedText: "$0.00 used", capText: "Cap ∞", pct: 0, tone: "blue" });
   assert.deepEqual(keyCell(3, 12), { usedText: "$3 used", capText: "Cap $12", pct: 25, tone: "blue" });
   assert.deepEqual(keyCell(20, 12), { usedText: "$20 used", capText: "Cap $12", pct: 100, tone: "red" });
 });
