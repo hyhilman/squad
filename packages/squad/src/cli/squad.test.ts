@@ -240,6 +240,25 @@ test("probe: ok prints one line with the tokens and exits 0", async () => {
   assert.ok(argv.includes("Reply with the single word: ok"));
 });
 
+test("probe: on a rootless daemon the pass runs with no --user; on a rootful one with the host user", async () => {
+  const rootless = probeRig("ok");
+  rootless.fake.setInfo(readFileSync(new URL("../../test/fixtures/captures/docker/security-options-rootless.json", import.meta.url), "utf8"));
+  assert.equal(await rootless.run("probe", "pi/x", "--model", "m"), 0);
+  assert.ok(!rootless.fake.callsOf("run")[0]!.includes("--user"), "rootless: no --user");
+  const rootful = probeRig("ok");
+  rootful.fake.setInfo(readFileSync(new URL("../../test/fixtures/captures/docker/security-options-rootful.json", import.meta.url), "utf8"));
+  assert.equal(await rootful.run("probe", "pi/x", "--model", "m"), 0);
+  const argv = rootful.fake.callsOf("run")[0]!;
+  assert.equal(argv[argv.indexOf("--user") + 1], `${process.getuid!()}:${process.getgid!()}`);
+});
+
+test("probe: SQUAD_DRY_RUN=1 starts no container", async () => {
+  const r = probeRig("ok");
+  assert.equal(await main(["probe", "pi/x", "--model", "m"], { ...r.io, env: { ...r.io.env, SQUAD_DRY_RUN: "1" } }), 0);
+  assert.deepEqual(r.fake.callsOf("run"), []);
+  assert.match(r.out.join(""), /^dry run: would probe pi\/x with model m; no container started\n$/);
+});
+
 test("probe: a failure prints kind and code and exits 1", async () => {
   const r = probeRig("auth");
   assert.equal(await r.run("probe", "pi/x", "--model", "m"), 1);

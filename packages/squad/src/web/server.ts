@@ -6,6 +6,7 @@
 // floors, key caps and a key's entered balance, enable or disable, test, reset the health of and remove any of them; consent, login, a new
 // secret and a limit reset stay with the owner. Every JSON answer passes `findForbidden` first. An answer or a log line never holds a token,
 // a cookie, the client secret or the session key.
+import { containerUser } from "../docker-user.ts";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -686,24 +687,25 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const log = opts.log ?? makeLog();
   const oidc = createOidc(cfg, opts.fetch === undefined ? {} : { fetch: opts.fetch });
   const docker = envOptional(SQUAD_DOCKER_ENV, opts.env)!;
+  const user = containerUser(docker);
   const real = dockerLoginRunner(opts.env, docker);
   const logins = new DeviceLogins({
     env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
-    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    user,
     start: opts.login?.start ?? real.start, stop: opts.login?.stop ?? real.stop,
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
   const realPty = dockerPtyRunner(opts.env, docker);
   const setups = new SetupTokenLogins({
     env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
-    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    user,
     start: opts.login?.pty?.start ?? realPty.start, stop: opts.login?.pty?.stop ?? realPty.stop,
     ...(opts.login?.timers === undefined ? {} : { timers: opts.login.timers }),
   });
   const connects = new ConnectPairs({ env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), origin: cfg.origin, version: squadVersion() });
   const resets = new LimitResets({
     env: opts.env, home: opts.home, store: opts.store, log, now: opts.now ?? (() => new Date()), docker,
-    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    user,
     start: opts.limitPty?.start ?? realPty.start, stop: opts.limitPty?.stop ?? realPty.stop,
   });
   const handlers = makeHandlers(opts, logins, setups, connects, resets, cfg.adminGroup);

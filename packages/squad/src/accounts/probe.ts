@@ -1,4 +1,4 @@
-// The auto-probe planner: which suspect accounts a probe pass should test now. Pure; no caller yet.
+// The auto-probe planner: which suspect accounts a probe pass should test now. Pure; the web ticker calls it.
 // A probe is a real pass, so an account that ran a pass in the last hour already had its test.
 
 import { envOn, SQUAD_NO_AUTO_PROBE_ENV } from "../settings.ts";

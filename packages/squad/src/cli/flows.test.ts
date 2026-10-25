@@ -73,7 +73,8 @@ test("login: a live account is refused with exit 2 and docker never runs", async
   seedAccount(r.home, "codex", "alice", "login", { "auth.json": "OLD" });
   assert.equal(await r.run("login", "codex/alice"), 2);
   assert.match(r.text(), /use a new name or wait until it is dead/);
-  assert.deepEqual(r.fake.calls(), []);
+  // `docker info` (rootless or not) is a read; no container starts.
+  assert.deepEqual(r.fake.calls().filter((c) => c[0] !== "info"), []);
   assert.equal(readFileSync(join(r.home.accounts, "codex", "alice", "auth.json"), "utf8"), "OLD");
 });
 
@@ -171,7 +172,7 @@ test("login: a bad shape is a usage error and docker never runs", async () => {
   assert.equal(await r.run("login", "nope"), 2);
   assert.equal(await r.run("login", "dsh/x"), 2);
   assert.equal(await r.run("login", "codex/../x"), 2);
-  assert.deepEqual(r.fake.calls(), []);
+  assert.deepEqual(r.fake.calls().filter((c) => c[0] !== "info"), []);
 });
 
 const CAP = join(import.meta.dirname, "..", "..", "test", "fixtures", "captures");

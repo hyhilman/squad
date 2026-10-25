@@ -5,6 +5,7 @@
 // A pass streams as ndjson: "started" once its row is written, "output" pieces, then one "result".
 // The pass belongs to serve, not to the connection: a dropped client never stops it, and its result
 // is kept for GET /api/passes/:passId. Every line and every JSON answer passes `findForbidden` first.
+import { containerUser } from "../docker-user.ts";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -173,8 +174,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
   const log = o.log ?? makeLog();
   const now = o.now ?? (() => new Date());
   const db = o.store.db;
-  const user = o.user !== undefined ? o.user : process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() };
   const docker = envOptional(SQUAD_DOCKER_ENV, o.env)!;
+  const user = o.user !== undefined ? o.user : containerUser(docker);
   const live = new Map<string, Live>();
   /** Every streaming request from its first byte to its result, so stop waits for each one. */
   const work = new Set<Promise<void>>();

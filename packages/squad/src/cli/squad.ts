@@ -18,6 +18,7 @@ import { removeAccount, revokeNote } from "../accounts/care.ts";
 import { withKeyCopy } from "../accounts/keycopy.ts";
 import { getAccount, getHealth, healthOf, listAccounts, setFloors, setOwnerEmail } from "../accounts/store.ts";
 import type { Runner } from "../docker.ts";
+import { containerUser, hostUser } from "../docker-user.ts";
 import { describeAction, executeGc, gatherGcState, gcSettings, planGc } from "../gc.ts";
 import { ensureHome, homeRoot, layoutOf } from "../home.ts";
 import { ULID_RE, ulid } from "../ids.ts";
@@ -351,7 +352,8 @@ function passDeps(store: Store, io: Io): RunDeps {
     store,
     project: basename(dirname(home.root)),
     identity: { name: "squad", email: "squad@localhost" },
-    user: process.getuid === undefined || process.getgid === undefined ? null : { uid: process.getuid(), gid: process.getgid() },
+    // A dry run asks no daemon, so its argv shows the host user.
+    user: envOn(SQUAD_DRY_RUN_ENV, io.env) ? hostUser() : containerUser(dockerOf(io)),
     env: io.env,
     ...(io.now === undefined ? {} : { now: io.now }),
   };
@@ -403,6 +405,10 @@ async function probe(store: Store, io: Io, args: readonly string[]): Promise<num
   const model = opts.get("model");
   if (getAccount(store.db, rest[0]!) === undefined) throw new UsageError(`unknown account ${rest[0]}`);
   if ((runner === "pi" || runner === "claude" || runner === "codex") && model === undefined) throw new UsageError(`probe on ${runner} needs --model; there is no safe default`);
+  if (envOn(SQUAD_DRY_RUN_ENV, io.env)) {
+    io.stdout(`dry run: would probe ${rest[0]} with model ${model ?? "(runner default)"}; no container started\n`);
+    return 0;
+  }
   let res: ProbeOutcome;
   try {
     res = await probeAccount(store, io, rest[0]!, model ?? "");

@@ -27,6 +27,9 @@ call="$d/calls/$(date +%s%N)-$$"
 printf '%s\\0' "$@" > "$call.argv"
 case "$1" in
   stop|kill) : > "$d/stopped"; exit 0 ;;
+  info)
+    if [ -f "$d/info" ]; then cat "$d/info"; exit 0; fi
+    exit 1 ;;
   ps)
     if [ -f "$d/ps-fail" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi
     [ -f "$d/ps" ] && cat "$d/ps"
@@ -97,6 +100,8 @@ export interface FakeDocker {
   setLogs(file: string): void;
   /** The rows the second `ps` call and later ones print (the first prints the setPs rows). */
   setPsNext(...rows: [name: string, passId: string, state: string, createdAt: string][]): void;
+  /** What `docker info` prints (a SecurityOptions capture); unset, it exits 1. */
+  setInfo(text: string): void;
   /** `logs` and `wait` fail with exit 1, as when the daemon goes away. */
   setWatchFail(fail: boolean): void;
 }
@@ -152,5 +157,6 @@ export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-do
   const setLogs = (file: string): void => writeFileSync(join(dir, "logs.jsonl"), readFileSync(join(dir, file)));
   const setPsNext = (...rows: string[][]): void => writeFileSync(join(dir, "ps-next"), rows.map((r) => `${r.join("\t")}\n`).join(""));
   const setWatchFail = (fail: boolean): void => (fail ? writeFileSync(join(dir, "watch-fail"), "") : rmSync(join(dir, "watch-fail"), { force: true }));
-  return { path, setModes, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs, setPsFail, setLogs, setPsNext, setWatchFail };
+  const setInfo = (text: string): void => writeFileSync(join(dir, "info"), text);
+  return { path, setModes, setInfo, setLoginAuth, setLoginFiles, calls, callsOf: (sub) => calls().filter((c) => c[0] === sub), stdins, setPs, setPsFail, setLogs, setPsNext, setWatchFail };
 }
