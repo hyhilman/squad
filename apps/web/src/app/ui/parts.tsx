@@ -311,16 +311,8 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAl
       <Box position="relative" h="1.5" rounded="full" bg={c.pct === undefined ? undefined : "room.track"} aria-hidden>
         {c.pct === undefined || c.tone === undefined ? null : <Box position="absolute" insetY="0" left="0" rounded="full" bg={CAP_COLOR[c.tone]} style={{ width: `${c.pct}%` }} />}
       </Box>
+      {/* Use on the left and the cap on the right, the way a seat shows its floor and what is available. */}
       <Flex justify="space-between" gap="2" fontSize="xs" lineHeight="1" color="fg.muted">
-        {c.capText === undefined ? (
-          <Hint text={NO_CAP_HINT}>
-            <Text color="fg.subtle" cursor="help" tabIndex={0} whiteSpace="nowrap">
-              No cap
-            </Text>
-          </Hint>
-        ) : (
-          <Legend color="room.floor" text={c.capText} hint={CAP_HINT} />
-        )}
         {c.tone === undefined ? (
           <Hint text={usedHint}>
             <Text cursor="help" tabIndex={0} whiteSpace="nowrap" fontVariantNumeric="tabular-nums">
@@ -329,6 +321,15 @@ export function KeyUseBar({ used, cap, span, width = "100%", label, note, noteAl
           </Hint>
         ) : (
           <Legend color={CAP_COLOR[c.tone]} text={c.usedText} hint={usedHint} />
+        )}
+        {c.capText === undefined ? (
+          <Hint text={NO_CAP_HINT}>
+            <Text color="fg.subtle" cursor="help" tabIndex={0} whiteSpace="nowrap">
+              No cap
+            </Text>
+          </Hint>
+        ) : (
+          <Legend color="room.floor" text={c.capText} hint={CAP_HINT} />
         )}
       </Flex>
       {note !== undefined ? (
@@ -350,7 +351,7 @@ export function AccountRoom({ a, window, width, label, keepResetLine = false }: 
     return window === "5h" ? (
       <KeyUseBar used={a.used5h} cap={a.cap5h} span="5 hours" {...w} {...l} keepResetLine={keepResetLine} />
     ) : (
-      <KeyUseBar used={a.usedWeek} cap={a.capWeek} span="7 days" {...w} {...l} note={thirtyDayText(a)} noteAlert={capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) !== undefined} keepResetLine={keepResetLine} />
+      <KeyUseBar used={a.usedWeek} cap={a.capWeek} span="7 days" {...w} {...l} {...(a.cap30d === undefined ? {} : { note: thirtyDayText(a) })} noteAlert={capReachedText({ kind: a.kind, used30d: a.used30d, cap30d: a.cap30d }) !== undefined} keepResetLine={keepResetLine} />
     );
   }
   return window === "5h" ? (

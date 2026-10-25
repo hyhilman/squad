@@ -119,8 +119,8 @@ export function Accounts() {
                     </HStack>
                   </Flex>
                   <Stack gap="3" mt="3" pl="11">
-                    <AccountRoom a={a} window="5h" label="5-hour" />
-                    <AccountRoom a={a} window="week" label="Week" />
+                    <AccountRoom a={a} window="5h" label="5 hours" />
+                    <AccountRoom a={a} window="week" label="7 days" />
                     <AccountUserText a={a} />
                     <Text fontSize="xs" color="fg.subtle">
                       last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
@@ -137,8 +137,8 @@ export function Accounts() {
                     <Table.ColumnHeader ps="5">Account</Table.ColumnHeader>
                     <Table.ColumnHeader hideBelow="xl">Account user / Owner</Table.ColumnHeader>
                     <Table.ColumnHeader>Health</Table.ColumnHeader>
-                    <Table.ColumnHeader w="190px">5-hour room</Table.ColumnHeader>
-                    <Table.ColumnHeader w="190px">Week room</Table.ColumnHeader>
+                    <Table.ColumnHeader w="190px">5 hours</Table.ColumnHeader>
+                    <Table.ColumnHeader w="190px">7 days</Table.ColumnHeader>
                     <Table.ColumnHeader hideBelow="lg" textAlign="end">
                       Last pass
                     </Table.ColumnHeader>

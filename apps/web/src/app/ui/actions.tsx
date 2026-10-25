@@ -38,11 +38,11 @@ export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: (
   const start = [capInput(a.cap5h), capInput(a.capWeek), capInput(a.cap30d)] as const;
   const [c5, setC5] = useState<string>(start[0]);
   const [cw, setCw] = useState<string>(start[1]);
-  const [c30, setC30] = useState<string>(start[2]);
   const [busy, setBusy] = useState(false);
-  const dirty = c5 !== start[0] || cw !== start[1] || c30 !== start[2];
+  const dirty = c5 !== start[0] || cw !== start[1];
   const save = async () => {
-    const b = capsBody(c5, cw, c30);
+    // The page sets no 30-day cap; one set through the API or the CLI stays as it is.
+    const b = capsBody(c5, cw, start[2]);
     if (!b.ok) return void toastError(b.errors.join(" "));
     setBusy(true);
     try {
@@ -58,8 +58,7 @@ export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: (
   };
   const rows = [
     { label: "5-hour cap", value: c5, set: setC5, used: a.used5h, span: "last 5 hours" },
-    { label: "Week cap", value: cw, set: setCw, used: a.usedWeek, span: "last 7 days" },
-    { label: "30-day cap", value: c30, set: setC30, used: a.used30d, span: "last 30 days" },
+    { label: "7-day cap", value: cw, set: setCw, used: a.usedWeek, span: "last 7 days" },
   ];
   return (
     <Stack gap="5">
@@ -73,7 +72,7 @@ export function CapsForm({ a, onSaved, onCancel }: { a: AccountView; onSaved?: (
           {CAP_HINT} Leave a box empty for no cap.
         </Text>
       </Box>
-      <SimpleGrid columns={{ base: 1, sm: 3 }} gap="4">
+      <SimpleGrid columns={{ base: 1, sm: 2 }} gap="4">
         {rows.map((r) => (
           <Field.Root key={r.label}>
             <Field.Label fontSize="sm">{r.label}</Field.Label>

@@ -43,7 +43,7 @@ export function capReachedText(a: CapFacts): string | undefined {
   if (a.kind !== "key") return undefined;
   const hit = (used: number | undefined, cap: number | undefined): boolean => cap !== undefined && (used ?? 0) >= cap;
   if (hit(a.used5h, a.cap5h)) return "5-hour cap reached";
-  if (hit(a.usedWeek, a.capWeek)) return "Week cap reached";
+  if (hit(a.usedWeek, a.capWeek)) return "7-day cap reached";
   if (hit(a.used30d, a.cap30d)) return "30-day cap reached";
   return undefined;
 }
@@ -69,7 +69,7 @@ export function capsBody(text5h: string, textWeek: string, text30d: string): { o
   if (a.ok && b.ok && c.ok) return { ok: true, body: { cap5h: a.value, capWeek: b.value, cap30d: c.value } };
   const errors: string[] = [];
   if (!a.ok) errors.push(`5-hour cap: ${a.error}`);
-  if (!b.ok) errors.push(`Week cap: ${b.error}`);
+  if (!b.ok) errors.push(`7-day cap: ${b.error}`);
   if (!c.ok) errors.push(`30-day cap: ${c.error}`);
   return { ok: false, errors };
 }
@@ -79,7 +79,7 @@ export const capInput = (cap: number | undefined): string => (cap === undefined 
 
 /** The caps that are set, for a fact list: "5 h $2 · 30 d $50", or "None". */
 export function capsText(a: Partial<Pick<AccountView, "cap5h" | "capWeek" | "cap30d">>): string {
-  const parts = [["5 h", a.cap5h], ["week", a.capWeek], ["30 d", a.cap30d]] as const;
+  const parts = [["5 h", a.cap5h], ["7 d", a.capWeek], ["30 d", a.cap30d]] as const;
   const set = parts.flatMap(([k, v]) => (v === undefined ? [] : [`${k} ${usdText(v)}`]));
   return set.length === 0 ? "None" : set.join(" · ");
 }

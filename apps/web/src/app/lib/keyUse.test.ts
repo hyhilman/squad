@@ -33,7 +33,7 @@ test("thirtyDayText: the 30-day use, and its cap when set", () => {
 
 test("capReachedText: the first reached cap, 5 hours first; none without a cap or under it", () => {
   assert.equal(capReachedText({ kind: "key", used5h: 2, cap5h: 2, usedWeek: 9, capWeek: 5 }), "5-hour cap reached");
-  assert.equal(capReachedText({ kind: "key", used5h: 1, cap5h: 2, usedWeek: 9, capWeek: 5 }), "Week cap reached");
+  assert.equal(capReachedText({ kind: "key", used5h: 1, cap5h: 2, usedWeek: 9, capWeek: 5 }), "7-day cap reached");
   assert.equal(capReachedText({ kind: "key", used30d: 30, cap30d: 30 }), "30-day cap reached");
   assert.equal(capReachedText({ kind: "key", used5h: 100 }), undefined);
   assert.equal(capReachedText({ kind: "key", used5h: 1, cap5h: 2 }), undefined);
@@ -58,5 +58,5 @@ test("capsBody: all three, or every error named by its window", () => {
 test("capsText: only the caps that are set, or None", () => {
   assert.equal(capsText({}), "None");
   assert.equal(capsText({ cap5h: 2, cap30d: 50 }), "5 h $2 · 30 d $50");
-  assert.equal(capsText({ cap5h: 0.5, capWeek: 9, cap30d: 30 }), "5 h $0.50 · week $9 · 30 d $30");
+  assert.equal(capsText({ cap5h: 0.5, capWeek: 9, cap30d: 30 }), "5 h $0.50 · 7 d $9 · 30 d $30");
 });

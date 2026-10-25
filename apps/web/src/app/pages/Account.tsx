@@ -31,8 +31,8 @@ function OverviewTab({ a }: { a: AccountView }) {
       ) : (
       <Panel title="Room left" description={a.readAt === undefined ? "No usage read yet." : `Read ${agoText(a.readAt, new Date())}. The grey part is the floor the owner keeps.`}>
         <Grid templateColumns={{ base: "1fr", sm: "1fr 1fr" }} gap="6" mb="6">
-          <AccountRoom a={a} window="5h" label="5-hour window" />
-          <AccountRoom a={a} window="week" label="Week window" />
+          <AccountRoom a={a} window="5h" label="5 hours" />
+          <AccountRoom a={a} window="week" label="7 days" />
         </Grid>
         <Text fontSize="xs" fontWeight="600" color="fg.muted" textTransform="uppercase" letterSpacing="0.06em" mb="2">
           Last 7 days
