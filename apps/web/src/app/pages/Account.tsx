@@ -1,4 +1,4 @@
-import { Badge, Box, Button, Flex, Grid, HStack, Link, Skeleton, Stack, Tabs, Text } from "@chakra-ui/react";
+import { Badge, Box, Flex, Grid, HStack, Link, Skeleton, Stack, Tabs, Text } from "@chakra-ui/react";
 import type { AccountView, Runner } from "@squad/contract";
 import { ChevronRight } from "lucide-react";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router";
@@ -7,7 +7,7 @@ import { UNKNOWN_USER_HINT } from "../lib/accountUser.ts";
 import { isOwnerOf } from "../lib/login.ts";
 import { FillAccountUser } from "../ui/AccountUser.tsx";
 import { useAccount, useMe, useRoomSeries } from "../queries.ts";
-import { AccountButtons, FloorsForm, useAccountActions } from "../ui/actions.tsx";
+import { AccountButtons } from "../ui/actions.tsx";
 import { RoomChart } from "../ui/charts.tsx";
 import { PassesBrowser } from "../ui/PassesBrowser.tsx";
 import { EmptyBlock, ErrorBlock, Fact, HealthBadge, Panel, ProviderLogo, RoomBar, logoOfRunner } from "../ui/parts.tsx";
@@ -77,56 +77,12 @@ function OverviewTab({ a }: { a: AccountView }) {
   );
 }
 
-function SettingsTab({ a }: { a: AccountView }) {
-  const { actions, dialogs } = useAccountActions(a);
-  const more = actions.filter((x) => x.key !== "floors");
-  const text: Record<string, string> = {
-    login: a.runner === "claude" ? "Get a new token for this account. It replaces the old one." : "Sign in again with the same seat. It replaces the login squad holds.",
-    key: "Give a new API key. It replaces the old one.",
-    share: "Let squad run passes on your account again.",
-    unshare: "squad refuses every pass on this account until you share it again.",
-    test: "Run one tiny real pass to check the account. It spends a few tokens.",
-    reset: "Clear the cooling, suspect state and last error code.",
-    limit: "Spend one of your Claude limit resets now.",
-    enable: a.health === "disabled" ? "Let passes use this account again." : "Stop passes from using this account. You can enable it again at any time.",
-    remove: "Delete the account folder. The pass history stays.",
-  };
-  return (
-    <Stack gap="6" maxW="2xl">
-      <Panel title="Floors">
-        <FloorsForm key={`${a.floor5h}-${a.floorWeek}-${a.floorSource}`} a={a} />
-      </Panel>
-      <Panel title="Account">
-        <Stack gap="0">
-          {more.map(({ key, label, icon: Icon, danger, primary, run }) => (
-            <Flex key={key} gap="4" py="3" align="center" justify="space-between" borderBottomWidth="1px" borderColor="border.subtle" _last={{ borderBottomWidth: 0, pb: 0 }} _first={{ pt: 0 }}>
-              <Box minW="0">
-                <Text fontSize="sm" fontWeight="500">
-                  {label}
-                </Text>
-                <Text fontSize="xs" color="fg.muted">
-                  {text[key]}
-                </Text>
-              </Box>
-              <Button size="sm" variant={primary === true ? "solid" : "outline"} colorPalette={primary === true ? "brand" : danger === true ? "red" : "gray"} onClick={run} flexShrink={0}>
-                <Icon size={15} />
-                {label}
-              </Button>
-            </Flex>
-          ))}
-        </Stack>
-      </Panel>
-      {dialogs}
-    </Stack>
-  );
-}
-
 export function Account() {
   const { runner = "", name = "" } = useParams();
   const q = useAccount(runner as Runner, name);
   const me = useMe().data;
   const [params, setParams] = useSearchParams();
-  const tab = params.get("tab") ?? "overview";
+  const tab = params.get("tab") === "passes" ? "passes" : "overview";
 
   const crumbs = (
     <HStack gap="1" fontSize="sm" color="fg.muted" mb="4">
@@ -209,16 +165,12 @@ export function Account() {
         <Tabs.List mb="6">
           <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
           <Tabs.Trigger value="passes">Passes</Tabs.Trigger>
-          <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content value="overview" p="0">
           <OverviewTab a={a} />
         </Tabs.Content>
         <Tabs.Content value="passes" p="0">
           <PassesBrowser account={a.account} />
-        </Tabs.Content>
-        <Tabs.Content value="settings" p="0">
-          <SettingsTab a={a} />
         </Tabs.Content>
       </Tabs.Root>
     </>
