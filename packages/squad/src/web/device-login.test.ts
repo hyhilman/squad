@@ -255,15 +255,43 @@ test("after 15 minutes the container is stopped, staging is removed and the stat
   r.store.close();
 });
 
-test("a second login on the same account is a 409 while the first runs; it is free again after", async () => {
+test("a second login on the same account is a 409 while the first is still starting; it is free again after", async () => {
   const r = rig();
   const a = r.acct();
-  const s = await begin(r, "alice@example.test", a);
+  const first = r.logins.start("alice@example.test", a);
+  await r.tick();
   await refused(r.logins.start("alice@example.test", a), 409, "conflict");
-  s.proc.exit(1);
+  r.procs[0]!.say(CAPTURE);
+  const s = await first;
+  r.procs[0]!.exit(1);
   await waitFor(() => r.logins.status("alice@example.test", s.loginId).state === "failed");
   const again = await begin(r, "alice@example.test", a);
   assert.notEqual(again.loginId, s.loginId);
+  await r.logins.close();
+  r.store.close();
+});
+
+test("the same person starting again replaces their waiting login: the old one expires and its container stops", async () => {
+  const r = rig();
+  const a = r.acct();
+  const s = await begin(r, "alice@example.test", a);
+  const again = await begin(r, "ALICE@example.test", a);
+  assert.notEqual(again.loginId, s.loginId);
+  await r.tick();
+  assert.deepEqual(r.stops, [s.proc.name]);
+  assert.equal(r.logins.status("alice@example.test", s.loginId).state, "expired");
+  assert.ok(!existsSync(s.proc.staging));
+  assert.equal(r.logins.status("alice@example.test", again.loginId).state, "pending");
+  await r.logins.close();
+  r.store.close();
+});
+
+test("another person's waiting login on the same account is a 409", async () => {
+  const r = rig();
+  const a = r.acct();
+  await begin(r, "alice@example.test", a);
+  await refused(r.logins.start("bob@example.test", a), 409, "conflict");
+  assert.equal(r.stops.length, 0);
   await r.logins.close();
   r.store.close();
 });
@@ -420,14 +448,14 @@ test("add: two names for one person, each seat with its own email; the person ow
   r.store.close();
 });
 
-test("add: an existing name is 409, a bad name is 400, the same name twice at once is 409, and the cap of running logins holds", async () => {
+test("add: an existing name is 409, a bad name is 400, the same name from another person at once is 409, and the cap of running logins holds", async () => {
   const r = rig();
   r.acct("taken");
   await refused(r.logins.startAdd("boss@example.test", "taken"), 409, "conflict");
   await refused(r.logins.startAdd("boss@example.test", "../x"), 400, "bad-request");
   await refused(r.logins.startAdd("boss@example.test", "Upper"), 400, "bad-request");
   await beginAdd(r, "boss@example.test", "n1");
-  await refused(r.logins.startAdd("boss@example.test", "n1"), 409, "conflict");
+  await refused(r.logins.startAdd("other@example.test", "n1"), 409, "conflict");
   await beginAdd(r, "boss@example.test", "n2");
   await beginAdd(r, "boss@example.test", "n3");
   await beginAdd(r, "boss@example.test", "n4");

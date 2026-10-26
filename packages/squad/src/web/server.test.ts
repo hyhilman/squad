@@ -835,12 +835,16 @@ test("startLogin and loginStatus: codex login accounts only, the owner only, and
   assert.equal(ok.status, 200);
   assert.equal(ok.body.userCode, "ABCD-EFGHJ");
   assert.equal(ok.body.verifyUrl, "https://auth.openai.com/codex/device");
-  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts/codex/alice/login")).status, 409);
-  const st = await api<{ state: string }>(r, alice, "GET", `/api/logins/${ok.body.loginId}`);
-  assert.deepEqual(st.body, { loginId: ok.body.loginId, state: "pending" });
-  assert.equal((await api<ApiError>(r, bob, "GET", `/api/logins/${ok.body.loginId}`)).status, 404);
+  // A second start replaces the first: its page was closed, so it would block the account for 15 minutes.
+  const again = await api<{ loginId: string }>(r, alice, "POST", "/api/accounts/codex/alice/login");
+  assert.equal(again.status, 200);
+  assert.notEqual(again.body.loginId, ok.body.loginId);
+  assert.deepEqual((await api<{ state: string }>(r, alice, "GET", `/api/logins/${ok.body.loginId}`)).body, { loginId: ok.body.loginId, state: "expired" });
+  const st = await api<{ state: string }>(r, alice, "GET", `/api/logins/${again.body.loginId}`);
+  assert.deepEqual(st.body, { loginId: again.body.loginId, state: "pending" });
+  assert.equal((await api<ApiError>(r, bob, "GET", `/api/logins/${again.body.loginId}`)).status, 404);
   await r.close();
-  assert.equal(f.stops.length, 1, "server close stops the running login container");
+  assert.equal(f.stops.length, 2, "the replaced login and, at server close, the running one are stopped");
 });
 
 // ---- admin from an Authentik group ----
@@ -1189,7 +1193,8 @@ test("addAccount twice with two names: both end up owned by the person, with the
     assert.equal(findForbidden(res.body), undefined);
     started.push(res.body);
   }
-  assert.equal((await api<ApiError>(r, alice, "POST", "/api/accounts", { runner: "codex", name: "seat-one" })).status, 409, "the same name while its login runs");
+  const bob = await signIn(r, "bob@example.test");
+  assert.equal((await api<ApiError>(r, bob, "POST", "/api/accounts", { runner: "codex", name: "seat-one" })).status, 409, "the same name from another person while its login runs");
   // Read the folders once: the first login moves its folder away as soon as it exits.
   // The staging folder is the pass id, which is also the container name: two ids from one millisecond do not sort in start order.
   for (const [i, proc] of f.procs.entries()) {

@@ -191,8 +191,14 @@ export class DeviceLogins {
     }
     if (this.closed) throw new LoginRefused(501, "disabled", "the server is stopping");
     this.sweep();
+    const prev = [...this.entries.values()].find((e) => this.live(e) && e.account.id === a.id);
+    if (prev !== undefined) {
+      // A closed page leaves its login waiting. The same person may start again; the old one stops.
+      if (prev.owner !== email.toLowerCase() || prev.state !== "pending" || prev.finishing !== undefined) throw new LoginRefused(409, "conflict", "a login is already running for this account");
+      this.end(prev, "expired");
+      void this.halt(prev, false);
+    }
     const running = [...this.entries.values()].filter((e) => this.live(e));
-    if (running.some((e) => e.account.id === a.id)) throw new LoginRefused(409, "conflict", "a login is already running for this account");
     if (running.length >= MAX_RUNNING) throw new LoginRefused(409, "conflict", "too many logins are running: try again soon");
 
     const passId = ulid(this.d.now().getTime());
