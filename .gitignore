@@ -13,3 +13,7 @@ docs/private/
 # Agent and dev git worktrees live here; they are full checkouts, never this repo's source.
 .worktrees/
 *.tgz
+
+# doppelganger: this machine's settings, credentials and state
+doppelganger.secret.toml
+.doppelganger/
