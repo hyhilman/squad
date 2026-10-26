@@ -67,7 +67,7 @@ export interface PassPlan {
 const ACCOUNT_PATH: Readonly<Record<Runner, string>> = { pi: "/pi", codex: "/codex", claude: "/claude" };
 
 /** Names squad sets itself. A caller that sets one could point a pass at another account or smuggle a token. */
-const INTERNAL_ENV: ReadonlySet<string> = new Set(["SQUAD_LOCK", "SQUAD_TOKEN_FILE", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "PI_CODING_AGENT_DIR", "CLAUDE_CONFIG_DIR"]);
+const INTERNAL_ENV: ReadonlySet<string> = new Set(["SQUAD_LOCK", "SQUAD_TOKEN_FILE", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "PI_CODING_AGENT_DIR", "CLAUDE_CONFIG_DIR", "IS_SANDBOX"]);
 
 /**
  * Every bind mount is `--mount`, never `-v`: `-v` makes a root-owned folder when the source is
@@ -137,6 +137,9 @@ export function dockerRunArgv(plan: PassPlan): string[] {
   }
   argv.push("--network", "host");
   if (plan.user !== null) argv.push("--user", `${plan.user.uid}:${plan.user.gid}`);
+  // Without --user, claude runs as root and refuses bypassPermissions unless IS_SANDBOX=1. On a
+  // rootless daemon root in the container is the host user, so this grants nothing more.
+  else if (runner === "claude") argv.push("-e", "IS_SANDBOX=1");
 
   checkHome(plan.cwd, plan.home);
   checkHome(plan.gitDir, plan.home);
