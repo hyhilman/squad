@@ -51,6 +51,14 @@ test("--user only when a uid is given", () => {
   assert.deepEqual(pairs(dockerRunArgv(plan({ user: null })), "--user"), []);
 });
 
+test("IS_SANDBOX=1 only for claude with no --user, and a caller cannot set it", () => {
+  const claude = { runner: "claude" as const, account: { name: "alice", kind: "login" as const, dir: `${HOME}/accounts/claude/alice` }, lockFile: `${HOME}/locks/claude-alice.lock` };
+  assert.ok(envOf(dockerRunArgv(plan({ ...claude, user: null }))).includes("IS_SANDBOX=1"));
+  assert.ok(!envOf(dockerRunArgv(plan(claude))).some((e) => e.startsWith("IS_SANDBOX=")));
+  assert.ok(!envOf(dockerRunArgv(plan({ user: null }))).some((e) => e.startsWith("IS_SANDBOX=")));
+  assert.throws(() => dockerRunArgv(plan({ ...claude, user: null, env: { IS_SANDBOX: "0" } })), /IS_SANDBOX is set by squad/);
+});
+
 test("cwd, git dir and extra mounts sit at the same path", () => {
   const a = dockerRunArgv(plan({ mounts: [{ host: "/data/a", ro: true }, { host: "/data/b", ro: false }, { host: "/s/skill", container: "/skills/x", ro: true }] }));
   const m = mountsOf(a);
