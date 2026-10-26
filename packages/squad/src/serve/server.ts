@@ -76,7 +76,7 @@ interface Live {
   readonly tokenId: string;
   readonly kind: "pass" | "turn";
   readonly runner: string;
-  readonly account: string | null;
+  account: string | null;
   readonly startedAt: string;
   passId: string;
   container: string | null;
@@ -217,20 +217,22 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
    * a throw before that is a plain JSON 400. After "started", every failure is a result line.
    */
   async function streamed<R extends AnyResult>(
-    res: ServerResponse, route: ServeRouteName, token: ProjectToken, kind: "pass" | "turn", runner: string, account: string,
-    run: (onStart: (passId: string, container: string | null) => void, onOutput: (chunk: string) => void) => Promise<R>,
+    res: ServerResponse, route: ServeRouteName, token: ProjectToken, kind: "pass" | "turn", runner: string, account: string | null,
+    run: (onStart: (passId: string, container: string | null, account: string | null) => void, onOutput: (chunk: string) => void) => Promise<R>,
     failed: (passId: string, message: string) => R,
   ): Promise<void> {
     let entry: Live | undefined;
     let markStarted!: () => void;
     const startedP = new Promise<void>((r) => (markStarted = r));
-    const onStart = (passId: string, container: string | null): void => {
+    const onStart = (passId: string, container: string | null, picked: string | null): void => {
       if (entry === undefined) {
         entry = { handle: passId, tokenId: token.id, kind, runner, account, startedAt: now().toISOString(), passId, container };
         live.set(passId, entry);
       }
       entry.passId = passId;
       entry.container = container;
+      // A pool pass learns its account here, and a busy one moves to the next.
+      entry.account = picked ?? account;
       try {
         o.store.servePass(rowOf(entry));
       } catch {
@@ -281,7 +283,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
   /** Results whose end row went to the spool (or failed), so GET still answers them. */
   const ended = new Map<string, { tokenId: string; result: AnyResult }>();
 
-  const failedPass = (account: string) => (passId: string, message: string): PassResult => ({ passId, account, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure: { kind: "provider", code: "setup", message }, logPath: null });
+  const failedPass = (account: string | null) => (passId: string, message: string): PassResult => ({ passId, account, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure: { kind: "provider", code: "setup", message }, logPath: null });
   const failedTurn = (account: string) => (passId: string, message: string): TurnResult => ({ passId, account, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure: { kind: "provider", code: "setup", message } });
 
   /** The conversation, when this token opened it; else the same 404 as no conversation at all. */
@@ -332,7 +334,9 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
         if (b.session !== undefined && db.prepare("SELECT 1 FROM conversations WHERE id = ?").get(b.session) !== undefined) throw new Refusal(403, "out of scope: session");
         const { identity, ...rest } = b;
         const deps = depsFor(token, identity);
-        return streamed(res, name, token, "pass", b.runner, s.account, (onStart, onOutput) => runPass({ ...rest, ...s, onStart, onOutput }, deps), failedPass(s.account));
+        const { account, allowed, ...paths } = s;
+        const target = account === undefined ? { pool: token.project, allowed: allowed! } : { account };
+        return streamed(res, name, token, "pass", b.runner, account ?? null, (onStart, onOutput) => runPass({ ...rest, ...paths, ...target, onStart, onOutput }, deps), failedPass(account ?? null));
       }
       case "openConversation": {
         const b = openBody(await jsonBody(req));
@@ -341,7 +345,7 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
         const { identity, ...rest } = b;
         let conv;
         try {
-          conv = open({ ...rest, ...s }, depsFor(token, identity));
+          conv = open({ ...rest, ...s, account: s.account! }, depsFor(token, identity));
         } catch (e) {
           throw new Refusal(400, e instanceof Error ? e.message.split("\n")[0]! : "refused");
         }

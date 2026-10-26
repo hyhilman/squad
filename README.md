@@ -203,7 +203,9 @@ token=$(squad token add dg --accounts pi/one,pi/two --roots /srv/dg/worktrees)
 The token is shown once; squad keeps only its sha256. Every call sends `Authorization: Bearer
 <token>`. A wrong, unknown or revoked token is a 401 with no detail. The token limits:
 
-- the accounts a pass may name;
+- the accounts a pass may name. A pass that names no account (only `runner` and `model`) lets squad
+  pick one of the token's accounts of that runner, as it picks from a pool. A token with none of that
+  runner is the same 403. A conversation still names its account;
 - the host paths: `cwd`, `gitDir`, `skill.dir` and every mount host must exist and be inside one of
   the roots after symlinks are resolved, and must not touch the squad home;
 - the image: squad's own, or one given with `--images`;

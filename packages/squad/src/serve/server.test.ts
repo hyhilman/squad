@@ -204,6 +204,7 @@ test("refusals before the stream are plain JSON: 400 for a bad body, 403 out of 
     [{ ...body(r), identity: undefined }, 400, "identity must be {name, email}"],
     [{ ...body(r), prompt: 7 }, 400, "prompt must be a string"],
     [{ ...body(r), account: "pi/acct-two" }, 403, "out of scope: account"],
+    [{ ...body(r), runner: "codex", account: undefined }, 403, "out of scope: account"],
     [{ ...body(r), cwd: r.root }, 403, "out of scope: cwd"],
     [{ ...body(r), mounts: [{ host: r.home.root, container: "/x", ro: true }] }, 403, "out of scope: mounts[0].host"],
     [{ ...body(r), image: "evil/pi:1" }, 403, "out of scope: image"],
@@ -237,6 +238,34 @@ test("no account free is a started line and a result with the failure, never a s
   const last = lines.at(-1)!;
   assert.equal(last.type, "result");
   if (last.type === "result") assert.equal(last.result.failure?.kind, "no-account");
+});
+
+test("with no account squad picks only among the token's: never another account, even when its one is busy", async (t) => {
+  const r = await rig(t);
+  const ran = async () => (await collect(callStream(r.f, BASE, "startPass", { body: body(r, { account: undefined }) }, { headers: r.headers }))).at(-1) as Extract<PassLine, { type: "result" }>;
+  assert.equal((await ran()).result.account, "pi/acct-one");
+  r.fake.setModes("busy");
+  assert.equal((await ran()).result.failure?.kind, "no-account");
+  const runs = r.fake.callsOf("run");
+  assert.equal(runs.length, 2);
+  assert.ok(runs.every((c) => !c.join(" ").includes("acct-two")));
+});
+
+test("a pool pass that moves past a busy account reports the one that ran, live and at the end", async (t) => {
+  const r = await rig(t);
+  r.fake.setModes("busy", "hang");
+  const headers = { authorization: `Bearer ${r.other}` };
+  const linesP = collect(callStream(r.f, BASE, "startPass", { body: body(r, { account: undefined }) }, { headers }));
+  await poll(async () => (r.fake.callsOf("run").length === 2 ? true : undefined));
+  const handle = (r.store.db.prepare("SELECT id FROM serve_passes").get() as { id: string }).id;
+  const live = await call(r.f, BASE, "passStatus", { params: { passId: handle } }, { headers });
+  await r.serve.stop();
+  const result = ((await linesP).at(-1) as Extract<PassLine, { type: "result" }>).result;
+  const busy = r.store.db.prepare("SELECT account FROM passes WHERE outcome = 'busy'").get() as { account: string };
+  assert.ok(result.account !== null && result.account !== busy.account);
+  assert.ok(live.running && live.account === result.account);
+  const row = r.store.db.prepare("SELECT account FROM serve_passes WHERE id = ?").get(handle) as { account: string };
+  assert.equal(row.account, result.account);
 });
 
 test("a pass is visible only to its token; an unknown id is a 404", async (t) => {

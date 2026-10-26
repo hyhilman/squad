@@ -619,8 +619,8 @@ export interface ServeSetup {
 /** POST /api/passes: squad's PassRequest without `onOutput` and `pool`, plus the identity. The account must be one of the token's. */
 export interface ServePassBody extends ServeSetup {
   readonly runner: PassRunner;
-  /** `pi/alice` or `alice`. */
-  readonly account: string;
+  /** `pi/alice` or `alice`. Unset: squad picks one of the token's accounts of the runner, as it picks from a pool. */
+  readonly account?: string;
   readonly prompt: string;
   /** A pi session id. A conversation's id is not one: use its turns route. */
   readonly session?: string;
