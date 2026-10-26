@@ -45,6 +45,9 @@ docs/               the design doc.
 - `npm run pack:sdk -- <dest dir>` packs `@squad/contract` as `squad-contract-<version>.tgz` (the SDK
   for other apps; the version is squad's). `packages/contract/scripts/check-pack.sh` installs it in a
   fresh folder, imports it and type-checks it with no DOM and no Node types.
+- `packages/squad/scripts/dg-image.sh` builds `squad-local/doppelganger-supervisor:rc`: doppelganger's
+  released image with this checkout's squad inside. doppelganger runs it with `DG_IMAGE`. Rebuild it
+  after each change; it holds a copy.
 - The web app's pure helpers (`apps/web/src/app/lib/`) have `node --test` tests; its `npm test` runs
   them after `astro check`.
 - `SQUAD_DOCKER_CHECK=1 node --test <file>` runs the tests that start real containers. `npm test`
