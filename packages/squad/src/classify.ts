@@ -57,15 +57,26 @@ export const CODEX_CODE_KINDS: Record<string, FailureKind> = {
 };
 
 /**
+ * Exact codex failure messages that come as plain text, with no code and no status. With nothing
+ * structured to read, the whole message is the key: matched in full, never in part. An empty
+ * workspace is `quota`, so the account cools and the next pick is another one.
+ */
+export const CODEX_TEXT_KINDS: Record<string, FailureKind> = {
+  "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.": "quota",
+};
+
+/**
  * codex writes a failure message as a JSON string: `{"type":"error","status":400,"error":{"message":..,"code":..}}`.
- * The code is `error.code` when it is a string, else the status. A message that is not JSON is a provider failure with no code.
+ * The code is `error.code` when it is a string, else the status. A message that is not JSON is
+ * looked up in `CODEX_TEXT_KINDS`, else it is a provider failure with no code.
  */
 export function parseCodexError(message: string): Failure {
   let body: unknown;
   try {
     body = JSON.parse(message);
   } catch {
-    return { kind: "provider", code: "", message: message.slice(0, 500) };
+    const kind = Object.hasOwn(CODEX_TEXT_KINDS, message) ? CODEX_TEXT_KINDS[message]! : "provider";
+    return { kind, code: "", message: message.slice(0, 500) };
   }
   if (typeof body !== "object" || body === null) return { kind: "provider", code: "", message: message.slice(0, 500) };
   const b = body as { status?: unknown; error?: unknown };

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { CODEX_CODE_KINDS, kindOfHttpStatus, parseCodexError, parsePiError, PERMANENT_AUTH_CODES } from "./classify.ts";
+import { CODEX_CODE_KINDS, CODEX_TEXT_KINDS, kindOfHttpStatus, parseCodexError, parsePiError, PERMANENT_AUTH_CODES } from "./classify.ts";
 
 test("kindOfHttpStatus is an exact table, and an unknown status is never auth", () => {
   const rows: [number, string][] = [
@@ -63,4 +63,14 @@ test("parseCodexError: code first, then status, else provider with no code", () 
   assert.deepEqual(parseCodexError('{"status":500,"error":{"message":"m"}}'), { kind: "provider", code: "500", message: "m" });
   assert.deepEqual(parseCodexError("not json"), { kind: "provider", code: "", message: "not json" });
   assert.deepEqual(parseCodexError('{"error":{"message":"m"}}'), { kind: "provider", code: "", message: "m" });
+});
+
+test("parseCodexError: a plain-text message counts only when it matches CODEX_TEXT_KINDS in full", () => {
+  const credits = "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.";
+  assert.equal(CODEX_TEXT_KINDS[credits], "quota");
+  assert.deepEqual(parseCodexError(credits), { kind: "quota", code: "", message: credits });
+  for (const near of [credits.toLowerCase(), `${credits} `, "Your workspace is out of credits.", `error: ${credits}`]) {
+    assert.equal(parseCodexError(near).kind, "provider", near);
+  }
+  assert.equal(parseCodexError("toString").kind, "provider");
 });

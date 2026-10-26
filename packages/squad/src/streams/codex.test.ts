@@ -26,6 +26,14 @@ test("codex model-not-found capture", () => {
   assert.equal(o.text, "");
 });
 
+test("codex out-of-credits capture: a plain-text error and turn.failed, read as quota", () => {
+  const o = parseCodexStream(fixture("out-of-credits.jsonl"));
+  assert.deepEqual(o.failure, { kind: "quota", code: "", message: "Your workspace is out of credits. Ask your workspace owner to refill in order to continue." });
+  assert.equal(o.ended, true);
+  assert.equal(o.turns, 0);
+  assert.equal(o.badLines, 0);
+});
+
 test("the warning item of type error is not a failure", () => {
   const s = line({ type: "item.completed", item: { id: "i", type: "error", message: "Model metadata not found" } }) + line({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });
   const o = parseCodexStream(s);

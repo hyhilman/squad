@@ -13,6 +13,7 @@ Scrubbed: session ids, message, request and event ids (fixed fakes), and every p
 | `claude/ok-sonnet-5-5.jsonl` | the same on claude-sonnet-5-5 |
 | `codex/ok-gpt-6-1-sol.jsonl` | codex 0.162.1, `codex exec --json ... -m gpt-6.1-sol -`, a ChatGPT device login, a one-word reply |
 | `codex/model-not-found.jsonl` | the same with `-m no-such-model`: an `error` event whose message is JSON with status 400 and code `model_not_found`, then `turn.failed`; exit 1 |
+| `codex/out-of-credits.jsonl` | a doppelganger review pass through squad on 2026-10-26, `codex exec --json ... -m gpt-6.1-sol -`, a ChatGPT login whose workspace had no credits left: a plain-text `error` event and `turn.failed`, no code and no status; exit 1. Taken from the pass log |
 | `codex/usage.json` | GET chatgpt.com/backend-api/wham/usage with the codex login's access token (read only, no refresh); user id and account id replaced, email set to `EMAIL` |
 | `prices/models-dev-excerpt.json` | GET https://models.dev/api.json on 2026-10-24 (230 providers, 5.9 MB); kept: providers `opencode`, `opencode-go` and `anthropic`, their first four models, plus `opencode-go/beam-free`. Nothing scrubbed: the catalog is public |
 | `codex/login-device-auth.txt` | codex 0.162.1, `codex login --device-auth` in a throwaway `CODEX_HOME`, stdout with its ANSI colours, stopped after 15 s before any sign-in (exit 124); the one-time code replaced with `ABCD-EFGHJ`. stderr was empty |
