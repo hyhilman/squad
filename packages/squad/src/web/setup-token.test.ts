@@ -271,7 +271,7 @@ test("start refuses a bad name, an existing account, a second login for a name, 
   addAccount(r.store.db, { runner: "claude", name: "taken", kind: "token", ownerEmail: "x@example.test" }, NOW);
   await refused(r.logins.start("alice@example.test", "taken"), 409, "conflict");
   const s = await begin(r, "alice@example.test", "twice");
-  await refused(r.logins.start("alice@example.test", "twice"), 409, "conflict");
+  await refused(r.logins.start("bob@example.test", "twice"), 409, "conflict");
   await r.logins.close();
   await refused(r.logins.start("alice@example.test", "late"), 501, "disabled");
   for (const env of [{ SQUAD_DRY_RUN: "1" }, { SQUAD_NO_WEB_LOGIN: "1" }] as Record<string, string>[]) {
@@ -281,6 +281,22 @@ test("start refuses a bad name, an existing account, a second login for a name, 
     q.store.close();
   }
   void s;
+  r.store.close();
+});
+
+test("the same person starting again replaces their waiting login, but not once a code was sent", async () => {
+  const r = rig();
+  const s = await begin(r);
+  const again = await begin(r, "ALICE@example.test");
+  assert.notEqual(again.loginId, s.loginId);
+  await r.settle();
+  assert.deepEqual(r.stops, [s.proc.name]);
+  assert.equal(r.logins.status("alice@example.test", s.loginId).state, "expired");
+  assert.ok(!existsSync(s.proc.staging));
+  r.logins.submitCode("alice@example.test", again.loginId, "CODE-FROM-PAGE");
+  await refused(r.logins.start("alice@example.test", "claude1"), 409, "conflict");
+  assert.equal(r.logins.status("alice@example.test", again.loginId).state, "pending");
+  await r.logins.close();
   r.store.close();
 });
 

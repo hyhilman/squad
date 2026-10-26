@@ -199,8 +199,15 @@ export class SetupTokenLogins {
     const aid = accountId("claude", name);
     if (!replace && liveAccount(this.d.store.db, aid) !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "an account with this name exists"));
     this.sweep();
+    const prev = [...this.entries.values()].find((e) => this.live(e) && e.accountId === aid);
+    if (prev !== undefined) {
+      // A closed page leaves its login waiting. The same person may start again, and the old one
+      // stops, but not once a code was sent: the token may be on its way.
+      if (prev.owner !== email.toLowerCase() || prev.state !== "pending" || prev.sent || prev.finishing !== undefined) return Promise.reject(new LoginRefused(409, "conflict", "a login is already running for this account"));
+      this.end(prev, "expired");
+      void this.halt(prev, false);
+    }
     const running = [...this.entries.values()].filter((e) => this.live(e));
-    if (running.some((e) => e.accountId === aid)) return Promise.reject(new LoginRefused(409, "conflict", "a login is already running for this account"));
     if (running.length >= MAX_RUNNING) return Promise.reject(new LoginRefused(409, "conflict", "too many logins are running: try again soon"));
 
     const passId = ulid(this.d.now().getTime());
