@@ -1,3 +1,4 @@
+# A sample. Copy it to doppelganger.toml (git ignores that file) and set this machine's values there.
 # Written by `init` from the image for this repo. Init never rewrites this file.
 # version is the engine release this repo runs. To upgrade, change it, commit it, and run .doppelganger/dg up.
 # The lines without a leading # are the ones init set. Go live by setting dry_run = false under [flow].
@@ -46,7 +47,7 @@
 # test/knobs.test.ts holds this file to the code.
 
 # names this checkout; discriminates every host-global write
-instance = "squad-77a298h"
+# instance = ""
 
 # the engine release this repo runs: an exact version like 0.1.0-rc.1, or the channel dev (every dev build) or rc (the newest release candidate); image mode picks the image by it, and a built engine whose own version is not the exact pin refuses to start
 version = "0.5.0-rc.6"
@@ -429,8 +430,7 @@ cmd = "/usr/bin/crontab"
 # bind = "127.0.0.1"
 
 # the port the instance API listens on; 0 picks a free port, and api-up logs the one it got
-# 7320 and 7321 belong to the xenith hub on this machine, 7330 and 7331 to the doppelganger repo.
-port = 7341
+# port = 7321
 
 # kill switch: doppelganger api logs api-killed and exits 0 without listening
 # no_serve = 0
@@ -441,7 +441,7 @@ port = 7341
 # url = ""
 
 # the port doppelganger web listens on; 0 picks a free port, and web-up logs the one it got
-port = 7340
+# port = 7320
 
 # the address doppelganger web listens on; keep the loopback and put a TLS proxy or a tunnel in front, because the hub speaks plain HTTP
 # bind = "127.0.0.1"
