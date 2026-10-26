@@ -38,6 +38,8 @@ export interface PassRequest extends TurnOptions {
   readonly pool?: string;
   /** A named account, `pi/alice`. */
   readonly account?: string;
+  /** Internal, set by squad serve: a pool holds only these account ids (the token's), not every account of the runner. */
+  readonly allowed?: readonly string[];
   readonly cwd: string;
   /** The main repo's .git; default `<cwd>/.git`. A linked worktree must pass it. */
   readonly gitDir?: string;
@@ -55,10 +57,11 @@ export interface PassRequest extends TurnOptions {
   /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
   readonly env?: Readonly<Record<string, string>>;
   /**
-   * Called right after each pass row is written, with its id and container name (null when no
-   * container will start: no account). squad serve sends its "started" line from here. A throw is ignored.
+   * Called right after each pass row is written, with its id, container name and account (both null
+   * when no container will start: no account). squad serve sends its "started" line from here. A
+   * busy account means another row and another call. A throw is ignored.
    */
-  readonly onStart?: (passId: string, container: string | null) => void;
+  readonly onStart?: (passId: string, container: string | null, account: string | null) => void;
 }
 
 export interface RunDeps {
@@ -132,14 +135,16 @@ export function resolveCandidates(req: PassRequest, deps: RunDeps, now: Date) {
   const named = req.account === undefined ? undefined : req.account.includes("/") ? req.account : `${req.runner}/${req.account}`;
   const namedRow = named === undefined ? undefined : getAccount(db, named);
   if (named !== undefined && (namedRow?.runner !== req.runner || namedRow.state === "removed")) throw new Error(`unknown ${req.runner} account ${named}`);
+  const inScope = (id: string): boolean => (named === undefined || id === named) && (req.allowed === undefined || req.allowed.includes(id));
   const all = candidates(db, req.runner, now, (id) => {
-    if (named !== undefined && id !== named) return false;
+    // Never probe, or make a lock file for, an account this request may not use.
+    if (!inScope(id)) return false;
     const a = getAccount(db, id)!;
     const lock = lockPathOf(deps.home, a);
     if (a.kind === "login") ensureLockFile(lock);
     return busyFn(a, lock);
   }, deps.env);
-  return { named, list: named === undefined ? all : all.filter((c) => c.account === named) };
+  return { named, list: all.filter((c) => inScope(c.account)) };
 }
 
 /** The failure of a finished container. A stop we asked for beats the stream; the stream beats the exit code. */
@@ -243,9 +248,9 @@ function withLastMessage(sp: Spawned, outDir: string): Spawned {
 }
 
 /** Tells the caller a pass row exists. Its errors are its own: they must not lose the pass. */
-function notifyStart(req: PassRequest, passId: string, container: string | null): void {
+function notifyStart(req: PassRequest, passId: string, container: string | null, account: string | null): void {
   try {
-    req.onStart?.(passId, container);
+    req.onStart?.(passId, container, account);
   } catch {
     // A broken hook must not lose the pass.
   }
@@ -254,7 +259,7 @@ function notifyStart(req: PassRequest, passId: string, container: string | null)
 const noAccount = (store: Store, req: PassRequest, deps: RunDeps, now: Date, failure: Failure): PassResult => {
   const id = ulid(now.getTime());
   store.startPass({ id, startedAt: now.toISOString(), project: deps.project, flow: req.caller.flow, action: req.caller.action, runner: req.runner, model: req.model, ...taskOf(req) });
-  notifyStart(req, id, null);
+  notifyStart(req, id, null, null);
   store.endPass({ id, endedAt: now.toISOString(), outcome: failure.kind, failKind: failure.kind, failCode: failure.code, tokens: NO_TOKENS });
   return { passId: id, account: null, text: "", texts: [], turns: 0, model: null, usage: NO_TOKENS, failure, logPath: null };
 };
@@ -315,7 +320,7 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     const started = nowFn();
     store.startPass({ id: passId, startedAt: started.toISOString(), project: deps.project, flow: req.caller.flow, action: req.caller.action, runner: req.runner, model: req.model, account: id, ...taskOf(req) });
     const containerName = req.container ?? `squad-${passId.toLowerCase()}`;
-    notifyStart(req, passId, containerName);
+    notifyStart(req, passId, containerName, id);
 
     // codex's last-message file goes to a fresh folder outside the home, removed after the pass.
     const outDir = req.runner === "codex" ? mkdtempSync(join(tmpdir(), "squad-out-")) : null;

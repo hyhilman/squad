@@ -102,7 +102,7 @@ const parse = (v: unknown): Obj => {
 export function passBody(v: unknown): ServePassBody {
   const o = parse(v);
   onlyKeys(o, PASS_KEYS);
-  const extra = { runner: runner(o), account: str(o, "account")!, prompt: typeof o.prompt === "string" ? o.prompt : (() => { throw bad("prompt must be a string"); })(), session: str(o, "session", true), idleMs: ms(o, "idleMs"), deadlineMs: ms(o, "deadlineMs") };
+  const extra = { runner: runner(o), account: str(o, "account", true), prompt: typeof o.prompt === "string" ? o.prompt : (() => { throw bad("prompt must be a string"); })(), session: str(o, "session", true), idleMs: ms(o, "idleMs"), deadlineMs: ms(o, "deadlineMs") };
   return { ...setup(o), ...Object.fromEntries(Object.entries(extra).filter(([, x]) => x !== undefined)) } as ServePassBody;
 }
 

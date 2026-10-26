@@ -33,7 +33,8 @@ export interface ScopeContext {
 
 export interface SetupPaths {
   readonly runner: SupportedRunner;
-  readonly account: string;
+  /** Unset only for a pass: squad then picks among `allowed`. */
+  readonly account?: string;
   readonly cwd: string;
   readonly gitDir?: string;
   readonly skill?: SkillRef;
@@ -44,8 +45,10 @@ export interface SetupPaths {
 }
 
 export interface ScopedSetup {
-  /** `<runner>/<name>`. */
-  readonly account: string;
+  /** `<runner>/<name>`; unset when the caller named none. */
+  readonly account?: string;
+  /** With no account: the token's accounts of the runner, the only ones squad may pick. */
+  readonly allowed?: readonly string[];
   readonly cwd: string;
   readonly gitDir?: string;
   readonly skill?: SkillRef;
@@ -85,9 +88,16 @@ export function scopedAccount(token: ProjectToken, runner: string, account: stri
   return id;
 }
 
+/** The token's accounts of the runner, for a pass that names none. None is the same 403 as a wrong name. */
+export function scopedPool(token: ProjectToken, runner: string): string[] {
+  const ids = token.accounts.filter((a) => a.startsWith(`${runner}/`));
+  if (ids.length === 0) throw outOfScope("account");
+  return ids;
+}
+
 /** Checks every host path, the account and the image. Returns the real paths to run with. */
 export function scopeSetup(token: ProjectToken, s: SetupPaths, ctx: ScopeContext): ScopedSetup {
-  const account = scopedAccount(token, s.runner, s.account);
+  const pick = s.account === undefined ? { allowed: scopedPool(token, s.runner) } : { account: scopedAccount(token, s.runner, s.account) };
   const cwd = scopedPath(token, ctx, s.cwd, "cwd");
   if (ctx.uid !== null) {
     const owner = statSync(cwd).uid;
@@ -99,5 +109,5 @@ export function scopeSetup(token: ProjectToken, s: SetupPaths, ctx: ScopeContext
   if (s.image !== undefined && s.image !== IMAGES[s.runner].tag && !token.images.includes(s.image)) throw outOfScope("image");
   // Without the project prefix a token could name any container on the host and have it removed.
   if (s.container !== undefined && (!s.container.startsWith(`${token.project}-`) || s.container.length === token.project.length + 1)) throw outOfScope("container");
-  return { account, cwd, ...(gitDir === undefined ? {} : { gitDir }), ...(skill === undefined ? {} : { skill }), ...(mounts === undefined ? {} : { mounts }) };
+  return { ...pick, cwd, ...(gitDir === undefined ? {} : { gitDir }), ...(skill === undefined ? {} : { skill }), ...(mounts === undefined ? {} : { mounts }) };
 }

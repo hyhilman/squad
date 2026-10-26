@@ -44,7 +44,7 @@ export interface Conversation {
 export interface SendOptions {
   readonly onOutput?: (chunk: string) => void;
   /** Called right after the turn's pass row is written (see PassRequest.onStart). */
-  readonly onStart?: (passId: string, container: string | null) => void;
+  readonly onStart?: (passId: string, container: string | null, account: string | null) => void;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
 }

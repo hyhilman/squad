@@ -41,6 +41,13 @@ test("an account the token does not name is a 403 naming the field", () => {
   assert.throws(() => scopeSetup(token, { runner: "codex", account: "one", cwd: repo }, ctx), forbidden("account"));
 });
 
+test("with no account the setup carries the token's accounts of that runner; none is the same 403", () => {
+  const { repo, token, ctx } = setup();
+  const both = { ...token, accounts: ["pi/one", "codex/one", "pi/two"] };
+  assert.deepEqual(scopeSetup(both, { runner: "pi", cwd: repo }, ctx), { allowed: ["pi/one", "pi/two"], cwd: repo });
+  assert.throws(() => scopeSetup(token, { runner: "codex", cwd: repo }, ctx), forbidden("account"));
+});
+
 test("a path outside every root is a 403; a sibling with the root as its prefix is outside too", () => {
   const { root, repo, outside, token, ctx } = setup();
   mkdirSync(`${root}-evil`);
