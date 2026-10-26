@@ -17,3 +17,4 @@ docs/private/
 # doppelganger: this machine's settings, credentials and state
 doppelganger.secret.toml
 .doppelganger/
+doppelganger.toml
