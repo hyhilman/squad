@@ -438,7 +438,7 @@ port = 7341
 [web]
 
 # the public origin of the web hub, such as https://doppelganger.example.com; required to start. Sign-in sends the browser back to it, and it must be https unless its host is the loopback
-# url = ""
+url = "https://squad.doppelganger.hilman.dev"
 
 # the port doppelganger web listens on; 0 picks a free port, and web-up logs the one it got
 port = 7340
@@ -447,7 +447,9 @@ port = 7340
 # bind = "127.0.0.1"
 
 # the OIDC issuer URL, exactly as the identity server's discovery document names it; required to start
-# oidc_issuer = ""
+# The internal-apps client, shared with squad web. oidc_client_id is in the secret file: a real id
+# looks like a secret to the config check.
+oidc_issuer = "https://access.hilman.dev/application/o/internal-apps/"
 
 # the OIDC client id of the web hub at the identity server; required to start
 # oidc_client_id = ""
@@ -467,6 +469,12 @@ port = 7340
 # [[web.workspaces]]
 # name = "lab"
 # url = "https://lab.example.com"
+
+# This repo's own supervisor, and its squad web (the squad-web unit on this machine).
+[[web.workspaces]]
+name = "squad"
+url = "http://127.0.0.1:7341"
+squad_web = "https://squad-dev.squad.doppelganger.hilman.dev"
 
 [nightly]
 
