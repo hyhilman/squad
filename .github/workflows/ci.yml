@@ -17,7 +17,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    # squad is public, so a pull request can come from a fork. Its code must never run on our own
+    # machine: a pull request uses GitHub's runners. A push and the dev button use the self-hosted ones.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted","squad-ci"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v6.5.0
@@ -31,7 +33,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc')) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, squad-ci]
     permissions:
       contents: write # the release tag and the GitHub release
     # One release at a time per branch, so two quick pushes cannot take the same rc number. A started
