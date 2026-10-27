@@ -1,0 +1,67 @@
+# The tests, and the release after them. Three kinds of build, one branch each:
+# - dev: a button. Actions, ci, Run workflow, on dev. A push to dev only runs the tests.
+# - rc: every push to rc makes the next release candidate, when the tests passed.
+# - main: every push to main makes the stable release, when the tests passed. A push that does not
+#   raise the version makes nothing (the plan says why).
+# The release job runs in the same run as the tests, so it always builds the commit that was tested.
+# All of its logic is in packages/squad/scripts/release.ts, which has its own tests.
+name: ci
+on:
+  push: { branches: [main, rc, dev] }
+  # Not pull_request_target: a pull request from a fork runs with read-only access and no secrets.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v6.5.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npm test
+
+  release:
+    needs: test
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the release tag and the GitHub release
+    # One release at a time per branch, so two quick pushes cannot take the same rc number. A started
+    # run is never cancelled; a newer push replaces a run that still waits.
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      # All history and tags: the next rc number and the last stable release come from the tags.
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6.5.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - id: plan
+        run: node packages/squad/scripts/release.ts plan --branch "$BRANCH" --sha "$SHA" --check-head --format github >> "$GITHUB_OUTPUT"
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+      - if: steps.plan.outputs.skip == 'true'
+        run: echo "::notice::No release for this commit. ${REASON}"
+        env:
+          REASON: ${{ steps.plan.outputs.skip_reason }}
+      - if: steps.plan.outputs.skip != 'true'
+        run: node packages/squad/scripts/release.ts publish --branch "$BRANCH" --sha "$SHA" --expect "$VERSION"
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
