@@ -66,7 +66,9 @@ request targets `dev`.
 | `rc` | every push to `rc` | `0.2.0-rc.1`, then `0.2.0-rc.2` | pre-release |
 | `main` | every push to `main` | `0.2.0` | latest release |
 
-A build is made only after `npm test` passed on that same commit, in the same run. A push to `dev`
+A build is made only after `npm test` passed on that same commit, in the same run. Pushes and the
+dev button run on the self-hosted `squad-ci` runners. A pull request runs on GitHub's runners, so
+code from a fork never runs on our machine. A push to `dev`
 only runs the tests. Each release holds two tarballs: `squad-<version>.tgz` and
 `squad-contract-<version>.tgz`. Before the tag is pushed, both pass their `check-pack.sh`.
 
