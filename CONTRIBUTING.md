@@ -54,3 +54,36 @@ code already says what it does.
 
 Do not open a public issue for a problem that could leak a token or a login. Contact the
 maintainer privately through GitHub instead.
+
+## Releases
+
+CI makes three kinds of build, one branch each. Work moves from `dev` to `rc` to `main`, so a pull
+request targets `dev`.
+
+| Branch | How it starts | Version | GitHub release |
+| --- | --- | --- | --- |
+| `dev` | a person: Actions, ci, **Run workflow**, on `dev` | `0.2.0-dev.gabc1234` | pre-release |
+| `rc` | every push to `rc` | `0.2.0-rc.1`, then `0.2.0-rc.2` | pre-release |
+| `main` | every push to `main` | `0.2.0` | latest release |
+
+A build is made only after `npm test` passed on that same commit, in the same run. A push to `dev`
+only runs the tests. Each release holds two tarballs: `squad-<version>.tgz` and
+`squad-contract-<version>.tgz`. Before the tag is pushed, both pass their `check-pack.sh`.
+
+The number before `-dev` or `-rc` is the base: the `version` in `packages/squad/package.json`. A
+person raises it; CI never does. It must be exactly one step above the last stable release (the
+highest `v` and three numbers tag). Raise it on `dev`, right after a stable release:
+
+    git fetch --tags
+    npm run release -- bump patch|minor|major
+
+A dev build is named by its commit: `g` and the short hash (the `g` keeps the version valid when the
+hash is all digits). A release candidate number is one more than the highest `-rc` tag of that base.
+A push to `main` whose base is already released makes nothing; the run says why.
+
+The release is a tag-only commit: the tested commit plus squad's `package.json` and lock entry at the
+exact version. Only the tag is pushed, so no branch moves and CI does not start again. All of the
+logic is in `packages/squad/scripts/release.ts`, with its tests. See what a branch would release:
+
+    npm run release -- plan --branch rc
+    SQUAD_DRY_RUN=1 npm run release -- publish --branch rc --sha <sha> --expect <version>

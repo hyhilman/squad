@@ -42,6 +42,10 @@ docs/               the design doc.
   the web app. `npm run build -w squad` (also `prepack`) emits `packages/squad/dist/` with the
   contract vendored inside, the images, the codex config guard and the built web app.
   `packages/squad/scripts/check-pack.sh` installs the tarball into a fresh folder and checks it.
+- Releases come from CI (`.github/workflows/ci.yml`), never by hand: Run workflow on `dev` makes a
+  dev build, a push to `rc` a release candidate, a push to `main` the stable release
+  (CONTRIBUTING.md: Releases). Pull requests target `dev`. `npm run release -- bump
+  patch|minor|major` raises the base in `packages/squad/package.json` after a stable release.
 - `npm run pack:sdk -- <dest dir>` packs `@squad/contract` as `squad-contract-<version>.tgz` (the SDK
   for other apps; the version is squad's). `packages/contract/scripts/check-pack.sh` installs it in a
   fresh folder, imports it and type-checks it with no DOM and no Node types.
