@@ -357,3 +357,12 @@ test("startSession gives the same session and cookie as a sign-in; an empty name
   nowMs += 13 * 3600_000;
   assert.equal(oidc.readSession(cookieOf(setCookie)), undefined);
 });
+
+test("startSession cuts a long name to 200 code points, so the cookie still fits 4 KB", () => {
+  const oidc = createOidc(cfgOf(p));
+  const { session, setCookie } = oidc.startSession({ email: "ada@example.test", name: "😀".repeat(5000), groups: [] });
+  assert.equal(Array.from(session.name).length, 200);
+  assert.equal(session.name, "😀".repeat(200));
+  assert.ok(setCookie.length < 4096, `cookie line is ${setCookie.length} bytes`);
+  assert.equal(oidc.startSession({ email: "ada@example.test", name: "Ada", groups: [] }).session.name, "Ada");
+});

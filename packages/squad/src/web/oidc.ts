@@ -74,6 +74,7 @@ export const SESSION_COOKIE = "squad_session";
 export const LOGIN_COOKIE = "squad_oidc";
 const LOGIN_TTL_S = 600;
 const SESSION_TTL_S = 12 * 3600;
+const MAX_NAME = 200;
 const DOC_TTL_MS = 3600_000;
 const SKEW_S = 60;
 const HTTP_TIMEOUT_MS = 10_000;
@@ -213,7 +214,10 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
    */
   function startSession(who: { readonly email: string; readonly name: string; readonly groups: readonly string[] }): { session: Session; setCookie: string } {
     const groups = cfg.adminGroup !== undefined && who.groups.includes(cfg.adminGroup) ? [cfg.adminGroup] : [];
-    const session: Session = { email: who.email, name: who.name === "" ? who.email : who.name, groups, exp: Math.floor(now() / 1000) + SESSION_TTL_S };
+    // The name is only shown, so it is cut by code point rather than refused; a long one would push
+    // the cookie past the browser's limit too.
+    const name = Array.from(who.name === "" ? who.email : who.name).slice(0, MAX_NAME).join("");
+    const session: Session = { email: who.email, name, groups, exp: Math.floor(now() / 1000) + SESSION_TTL_S };
     return { session, setCookie: cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S) };
   }
 

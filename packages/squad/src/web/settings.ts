@@ -16,7 +16,7 @@ export const SQUAD_OIDC_ISSUER_ENV: EnvSpec = { key: "SQUAD_OIDC_ISSUER", why: "
 export const SQUAD_OIDC_CLIENT_ID_ENV: EnvSpec = { key: "SQUAD_OIDC_CLIENT_ID", why: "the OIDC client id of squad at the identity server; required to start" };
 export const SQUAD_OIDC_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_GROUP", why: "a group the ID token's `groups` claim must hold; unset = any signed-in user with a verified email" };
 
-export const SQUAD_OIDC_ADMIN_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_ADMIN_GROUP", why: "a group the ID token's `groups` claim must hold for a person to be an admin who sees every account; unset = nobody is admin" };
+export const SQUAD_OIDC_ADMIN_GROUP_ENV: EnvSpec = { key: "SQUAD_OIDC_ADMIN_GROUP", why: "a group the ID token's `groups` claim must hold for a person to be an admin who sees every account; a change takes effect at each person's next sign-in; unset = nobody is admin" };
 
 export const SQUAD_WEB_PROVIDERS_ENV: EnvSpec = {
   key: "SQUAD_WEB_PROVIDERS",

@@ -248,7 +248,7 @@ pass stays running, because a wrong "lost" could start a second agent in the sam
 
 `squad web` serves the API and the built web app from one origin. Sign-in is OIDC (the code flow
 with PKCE) against your identity provider. The session is an encrypted, httpOnly cookie that holds
-only the email, name and groups. A person sees only the accounts they own. No token ever reaches
+only the email, the name and, for an admin, the admin group. A person sees only the accounts they own. No token ever reaches
 the browser.
 
 It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A client secret, if
