@@ -4,15 +4,19 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { getAccount } from "../accounts/store.ts";
+import { getAccount, listAccounts } from "../accounts/store.ts";
 import { ulid } from "../ids.ts";
+import { isSupported } from "../runners/table.ts";
 import { isBusy } from "../store/db.ts";
 import { unauthorized } from "./scope.ts";
 
 export interface ProjectToken {
   readonly id: string;
   readonly project: string;
-  /** Account ids, `<runner>/<name>`. */
+  /**
+   * As stored: account ids, `<runner>/<name>`, and patterns. `*` is every account of the home and
+   * `<runner>/*` every account of that runner, now and added later. `tokenAccounts` expands them.
+   */
   readonly accounts: readonly string[];
   /** Real absolute paths. */
   readonly roots: readonly string[];
@@ -32,6 +36,24 @@ const PREFIX = "sqd_";
 const PROJECT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const IMAGE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/;
 
+/** True for `*` and `<runner>/*`, the two patterns a token may hold. No account name can be one: names start with a letter or digit. */
+export const isAccountPattern = (entry: string): boolean => entry === "*" || entry.endsWith("/*");
+
+const matches = (pattern: string, id: string): boolean => pattern === "*" || id.startsWith(pattern.slice(0, -1));
+
+/**
+ * The accounts the token may use now. The named ids come first, as stored and unchecked, so a token
+ * with no pattern reads exactly as before. Then each pattern adds the accounts that match it; a
+ * removed account never matches.
+ */
+export function tokenAccounts(db: DatabaseSync, token: Pick<ProjectToken, "accounts">): string[] {
+  const named = token.accounts.filter((a) => !isAccountPattern(a));
+  const patterns = token.accounts.filter(isAccountPattern);
+  if (patterns.length === 0) return [...named];
+  const live = listAccounts(db).map((a) => a.id).filter((id) => patterns.some((p) => matches(p, id)));
+  return [...new Set([...named, ...live])];
+}
+
 export const hashToken = (token: string): string => createHash("sha256").update(token, "utf8").digest("hex");
 
 interface Raw {
@@ -47,6 +69,10 @@ export function addToken(db: DatabaseSync, project: string, scope: TokenScope, n
   if (scope.accounts.length === 0) throw new Error("a token needs at least one account");
   if (scope.roots.length === 0) throw new Error("a token needs at least one root");
   for (const a of scope.accounts) {
+    if (a.includes("*")) {
+      if (a !== "*" && !(a.endsWith("/*") && isSupported(a.slice(0, -2)))) throw new Error(`account pattern ${a} must be * or <runner>/*`);
+      continue;
+    }
     const row = getAccount(db, a);
     if (row === undefined || row.state === "removed") throw new Error(`unknown account ${a}`);
   }

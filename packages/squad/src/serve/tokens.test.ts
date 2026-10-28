@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { addAccount } from "../accounts/store.ts";
+import { addAccount, markRemoved } from "../accounts/store.ts";
 import { openStore, type Store } from "../store/db.ts";
 import { Refusal } from "./scope.ts";
-import { addToken, authenticate, hashToken, listTokens, revokeToken } from "./tokens.ts";
+import { addToken, authenticate, hashToken, listTokens, revokeToken, tokenAccounts } from "./tokens.ts";
 
 const NOW = new Date("2026-10-25T10:00:00.000Z");
 const mk = (): { s: Store; root: string } => {
@@ -65,4 +65,37 @@ test("a revoked token is a 401; a new token for the project is a different one",
   const second = addToken(s.db, "p", { accounts: ["pi/one"], roots: [root], images: [] }, NOW);
   assert.notEqual(second.token, first.token);
   assert.notEqual(second.row.id, first.row.id);
+});
+
+test("a pattern needs no account to exist; list keeps it as given; a bad pattern is refused", () => {
+  const { s, root } = mk();
+  const ok = { roots: [root], images: [] };
+  for (const bad of ["**", "codex/a*", "*/one", "nope/*", "pi/*/x", "pi*"]) {
+    assert.throws(() => addToken(s.db, "p", { ...ok, accounts: [bad] }, NOW), /must be \* or <runner>\/\*/, bad);
+  }
+  // No codex or claude account exists yet: a pattern is not checked against the accounts.
+  addToken(s.db, "p", { ...ok, accounts: ["codex/*", "claude/*", "pi/one"] }, NOW);
+  addToken(s.db, "q", { ...ok, accounts: ["*"] }, NOW);
+  assert.deepEqual(Object.fromEntries(listTokens(s.db).map((t) => [t.project, t.accounts])), { p: ["codex/*", "claude/*", "pi/one"], q: ["*"] });
+  // A plain id still must exist, also next to a pattern.
+  assert.throws(() => addToken(s.db, "r", { ...ok, accounts: ["*", "pi/none"] }, NOW), /unknown account pi\/none/);
+});
+
+test("tokenAccounts: named ids as stored, then the live accounts each pattern matches, now and later, never a removed one", () => {
+  const { s, root } = mk();
+  const all = addToken(s.db, "all", { accounts: ["*"], roots: [root], images: [] }, NOW).row;
+  const codex = addToken(s.db, "codex", { accounts: ["pi/two", "codex/*"], roots: [root], images: [] }, NOW).row;
+  const named = addToken(s.db, "named", { accounts: ["pi/two", "pi/one"], roots: [root], images: [] }, NOW).row;
+  assert.deepEqual(tokenAccounts(s.db, all), ["pi/one", "pi/two"]);
+  assert.deepEqual(tokenAccounts(s.db, codex), ["pi/two"]);
+  addAccount(s.db, { runner: "codex", name: "later", kind: "login" }, NOW);
+  addAccount(s.db, { runner: "claude", name: "seat", kind: "token" }, NOW);
+  assert.deepEqual(tokenAccounts(s.db, all), ["claude/seat", "codex/later", "pi/one", "pi/two"]);
+  assert.deepEqual(tokenAccounts(s.db, codex), ["pi/two", "codex/later"]);
+  markRemoved(s.db, "codex/later");
+  markRemoved(s.db, "pi/one");
+  assert.deepEqual(tokenAccounts(s.db, all), ["claude/seat", "pi/two"]);
+  assert.deepEqual(tokenAccounts(s.db, codex), ["pi/two"]);
+  // A token with no pattern reads exactly as stored, as before: order kept, nothing dropped.
+  assert.deepEqual(tokenAccounts(s.db, named), ["pi/two", "pi/one"]);
 });

@@ -95,7 +95,7 @@ current git repo, or the folder in `SQUAD_HOME`. It is mode 0700 and must never 
 | `gc [--dry-run]` | remove orphan containers, lost passes, old files and old sessions |
 | `web [--api-only]` | the web view and its API |
 | `serve [--socket <path> \| --port <n>]` | provider mode: passes and conversations for machine callers (see below) |
-| `token add <project> --accounts <id,...> --roots <path,...> [--images <ref,...>]` | make a project token for `serve`; only the token goes to stdout |
+| `token add <project> --accounts <id,...> --roots <path,...> [--images <ref,...>]` | make a project token for `serve`; only the token goes to stdout. An account may be `'*'` or `'<runner>/*'` (see `serve`) |
 | `token list` / `token revoke <project>` | the live tokens (never the token itself) / end one at once |
 | `connect --url <origin> --pair <code>` | on your own computer: sign in to claude in your browser and send the token to squad web |
 
@@ -206,6 +206,11 @@ The token is shown once; squad keeps only its sha256. Every call sends `Authoriz
 - the accounts a pass may name. A pass that names no account (only `runner` and `model`) lets squad
   pick one of the token's accounts of that runner, as it picks from a pool. A token with none of that
   runner is the same 403. A conversation still names its account;
+- an account may also be a pattern (a wildcard), so a new account needs no new token. `'*'` is every
+  account of the home, and `'<runner>/*'` (such as `'codex/*'`) every account of that runner. Both
+  count the accounts added later, and never a removed one: squad reads the accounts again on every
+  request. Patterns and plain ids mix: `--accounts 'codex/*,pi/one'`. Quote them, so the shell does
+  not expand the `*`. `token list` shows the patterns as given;
 - the host paths: `cwd`, `gitDir`, `skill.dir` and every mount host must exist and be inside one of
   the roots after symlinks are resolved, and must not touch the squad home;
 - the image: squad's own, or one given with `--images`;

@@ -9,7 +9,7 @@ import { test, type TestContext } from "node:test";
 import { ApiFailure, call, callStream, type PassLine, type PassResult, type ServePassBody, type TurnLine } from "@squad/contract";
 import { nodeSocketFetch } from "@squad/contract/node";
 import { makeFakeDocker, type FakeDocker } from "../../test/fake-docker.ts";
-import { addAccount } from "../accounts/store.ts";
+import { addAccount, markRemoved } from "../accounts/store.ts";
 import { ensureHome, layoutOf, type HomeLayout } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore, type Store } from "../store/db.ts";
@@ -119,6 +119,85 @@ test("GET /api/accounts lists only the token's accounts, with no owner or accoun
   const text = JSON.stringify(list);
   assert.ok(!text.includes("owner@example.com"));
   assert.ok(!("ownerEmail" in list[0]!) && !("loginEmail" in list[0]!) && !("consentBy" in list[0]!));
+});
+
+/** A pi key account with its folder, as the rig makes them. */
+const piAccount = (r: Rig, name: string): void => {
+  addAccount(r.store.db, { runner: "pi", name, kind: "key", ownerEmail: "owner@example.com" }, NOW);
+  mkdirSync(join(r.home.accounts, "pi", name), { recursive: true });
+  writeFileSync(join(r.home.accounts, "pi", name, "auth.json"), '{"fake":"not-a-real-key"}');
+};
+
+/** A token for the rig's work folder, with these accounts or patterns. */
+const tokenFor = (r: Rig, project: string, accounts: string[]): Record<string, string> =>
+  ({ authorization: `Bearer ${addToken(r.store.db, project, { accounts, roots: [join(r.root, "work")], images: [] }, NOW).token}` });
+
+const lastResult = async (r: Rig, b: ServePassBody, headers: Record<string, string>) =>
+  ((await collect(callStream(r.f, BASE, "startPass", { body: b }, { headers }))).at(-1) as Extract<PassLine, { type: "result" }>).result;
+
+test("a '*' token: an account added later is listed and may run; a removed one is gone and a 403", async (t) => {
+  const r = await rig(t);
+  const headers = tokenFor(r, "all", ["*"]);
+  const listed = async () => (await call(r.f, BASE, "serveAccounts", {}, { headers })).map((a) => a.account);
+  assert.deepEqual(await listed(), ["pi/acct-one", "pi/acct-two"]);
+  piAccount(r, "acct-three");
+  assert.deepEqual(await listed(), ["pi/acct-one", "pi/acct-three", "pi/acct-two"]);
+  const ran = await lastResult(r, body(r, { account: "pi/acct-three" }), headers);
+  assert.equal(ran.account, "pi/acct-three");
+  assert.equal(ran.failure, undefined);
+  markRemoved(r.store.db, "pi/acct-three");
+  assert.deepEqual(await listed(), ["pi/acct-one", "pi/acct-two"]);
+  const res = await raw(r.sock, "POST", "/api/passes", headers, JSON.stringify(body(r, { account: "pi/acct-three" })));
+  assert.equal(res.status, 403);
+  assert.deepEqual(JSON.parse(res.text), { error: "out of scope: account" });
+});
+
+test("a 'codex/*' token allows codex accounts, also later ones, and refuses claude and pi", async (t) => {
+  const r = await rig(t);
+  const headers = tokenFor(r, "codex-only", ["codex/*"]);
+  assert.deepEqual(await call(r.f, BASE, "serveAccounts", {}, { headers }), []);
+  addAccount(r.store.db, { runner: "codex", name: "seat", kind: "login" }, NOW);
+  addAccount(r.store.db, { runner: "claude", name: "seat", kind: "token" }, NOW);
+  assert.deepEqual((await call(r.f, BASE, "serveAccounts", {}, { headers })).map((a) => a.account), ["codex/seat"]);
+  const post = async (b: Partial<ServePassBody>) => {
+    const res = await raw(r.sock, "POST", "/api/passes", headers, JSON.stringify(body(r, b)));
+    return [res.status, JSON.parse(res.text)];
+  };
+  // The account check comes before the paths: a cwd refusal means the account passed.
+  assert.deepEqual(await post({ runner: "codex", account: "codex/seat", cwd: r.root }), [403, { error: "out of scope: cwd" }]);
+  assert.deepEqual(await post({ runner: "codex", account: undefined, cwd: r.root }), [403, { error: "out of scope: cwd" }]);
+  assert.deepEqual(await post({ runner: "claude", account: "claude/seat" }), [403, { error: "out of scope: account" }]);
+  assert.deepEqual(await post({ runner: "claude", account: undefined }), [403, { error: "out of scope: account" }]);
+  assert.deepEqual(await post({ account: "pi/acct-one" }), [403, { error: "out of scope: account" }]);
+  assert.equal(r.fake.callsOf("run").length, 0);
+});
+
+test("with no account a 'pi/*' token's pass draws from the live pi accounts: a later one yes, a removed one never", async (t) => {
+  const r = await rig(t);
+  const headers = tokenFor(r, "pool", ["pi/*"]);
+  piAccount(r, "acct-three");
+  markRemoved(r.store.db, "pi/acct-one");
+  markRemoved(r.store.db, "pi/acct-two");
+  const ran = await lastResult(r, body(r, { account: undefined }), headers);
+  assert.equal(ran.account, "pi/acct-three");
+  markRemoved(r.store.db, "pi/acct-three");
+  const res = await raw(r.sock, "POST", "/api/passes", headers, JSON.stringify(body(r, { account: undefined })));
+  assert.equal(res.status, 403);
+  assert.deepEqual(JSON.parse(res.text), { error: "out of scope: account" });
+  const runs = r.fake.callsOf("run");
+  assert.equal(runs.length, 1);
+  assert.ok(!runs[0]!.join(" ").includes("acct-one") && !runs[0]!.join(" ").includes("acct-two"));
+});
+
+test("a conversation on a '*' token: a turn is refused once its account is removed", async (t) => {
+  const r = await rig(t);
+  const headers = tokenFor(r, "all", ["*"]);
+  piAccount(r, "acct-three");
+  const { identity } = body(r);
+  const conv = await call(r.f, BASE, "openConversation", { body: { runner: "pi", account: "pi/acct-three", model: "opencode-go/hy4-preview", cwd: r.repo, caller: { flow: "chat", action: "chat:pi" }, identity } }, { headers });
+  assert.equal(conv.account, "pi/acct-three");
+  markRemoved(r.store.db, "pi/acct-three");
+  await assert.rejects(collect(callStream(r.f, BASE, "sendTurn", { params: { id: conv.id }, body: { message: "x", identity } }, { headers })), (e: unknown) => e instanceof ApiFailure && e.status === 403);
 });
 
 test("POST /api/passes streams started, output and result; the result is the pass's, and GET gives it back", async (t) => {

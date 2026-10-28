@@ -29,7 +29,7 @@ import { accountView } from "../web/account-view.ts";
 import { openBody, passBody, turnBody } from "./body.ts";
 import { LOST, containerStates, openServeRows, watchContainer, type OpenServeRow, type Watched } from "./recover.ts";
 import { Refusal, scopeSetup, type ScopedSetup } from "./scope.ts";
-import { authenticate, type ProjectToken } from "./tokens.ts";
+import { authenticate, tokenAccounts, type ProjectToken } from "./tokens.ts";
 
 // squad's own result types are the contract's shapes: a change on one side fails the type check here.
 const passShape = (r: PassResult): ApiPassResult => r;
@@ -406,7 +406,9 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
     const streaming = name === "startPass" || name === "sendTurn";
     const job = (async () => {
       try {
-        await route(name, hit.params, token, req, res);
+        // The routes see what the token may use now: its patterns expanded once, at this request, so
+        // every check (the accounts list, a named account, the pool, a turn's recheck) reads one list.
+        await route(name, hit.params, { ...token, accounts: tokenAccounts(db, token) }, req, res);
       } catch (e) {
         if (e instanceof Refusal) return sendJson(res, name, e.status, { error: e.error });
         // The error text may hold anything, so it is not logged.
