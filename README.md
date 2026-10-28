@@ -317,7 +317,8 @@ The account page (and the ⋯ menu of each row in Accounts) offers:
   the three sign-in ways), or **Replace key** for a pi key. A good end clears the health. A claude
   login made with `squad login` (a config folder, not a token) logs in again on the host.
 - **Use limit reset** (the owner, claude): runs the real claude CLI's `/limit-reset` on the account
-  and reports what the CLI said. It spends one of your limit resets. `SQUAD_NO_LIMIT_RESET=1` turns it off.
+  and reports what the CLI said. It spends one of your limit resets. When the reset goes through, the
+  account's cool-down ends. `SQUAD_NO_LIMIT_RESET=1` turns it off.
 - **Remove** (the owner or an admin, typed confirm): deletes the account folder under the account
   lock (while a pass holds a login, it is refused: try again later). The pass history stays and shows the account as removed. The
   name may be used again later. squad then says where to revoke the login or key at the provider.

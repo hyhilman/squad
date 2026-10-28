@@ -269,6 +269,11 @@ export function resetHealth(db: DatabaseSync, id: string): "reset" | "log-in-aga
   return "reset";
 }
 
+/** Ends a cool-down and nothing else: the suspicion, the last failure and the room read stay. */
+export function endCooling(db: DatabaseSync, id: string): void {
+  db.prepare("UPDATE health SET cool_until = NULL, cool_kind = NULL WHERE account = ?").run(id);
+}
+
 /** Every account of a runner as `pick` sees it. Busy comes from the caller: it knows the locks. */
 export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (id: string) => boolean, env?: Readonly<Record<string, string | undefined>>): Candidate[] {
   const floor = envNum(SQUAD_FLOOR_DEFAULT_ENV, env);

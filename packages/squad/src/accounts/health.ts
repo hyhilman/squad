@@ -53,16 +53,27 @@ export const AUTH_FAILS_TO_DIE = 2;
 
 const plus = (now: Date, s: number): string => new Date(now.getTime() + s * 1000).toISOString();
 
-/** The reset time of the window that ran out. Falls back to the later future reset, then to null. */
-function quotaReset(room: Room | undefined, now: Date): string | null {
-  if (room === undefined) return null;
-  const later = (t: string | undefined): number => (t === undefined ? NaN : Date.parse(t));
+const later = (t: string | undefined): number => (t === undefined ? NaN : Date.parse(t));
+
+/** The latest future time among these resets, or null. */
+function latestFuture(resets: readonly (string | undefined)[], now: Date): string | null {
+  const future = resets.map(later).filter((t) => Number.isFinite(t) && t > now.getTime());
+  return future.length === 0 ? null : new Date(Math.max(...future)).toISOString();
+}
+
+/** The resets of the windows with nothing left. */
+function emptyResets(room: Room): (string | undefined)[] {
   const empty: (string | undefined)[] = [];
   if (room.left5h !== undefined && room.left5h <= 0) empty.push(room.resets5h);
   if (room.leftWeek !== undefined && room.leftWeek <= 0) empty.push(room.resetsWeek);
-  const pool = empty.some((t) => Number.isFinite(later(t))) ? empty : [room.resets5h, room.resetsWeek];
-  const future = pool.map(later).filter((t) => Number.isFinite(t) && t > now.getTime());
-  return future.length === 0 ? null : new Date(Math.max(...future)).toISOString();
+  return empty;
+}
+
+/** The reset time of the window that ran out. Falls back to the later future reset, then to null. */
+function quotaReset(room: Room | undefined, now: Date): string | null {
+  if (room === undefined) return null;
+  const empty = emptyResets(room);
+  return latestFuture(empty.some((t) => Number.isFinite(later(t))) ? empty : [room.resets5h, room.resetsWeek], now);
 }
 
 export function applyOutcome(
@@ -86,8 +97,14 @@ export function applyOutcome(
 
   h = { ...h, lastFailAt: at, lastFailKind: failure.kind, lastFailCode: failure.code };
   switch (failure.kind) {
-    case "rate-limit":
+    case "rate-limit": {
+      // claude answers a used-up 5-hour or weekly window with a plain 429. A short rest would only
+      // bring the account back to fail again, so it rests until that window resets. Only this pass's
+      // own room counts: a stored read can be stale, such as after the owner used a limit reset.
+      const reset = room === undefined ? null : latestFuture(emptyResets(room), now);
+      if (reset !== null) return { health: { ...h, coolKind: "quota", coolUntil: reset } };
       return { health: { ...h, coolKind: "rate-limit", coolUntil: plus(now, envNum(SQUAD_COOL_RATE_LIMIT_S_ENV, env)) } };
+    }
     case "quota":
       return { health: { ...h, coolKind: "quota", coolUntil: quotaReset(room, now) ?? plus(now, envNum(SQUAD_COOL_QUOTA_S_ENV, env)) } };
     case "auth": {
