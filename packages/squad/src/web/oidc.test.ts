@@ -324,6 +324,15 @@ test("safeReturnPath resolves dot segments like a browser, so none reaches /auth
   assert.equal(safeReturnPath("/a/%2e/b"), "/a/b");
 });
 
+test("safeReturnPath also refuses a path that reaches /auth or leaves the site once a proxy decodes it", () => {
+  const bad = ["/%61uth/embed", "/x/../%61uth", "/AUTH/embed", "/Auth", "/auth;x/embed", "/x%2f..%2fauth/embed", "/a/../%2fevil.com", "/%E0%A4%A"];
+  for (const raw of bad) assert.equal(safeReturnPath(raw), "/", JSON.stringify(raw));
+  // Decoded once only, as a proxy does: a double-encoded name stays a plain page path.
+  assert.equal(safeReturnPath("/%2561uth"), "/%2561uth");
+  assert.equal(safeReturnPath("/authors"), "/authors");
+  assert.equal(safeReturnPath("/accounts/a%20b"), "/accounts/a%20b");
+});
+
 test("the return path rides in the sealed login cookie and comes back from finishLogin", async () => {
   reset(p);
   const oidc = createOidc(cfgOf(p));

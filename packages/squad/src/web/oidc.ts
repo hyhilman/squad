@@ -59,12 +59,22 @@ export function safeReturnPath(raw: string | null | undefined): string {
   } catch {
     return "/";
   }
-  if (url.origin !== "https://squad.invalid") return "/";
-  if (url.pathname === "/auth" || url.pathname.startsWith("/auth/")) return "/";
+  if (url.origin !== "https://squad.invalid" || underAuth(url.pathname)) return "/";
+  // A proxy in front may decode the path (and fold its case) before squad sees it, so "/%61uth/embed"
+  // or "/x%2f..%2fauth" would reach /auth there. Check the decoded form too.
+  let decoded: URL;
+  try {
+    decoded = new URL(decodeURIComponent(url.pathname), "https://squad.invalid");
+  } catch {
+    return "/";
+  }
+  if (decoded.origin !== "https://squad.invalid" || underAuth(decoded.pathname)) return "/";
   // The resolved path is checked again: "/a/..//evil.com" resolves to "//evil.com", which leaves the site.
   const resolved = url.pathname + url.search + url.hash;
   return resolved.length <= MAX_TO && plainPath(resolved) ? resolved : "/";
 }
+
+const underAuth = (path: string): boolean => /^\/auth(\/|;|$)/i.test(path);
 
 function plainPath(raw: string): boolean {
   if (raw.length === 0 || raw[0] !== "/" || raw[1] === "/" || raw[1] === "\\") return false;
