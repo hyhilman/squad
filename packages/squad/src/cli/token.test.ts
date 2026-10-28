@@ -56,6 +56,19 @@ test("token list shows project, accounts, roots, images and times, never the tok
   assert.doesNotMatch(r.out.join(""), /dg-test/);
 });
 
+test("token add takes '*' and '<runner>/*' with no such account yet; token list shows them as given", async () => {
+  const r = rig();
+  assert.equal(await r.run("token", "add", "dg-test", "--accounts", "codex/*,pi/acct-one", "--roots", r.work), 0);
+  assert.equal(await r.run("token", "add", "all", "--accounts", "*", "--roots", r.work), 0);
+  assert.equal(await r.run("token", "add", "bad", "--accounts", "codex/a*", "--roots", r.work), 1);
+  assert.match(r.err.join(""), /account pattern codex\/a\* must be \* or <runner>\/\*/);
+  r.out.length = 0;
+  await r.run("token", "list");
+  const listed = r.out.join("");
+  assert.match(listed, /dg-test\s+codex\/\*,pi\/acct-one\s/);
+  assert.match(listed, /all\s+\*\s/);
+});
+
 test("token add refuses a wrong use (exit 2) and a bad scope (exit 1), and prints no token", async () => {
   const r = rig();
   assert.equal(await r.run("token", "add", "dg-test", "--roots", r.work), 2);

@@ -85,7 +85,9 @@ const USAGE = `usage: squad <verb>
                                            project token, on a 0600 unix socket (default <home>/serve.sock) or
                                            on 127.0.0.1:<n>; run it as the project's user
   token add <project> --accounts <id,...> --roots <abs path,...> [--images <ref,...>]
-                                           make the project's token for squad serve; only the token goes to stdout
+                                           make the project's token for squad serve; only the token goes to stdout.
+                                           An account may be '*' (every account, also ones added later) or
+                                           '<runner>/*' (every account of that runner); a removed one never counts
   token list                               the live tokens: project, accounts, roots, images, times (never a token)
   token revoke <project>                   end the project's token at once
   connect --url <origin> --pair <code>     on your own computer: sign in to claude in your browser and send the
