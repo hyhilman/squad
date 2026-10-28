@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { ensureHome, layoutOf } from "./home.ts";
 import { DatabaseSync } from "node:sqlite";
 import { migrate } from "./store/db.ts";
+import { parseClaudeStream } from "./streams/claude.ts";
 import { PRICES_FILE, PRICES_TTL_MS, SQUAD_NO_PRICES_ENV, SQUAD_PRICES_URL_ENV, backfillCatalogCosts, catalogCost, catalogKey, costOf, loadPrices, loadProviders, parseCatalog, parseProviders, passCost, priceAt, recordPriceHistory, refreshPrices } from "./prices.ts";
 
 const near = (a: number, b: number): void => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
@@ -276,6 +277,23 @@ test("catalogCost uses the price at the pass time, falls back to the saved copy,
   near(catalogCost(db, cur, "codex", "x", u, new Date("2026-10-11T00:00:00Z"))!, 3); // from the saved copy: no history row
   assert.equal(catalogCost(db, cur, "codex", "nope", u, new Date()), null);
   assert.equal(catalogCost(db, cur, "pi", "bare", u, new Date()), null);
+});
+
+test("costOf prices a 1-hour cache write at twice the input, the rest at the catalog's cache_write", () => {
+  const p = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 };
+  const u = { input: 0, output: 0, cacheRead: 0, cacheWrite: 1e6 };
+  near(costOf(u, p), 2.5);
+  near(costOf({ ...u, cacheWrite1h: 1e6 }, p), 4);
+  near(costOf({ ...u, cacheWrite1h: 4e5 }, p), 0.6 * 2.5 + 0.4 * 4);
+  near(costOf({ ...u, cacheWrite1h: 9e6 }, p), 4); // never more than all the writes
+});
+
+test("catalogCost of a claude capture equals the CLI's own cost", () => {
+  const cur = new Map([["anthropic/claude-sonnet-5-5", { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }], ["anthropic/claude-opus-5-5", { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }]]);
+  for (const [file, model] of [["ok-sonnet-5-5.jsonl", "claude-sonnet-5-5"], ["ok-opus-5-5.jsonl", "claude-opus-5-5"]] as const) {
+    const o = parseClaudeStream(readFileSync(new URL(`../test/fixtures/captures/claude/${file}`, import.meta.url), "utf8"));
+    near(catalogCost(history(), cur, "claude", model, { ...o.usage, cacheWrite1h: o.cacheWrite1h ?? 0 }, new Date())!, o.cliCostUsd!);
+  }
 });
 
 test("backfillCatalogCosts prices old passes that have none, and leaves set ones and unknown models alone", () => {

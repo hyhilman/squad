@@ -193,6 +193,12 @@ export const MIGRATIONS: readonly string[] = [
      id TEXT PRIMARY KEY,
      token_id TEXT NOT NULL
    ) STRICT`,
+  // Of cache_write, the tokens written to the 1-hour cache: it costs more than the 5-minute one.
+  `ALTER TABLE passes ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0`,
+  // Older claude passes kept no split. Claude Code writes the 1-hour cache on a subscription (a login or
+  // a token account) and the 5-minute one on a key, so count them that way and price them again.
+  `UPDATE passes SET cache_write_1h = cache_write, catalog_cost_usd = NULL
+     WHERE runner = 'claude' AND cache_write > 0 AND account IN (SELECT id FROM accounts WHERE kind IN ('login', 'token'))`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */
@@ -233,6 +239,8 @@ export interface PassEnd {
   readonly failKind?: string;
   readonly failCode?: string;
   readonly tokens: Tokens;
+  /** Of `tokens.cacheWrite`, the tokens written to the 1-hour cache. */
+  readonly cacheWrite1h?: number;
   readonly costUsd?: number;
   readonly priceSrc?: string;
   /** What the CLI said the pass cost (pi, claude). */
@@ -347,7 +355,7 @@ export function openStore(opts: StoreOptions): Store {
      ON CONFLICT (id) DO NOTHING`,
   );
   const updateEnd = db.prepare(
-    `UPDATE passes SET ended_at = ?, outcome = ?, fail_kind = ?, fail_code = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, reasoning = ?,
+    `UPDATE passes SET ended_at = ?, outcome = ?, fail_kind = ?, fail_code = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, cache_write_1h = ?, reasoning = ?,
        cost_usd = ?, price_src = ?, cli_cost_usd = ?, catalog_cost_usd = ?, left_5h_before = ?, left_5h_after = ?, left_week_before = ?, left_week_after = ?, turns = ?, exit_code = ?, model = COALESCE(?, model)
      WHERE id = ?`,
   );
@@ -370,7 +378,7 @@ export function openStore(opts: StoreOptions): Store {
     } else if (line.op === "end") {
       const r = line.row;
       const t = r.tokens;
-      updateEnd.run(r.endedAt, r.outcome, nul(r.failKind), nul(r.failCode), t.input, t.output, t.cacheRead, t.cacheWrite, t.reasoning, nul(r.costUsd), nul(r.priceSrc), nul(r.cliCostUsd), nul(r.catalogCostUsd), nul(r.left5hBefore), nul(r.left5hAfter), nul(r.leftWeekBefore), nul(r.leftWeekAfter), nul(r.turns), nul(r.exitCode), nul(r.model), r.id);
+      updateEnd.run(r.endedAt, r.outcome, nul(r.failKind), nul(r.failCode), t.input, t.output, t.cacheRead, t.cacheWrite, r.cacheWrite1h ?? 0, t.reasoning, nul(r.costUsd), nul(r.priceSrc), nul(r.cliCostUsd), nul(r.catalogCostUsd), nul(r.left5hBefore), nul(r.left5hAfter), nul(r.leftWeekBefore), nul(r.leftWeekAfter), nul(r.turns), nul(r.exitCode), nul(r.model), r.id);
     } else if (line.op === "serve") {
       const r = line.row;
       upsertServe.run(r.id, r.tokenId, r.kind, r.passId, r.container, r.runner, r.account, r.startedAt, nul(r.endedAt), nul(r.result));

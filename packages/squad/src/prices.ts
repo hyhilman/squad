@@ -206,9 +206,18 @@ export async function refreshPrices(r: RefreshPrices): Promise<RefreshResult> {
   }
 }
 
+/** The tokens a cost is taken from. `cacheWrite1h` is the part of `cacheWrite` written to the 1-hour cache. */
+export type CostTokens = Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite"> & { readonly cacheWrite1h?: number };
+
+// The catalog's cache_write is the 5-minute price. Anthropic bills a 1-hour cache write at twice the
+// input price, and the catalog has no field for it. Claude Code writes the 1-hour cache on a subscription.
+const ONE_HOUR_WRITE_X_INPUT = 2;
+
 /** What the tokens cost at `p`, in dollars. Reasoning tokens are inside `output` already, so they add nothing. */
-export function costOf(t: Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite">, p: Price): number {
-  return (t.input * p.input + t.output * p.output + t.cacheRead * (p.cacheRead ?? p.input) + t.cacheWrite * (p.cacheWrite ?? p.input)) / 1e6;
+export function costOf(t: CostTokens, p: Price): number {
+  const hour = Math.min(t.cacheWrite1h ?? 0, t.cacheWrite);
+  const writes = (t.cacheWrite - hour) * (p.cacheWrite ?? p.input) + hour * ONE_HOUR_WRITE_X_INPUT * p.input;
+  return (t.input * p.input + t.output * p.output + t.cacheRead * (p.cacheRead ?? p.input) + writes) / 1e6;
 }
 
 /** The cost of a pass, or null when it has no money cost (a seat) or the model has no price. */
@@ -262,7 +271,7 @@ export function priceAt(db: DatabaseSync, key: string, at: Date): Price | undefi
 }
 
 /** Tokens times the catalog price at `at`, for any kind of account; the saved copy stands in when the history has no row. null = no price. */
-export function catalogCost(db: DatabaseSync, prices: Prices, runner: string, model: string, usage: Usage, at: Date): number | null {
+export function catalogCost(db: DatabaseSync, prices: Prices, runner: string, model: string, usage: CostTokens, at: Date): number | null {
   const key = catalogKey(runner, model);
   if (key === undefined) return null;
   const p = priceAt(db, key, at) ?? prices.get(key);
@@ -275,12 +284,12 @@ export function catalogCost(db: DatabaseSync, prices: Prices, runner: string, mo
  */
 export function backfillCatalogCosts(db: DatabaseSync, prices: Prices, limit = 5000): number {
   const rows = db.prepare(
-    "SELECT id, started_at, runner, model, input, output, cache_read, cache_write, reasoning FROM passes WHERE catalog_cost_usd IS NULL AND ended_at IS NOT NULL AND (input + output + cache_read + cache_write) > 0 ORDER BY started_at LIMIT ?",
-  ).all(limit) as unknown as { id: string; started_at: string; runner: string; model: string; input: number; output: number; cache_read: number; cache_write: number; reasoning: number }[];
+    "SELECT id, started_at, runner, model, input, output, cache_read, cache_write, cache_write_1h FROM passes WHERE catalog_cost_usd IS NULL AND ended_at IS NOT NULL AND (input + output + cache_read + cache_write) > 0 ORDER BY started_at LIMIT ?",
+  ).all(limit) as unknown as { id: string; started_at: string; runner: string; model: string; input: number; output: number; cache_read: number; cache_write: number; cache_write_1h: number }[];
   const set = db.prepare("UPDATE passes SET catalog_cost_usd = ? WHERE id = ? AND catalog_cost_usd IS NULL");
   let n = 0;
   for (const r of rows) {
-    const usage = { input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, reasoning: r.reasoning };
+    const usage = { input: r.input, output: r.output, cacheRead: r.cache_read, cacheWrite: r.cache_write, cacheWrite1h: r.cache_write_1h };
     const c = catalogCost(db, prices, r.runner, r.model, usage, new Date(r.started_at));
     if (c !== null) n += Number(set.run(c, r.id).changes);
   }

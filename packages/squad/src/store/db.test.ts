@@ -70,7 +70,7 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 33);
+  assert.equal(MIGRATIONS.length, 35);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
@@ -130,6 +130,25 @@ test("migrations 28-29: an account from before has no entered balance", () => {
   db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES ('pi/a', 'pi', 'a', 'key', '2026-01-01T00:00:00.000Z')").run();
   assert.equal(migrate(db), MIGRATIONS.length);
   assert.deepEqual({ ...(db.prepare("SELECT balance_usd, balance_at FROM accounts").get() as object) }, { balance_usd: null, balance_at: null });
+});
+
+test("migrations 34-35: an older claude pass on a login or token account counts its cache writes as 1-hour and is priced again", () => {
+  const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
+  db.exec("CREATE TABLE schema_version (n INTEGER NOT NULL) STRICT");
+  db.prepare("INSERT INTO schema_version (n) VALUES (33)").run();
+  for (const m of MIGRATIONS.slice(0, 33)) db.exec(m);
+  for (const [id, runner, kind] of [["claude/l", "claude", "login"], ["claude/t", "claude", "token"], ["claude/k", "claude", "key"], ["pi/k", "pi", "key"]]) {
+    db.prepare("INSERT INTO accounts (id, runner, name, kind, created_at) VALUES (?, ?, 'a', ?, '2026-01-01T00:00:00.000Z')").run(id!, runner!, kind!);
+    db.prepare("INSERT INTO passes (id, started_at, ended_at, project, flow, action, runner, account, model, cache_write, catalog_cost_usd) VALUES (?, 'x', 'y', 'p', 'f', 'a', ?, ?, 'm', 100, 1)").run(id!, runner!, id!);
+  }
+  assert.equal(migrate(db), MIGRATIONS.length);
+  const rows = db.prepare("SELECT id, cache_write_1h h, catalog_cost_usd c FROM passes ORDER BY id").all().map((r) => ({ ...r }));
+  assert.deepEqual(rows, [
+    { id: "claude/k", h: 0, c: 1 },
+    { id: "claude/l", h: 100, c: null },
+    { id: "claude/t", h: 100, c: null },
+    { id: "pi/k", h: 0, c: 1 },
+  ]);
 });
 
 test("a serve pass row: a later attempt moves pass_id while it runs; the end sticks whatever the order", () => {
