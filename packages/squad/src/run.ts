@@ -397,13 +397,15 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
     // The catalog cost is for every kind of account, at the price in force when the pass started. `cost_usd`
     // is the older column: the same number, but only for a key account, which is the only one with a bill.
     const model = sp.stream.model ?? req.model;
-    const catalog = catalogCost(db, loadPrices(deps.home), req.runner, model, sp.stream.usage, started);
+    const cacheWrite1h = sp.stream.cacheWrite1h ?? 0;
+    const catalog = catalogCost(db, loadPrices(deps.home), req.runner, model, { ...sp.stream.usage, cacheWrite1h }, started);
     store.endPass({
       id: passId,
       endedAt: ended.toISOString(),
       outcome: failure === undefined ? "ok" : "fail",
       ...(failure === undefined ? {} : { failKind: failure.kind, failCode: failure.code }),
       tokens: sp.stream.usage,
+      cacheWrite1h,
       ...(catalog === null ? {} : { catalogCostUsd: catalog }),
       ...(catalog !== null && account.kind === "key" ? { costUsd: catalog, priceSrc: PRICE_SRC } : {}),
       ...(sp.stream.cliCostUsd === undefined ? {} : { cliCostUsd: sp.stream.cliCostUsd }),

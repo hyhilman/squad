@@ -29,6 +29,8 @@ export interface StreamOutcome {
   readonly ended: boolean;
   readonly model: string | null;
   readonly usage: Usage;
+  /** Of `usage.cacheWrite`, the tokens written to the 1-hour cache (claude). Unset when the CLI does not say. */
+  readonly cacheWrite1h?: number;
   /** What the CLI itself said the pass cost, in dollars (pi, claude). Unset when it said nothing. */
   readonly cliCostUsd?: number;
   readonly failure?: Failure;

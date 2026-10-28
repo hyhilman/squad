@@ -61,6 +61,7 @@ export class ClaudeStream {
           : { kind: "provider", code: subtype, message };
     }
     const room = this.#room();
+    const split = isObj(u.cache_creation) ? u.cache_creation : undefined;
     return {
       text: r !== undefined && typeof r.result === "string" ? r.result : "",
       texts: [...this.#texts],
@@ -74,6 +75,7 @@ export class ClaudeStream {
         cacheWrite: num(u.cache_creation_input_tokens),
         reasoning: 0,
       },
+      ...(split === undefined ? {} : { cacheWrite1h: num(split.ephemeral_1h_input_tokens) }),
       ...(r !== undefined && typeof r.total_cost_usd === "number" && Number.isFinite(r.total_cost_usd) ? { cliCostUsd: r.total_cost_usd } : {}),
       ...(failure === undefined ? {} : { failure }),
       ...(room === undefined ? {} : { room }),

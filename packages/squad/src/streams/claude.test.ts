@@ -76,3 +76,9 @@ test("claude: the CLI cost is the result event's total_cost_usd", () => {
   assert.equal(parseClaudeStream(fixture("ok-opus-5-5.jsonl")).cliCostUsd, 0.0477306);
   assert.equal(parseClaudeStream("").cliCostUsd, undefined);
 });
+
+test("claude: the 1-hour part of the cache writes comes from usage.cache_creation", () => {
+  assert.equal(parseClaudeStream(fixture("ok-sonnet-5-5.jsonl")).cacheWrite1h, 5680);
+  assert.equal(parseClaudeStream(fixture("ok-opus-5-5.jsonl")).cacheWrite1h, 5672);
+  assert.equal(parseClaudeStream(line({ type: "result", subtype: "success", num_turns: 1, usage: { cache_creation_input_tokens: 9 } })).cacheWrite1h, undefined);
+});

@@ -902,7 +902,8 @@ test("claude token pass: the CLI cost is total_cost_usd and the catalog cost is 
   await runPass(claudeReq(r), r.deps);
   const p = passes(r)[0]!;
   assert.equal(p.cli_cost_usd, 0.0477306);
-  assert.ok(Math.abs((p.catalog_cost_usd as number) - (2 * 5 + 4 * 25 + 11333 * 0.5 + 5672 * 6.25) / 1e6) < 1e-12);
+  assert.equal(p.cache_write_1h, 5672);
+  assert.ok(Math.abs((p.catalog_cost_usd as number) - (2 * 5 + 4 * 25 + 11333 * 0.5 + 5672 * 2 * 5) / 1e6) < 1e-12, "the capture's writes are all 1-hour: twice the input");
   assert.equal(p.cost_usd, null, "a token account has no bill");
 });
 
