@@ -177,7 +177,7 @@ test("a comma in any mounted path throws", () => {
 test("extra mounts cannot land on squad's own container paths", () => {
   for (const c of ["/squad", "/squad/lock", "/squad/token", "/pi", "/pi/auth.json", "/codex", "/claude/x", "/gh", "/gh/hosts.yml", "/squad/skills/../lock", "/squad/outx"])
     assert.throws(() => dockerRunArgv(plan({ mounts: [{ host: "/d", container: c, ro: true }] })), /reserved/, c);
-  for (const c of ["/squad/skills/.claude/skills/x", "/squad/out", "/squad/sessions", "/skills/x", "/ghost"])
+  for (const c of ["/squad/skills/squad/skills/x", "/squad/out", "/squad/sessions", "/skills/x", "/ghost"])
     assert.doesNotThrow(() => dockerRunArgv(plan({ mounts: [{ host: "/d", container: c, ro: true }] })), c);
 });
 
