@@ -55,7 +55,7 @@ test("happy path: PKCE S256, a session with only email, name, groups and exp", a
   assert.ok(res.ok);
   assert.deepEqual(Object.keys(res.session).sort(), ["email", "exp", "groups", "name"]);
   assert.equal(res.session.email, "alice@example.test");
-  assert.deepEqual(res.session.groups, ["squad"]);
+  assert.deepEqual(res.session.groups, [], "no admin group set: the session keeps no groups");
   const tr = p.tokenRequests[0]!;
   assert.equal(tr.pkceOk, true);
   const v = tr.form.get("code_verifier")!;
@@ -209,6 +209,46 @@ test("a required group must be in groups; no group setting lets any user in", as
   await refused(p, "not-in-group", createOidc(cfgOf(p, { group: "squad-admins" })));
 });
 
+const manyGroups = (): string[] => Array.from({ length: 500 }, (_, i) => `team-${String(i).padStart(3, "0")}-${"x".repeat(60)}`);
+
+test("a person with 500 long groups still gets a session cookie that fits 4 KB, and is admin", async () => {
+  reset(p);
+  p.mutate = (c) => { c.groups = [...manyGroups(), "squad-admins"]; };
+  const { oidc, res } = await signIn(p, createOidc(cfgOf(p, { adminGroup: "squad-admins" })));
+  assert.ok(res.ok);
+  assert.deepEqual(res.session.groups, ["squad-admins"]);
+  const set = res.setCookies.find((c) => c.startsWith("squad_session="))!;
+  assert.ok(set.length < 4096, `cookie line is ${set.length} bytes`);
+  const read = oidc.readSession(cookieOf(set));
+  assert.deepEqual(read?.groups, ["squad-admins"]);
+});
+
+test("with no admin group set the session holds no groups, however many the person has", async () => {
+  reset(p);
+  p.mutate = (c) => { c.groups = [...manyGroups(), "squad-admins"]; };
+  const { oidc, res } = await signIn(p);
+  assert.ok(res.ok);
+  assert.deepEqual(res.session.groups, []);
+  const set = res.setCookies.find((c) => c.startsWith("squad_session="))!;
+  assert.ok(set.length < 4096);
+  assert.deepEqual(oidc.readSession(cookieOf(set))?.groups, []);
+});
+
+test("the sign-in group is checked on the full list; a member who is not admin gets a session without groups", async () => {
+  reset(p);
+  const cfg = { group: "squad", adminGroup: "squad-admins" };
+  p.mutate = (c) => { c.groups = [...manyGroups(), "squad"]; };
+  const member = await signIn(p, createOidc(cfgOf(p, cfg)));
+  assert.ok(member.res.ok);
+  assert.deepEqual(member.res.session.groups, []);
+  p.mutate = (c) => { c.groups = [...manyGroups(), "squad", "squad-admins"]; };
+  const admin = await signIn(p, createOidc(cfgOf(p, cfg)));
+  assert.ok(admin.res.ok);
+  assert.deepEqual(admin.res.session.groups, ["squad-admins"]);
+  p.mutate = (c) => { c.groups = [...manyGroups(), "squad-admins"]; };
+  await refused(p, "not-in-group", createOidc(cfgOf(p, cfg)));
+});
+
 test("an unknown kid makes one JWKS refetch; a rotated key then works, an unknown one is refused", async () => {
   reset(p);
   const oidc = createOidc(cfgOf(p));
@@ -309,8 +349,8 @@ test("a discovery or jwks failure carries a fixed reason code", async () => {
 
 test("startSession gives the same session and cookie as a sign-in; an empty name falls back to the email", () => {
   let nowMs = 1_800_000_000_000;
-  const oidc = createOidc(cfgOf(p, { secure: true }), { now: () => nowMs });
-  const { session, setCookie } = oidc.startSession({ email: "ada@example.test", name: "", groups: ["dev"] });
+  const oidc = createOidc(cfgOf(p, { secure: true, adminGroup: "dev" }), { now: () => nowMs });
+  const { session, setCookie } = oidc.startSession({ email: "ada@example.test", name: "", groups: ["dev", "other"] });
   assert.deepEqual(session, { email: "ada@example.test", name: "ada@example.test", groups: ["dev"], exp: 1_800_000_000 + 12 * 3600 });
   assert.match(setCookie, /^squad_session=[A-Za-z0-9_-]+; HttpOnly; SameSite=Lax; Path=\/; Max-Age=43200; Secure$/);
   assert.deepEqual(oidc.readSession(cookieOf(setCookie)), session);
