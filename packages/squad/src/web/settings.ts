@@ -1,5 +1,5 @@
-// The settings of `squad web` and its secret file. Each setting is one EnvSpec row. The two secrets
-// (the OIDC client secret, the session key) live in `squad.secret.toml` in the home, never in the env.
+// The settings of `squad web` and its secret file. Each setting is one EnvSpec row. The secrets
+// (the OIDC client secret, the session key, the embed key) live in `squad.secret.toml` in the home, never in the env.
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -88,11 +88,13 @@ export interface WebConfig {
   readonly apiOrigins: readonly string[];
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
+  /** The key shared with the hub for embed tickets (`/auth/embed`); unset = that route is off. */
+  readonly embedKey?: Buffer;
   /** Cookies get `Secure` when the public URL is https. */
   readonly secure: boolean;
 }
 
-const SECRET_KEYS: readonly string[] = ["oidc_client_secret", "session_key"];
+const SECRET_KEYS: readonly string[] = ["oidc_client_secret", "session_key", "embed_key"];
 const LINE = /^([a-z][a-z0-9_]*)\s*=\s*"([^"\\]*)"$/;
 
 /**
@@ -115,6 +117,7 @@ export function parseSecretToml(text: string): Record<string, string> {
 interface Secrets {
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
+  readonly embedKey?: Buffer;
 }
 
 /** Reads the secret file (mode 0600 only), and makes the session key on the first start. */
@@ -137,7 +140,13 @@ function loadSecrets(path: string): Secrets {
   }
   const sessionKey = /^[A-Za-z0-9_-]+$/.test(key) ? Buffer.from(key, "base64url") : Buffer.alloc(0);
   if (sessionKey.length < 32) throw new Error("squad.secret.toml: session_key must be 32 random bytes in base64url");
-  return { ...(kv.oidc_client_secret === undefined || kv.oidc_client_secret === "" ? {} : { clientSecret: kv.oidc_client_secret }), sessionKey };
+  // The value is never in the message: it is a key.
+  if (kv.embed_key !== undefined && kv.embed_key !== "" && !/^[0-9a-fA-F]{64}$/.test(kv.embed_key)) throw new Error("squad.secret.toml: embed_key must be exactly 64 hex characters (32 bytes)");
+  return {
+    ...(kv.embed_key === undefined || kv.embed_key === "" ? {} : { embedKey: Buffer.from(kv.embed_key, "hex") }),
+    ...(kv.oidc_client_secret === undefined || kv.oidc_client_secret === "" ? {} : { clientSecret: kv.oidc_client_secret }),
+    sessionKey,
+  };
 }
 
 const isLoopback = (host: string): boolean => host === "127.0.0.1" || host === "localhost" || host === "[::1]";
@@ -182,6 +191,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
     apiOrigins: apiOriginsOf(envOptional(SQUAD_WEB_API_ORIGINS_ENV, env)),
     ...(secrets.clientSecret === undefined ? {} : { clientSecret: secrets.clientSecret }),
     sessionKey: secrets.sessionKey,
+    ...(secrets.embedKey === undefined ? {} : { embedKey: secrets.embedKey }),
     secure: web.protocol === "https:",
   };
 }

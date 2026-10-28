@@ -205,6 +205,12 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
     return c;
   }
 
+  /** An empty name falls back to the email. */
+  function startSession(who: { readonly email: string; readonly name: string; readonly groups: readonly string[] }): { session: Session; setCookie: string } {
+    const session: Session = { email: who.email, name: who.name === "" ? who.email : who.name, groups: who.groups, exp: Math.floor(now() / 1000) + SESSION_TTL_S };
+    return { session, setCookie: cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S) };
+  }
+
   return {
     /** Where to send the browser, and the login cookie to set with it. */
     async startLogin(to?: string): Promise<{ location: string; setCookie: string }> {
@@ -259,14 +265,15 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
       if (!isStr(claims.email) || claims.email_verified !== true) return fail("email-unverified");
       const groups = Array.isArray(claims.groups) ? claims.groups.filter(isStr) : [];
       if (cfg.group !== undefined && !groups.includes(cfg.group)) return fail("not-in-group");
-      const session: Session = {
-        email: claims.email,
-        name: isStr(claims.name) ? claims.name : isStr(claims.preferred_username) ? claims.preferred_username : claims.email,
-        groups,
-        exp: Math.floor(now() / 1000) + SESSION_TTL_S,
-      };
-      return { ok: true, session, to: safeReturnPath(typeof login.to === "string" ? login.to : undefined), setCookies: [cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S), clearLogin()] };
+      const { session, setCookie } = startSession({ email: claims.email, name: isStr(claims.name) ? claims.name : isStr(claims.preferred_username) ? claims.preferred_username : "", groups });
+      return { ok: true, session, to: safeReturnPath(typeof login.to === "string" ? login.to : undefined), setCookies: [setCookie, clearLogin()] };
     },
+
+    /**
+     * A session, and the cookie that holds it, for a person another party has already vouched for
+     * (the embed ticket). It is the same session and cookie as a normal sign-in.
+     */
+    startSession,
 
     /** The session in a Cookie header, or undefined when none, forged, or past its expiry. */
     readSession(cookieHeader: string | undefined): Session | undefined {

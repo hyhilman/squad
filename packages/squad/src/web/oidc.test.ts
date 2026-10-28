@@ -306,3 +306,14 @@ test("a discovery or jwks failure carries a fixed reason code", async () => {
   const partial = createOidc(cfgOf(p), { fetch: async () => new Response(JSON.stringify({ issuer: p.issuer }), { status: 200 }) });
   await assert.rejects(partial.startLogin(), (e: unknown) => e instanceof OidcError && e.reason === "discovery-incomplete");
 });
+
+test("startSession gives the same session and cookie as a sign-in; an empty name falls back to the email", () => {
+  let nowMs = 1_800_000_000_000;
+  const oidc = createOidc(cfgOf(p, { secure: true }), { now: () => nowMs });
+  const { session, setCookie } = oidc.startSession({ email: "ada@example.test", name: "", groups: ["dev"] });
+  assert.deepEqual(session, { email: "ada@example.test", name: "ada@example.test", groups: ["dev"], exp: 1_800_000_000 + 12 * 3600 });
+  assert.match(setCookie, /^squad_session=[A-Za-z0-9_-]+; HttpOnly; SameSite=Lax; Path=\/; Max-Age=43200; Secure$/);
+  assert.deepEqual(oidc.readSession(cookieOf(setCookie)), session);
+  nowMs += 13 * 3600_000;
+  assert.equal(oidc.readSession(cookieOf(setCookie)), undefined);
+});

@@ -252,7 +252,28 @@ only the email, name and groups. A person sees only the accounts they own. No to
 the browser.
 
 It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A client secret, if
-any, goes in `squad.secret.toml` (mode 600) in the squad home.
+any, goes in `squad.secret.toml` (mode 600) in the squad home. That file takes three keys:
+`oidc_client_secret`, `session_key` (made on the first start) and `embed_key` (below).
+
+### Show squad inside another app (embed ticket)
+
+An app on the same site can show squad in an iframe (`SQUAD_WEB_FRAME_ANCESTORS`) and sign the
+person in without a click. Set `embed_key` in `squad.secret.toml` to 64 hex characters (32 random
+bytes), and give the same key to that app's backend. Unset or empty = the feature is off, and
+`/auth/embed` is a plain 404.
+
+The app's backend signs a ticket for the person it has already signed in, and the frame opens
+`/auth/embed?ticket=<ticket>&to=<path>`. squad then sets its own normal session cookie and redirects
+to `to`. A ticket is `B.S`: `B` is the base64url (RFC 4648 section 5, no padding) of a JSON object, and
+`S` is the base64url of HMAC-SHA256 over the text `B`. The object has exactly these fields: `v` (1),
+`aud` (squad's `SQUAD_WEB_URL`, exactly), `email`, `name`, `groups` (strings), `iat` and `exp` (epoch
+seconds, `exp - iat` from 1 to 60) and `jti` (16 random bytes in base64url, used once).
+
+squad refuses a ticket that is expired, from before the server started, or already used, and one
+whose person is not in `SQUAD_OIDC_GROUP`. A refusal sets no cookie and redirects the same way, so
+the frame shows the signed-out card with its Sign in button. The request must come from the same
+site (`Sec-Fetch-Site` is `same-origin` or `same-site`); this stops another site from signing a
+visitor in with the attacker's own ticket.
 
 Signed out, the app never signs in by itself: it shows a Sign in button. The account menu has
 "Sign out" (squad's session only) and "Sign out everywhere", which also ends the identity
