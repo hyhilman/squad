@@ -129,3 +129,24 @@ test("a bad embed_key refuses the start, and the message never holds the value",
     assert.throws(() => loadWebConfig(ENV, h), (e: Error) => /embed_key/.test(e.message) && !e.message.includes(bad), bad);
   }
 });
+
+test("the secret file takes exactly three keys: a fourth is refused as unknown", () => {
+  const h = home();
+  const key = "ab".repeat(32);
+  writeFileSync(secretPath(h), `oidc_client_secret = "s3cret"\nsession_key = "${"A".repeat(43)}"\nembed_key = "${key}"\n`, { mode: 0o600 });
+  const c = loadWebConfig(ENV, h);
+  assert.equal(c.clientSecret, "s3cret");
+  assert.equal(c.sessionKey.length, 32);
+  assert.deepEqual(c.embedKey, Buffer.from(key, "hex"));
+  const more = home();
+  writeFileSync(secretPath(more), `oidc_client_secret = "s3cret"\nsession_key = "${"A".repeat(43)}"\nembed_key = "${key}"\nfourth_key = "x"\n`, { mode: 0o600 });
+  assert.throws(() => loadWebConfig(ENV, more), /unknown key fourth_key/);
+});
+
+test("a bad embed_key leaves the secret file as it was: no session_key is added", () => {
+  const h = home();
+  const text = 'embed_key = "nothex"\n';
+  writeFileSync(secretPath(h), text, { mode: 0o600 });
+  assert.throws(() => loadWebConfig(ENV, h), /embed_key/);
+  assert.equal(readFileSync(secretPath(h), "utf8"), text);
+});

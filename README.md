@@ -266,12 +266,15 @@ The app's backend signs a ticket for the person it has already signed in, and th
 `/auth/embed?ticket=<ticket>&to=<path>`. squad then sets its own normal session cookie and redirects
 to `to`. A ticket is `B.S`: `B` is the base64url (RFC 4648 section 5, no padding) of a JSON object, and
 `S` is the base64url of HMAC-SHA256 over the text `B`. The object has exactly these fields: `v` (1),
-`aud` (squad's `SQUAD_WEB_URL`, exactly), `email`, `name`, `groups` (strings), `iat` and `exp` (epoch
-seconds, `exp - iat` from 1 to 60) and `jti` (16 random bytes in base64url, used once).
+`aud` (the origin of `SQUAD_WEB_URL`: scheme, host and port if any, lower case, no trailing
+slash), `email`, `name`, `groups` (strings), `iat` and `exp` (epoch seconds, `exp - iat` from 1 to
+60) and `jti` (16 random bytes in base64url, used once).
 
-squad refuses a ticket that is expired, from before the server started, or already used, and one
-whose person is not in `SQUAD_OIDC_GROUP`. A refusal sets no cookie and redirects the same way, so
-the frame shows the signed-out card with its Sign in button. The request must come from the same
+squad refuses a ticket that is expired, already used, or made at most 5 seconds after the server
+started or earlier (a restart forgets the used ids, so an older ticket must not run again), and one
+whose `iat` is more than 5 seconds ahead of squad's clock, and one whose person is not in
+`SQUAD_OIDC_GROUP`. For about 6 seconds after each start, every ticket is refused. A refusal sets
+no cookie and redirects the same way, so the frame shows the signed-out card with its Sign in button. The request must come from the same
 site (`Sec-Fetch-Site` is `same-origin` or `same-site`); this stops another site from signing a
 visitor in with the attacker's own ticket.
 

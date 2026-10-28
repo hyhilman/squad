@@ -17,10 +17,11 @@ function sign(p: Payload, key: Buffer = KEY): string {
   return `${b}.${createHmac("sha256", key).update(b).digest("base64url")}`;
 }
 
-/** A checker whose clock is `clock.s` (epoch seconds) and which started at T0. */
+/** A checker whose clock is `clock.s` (epoch seconds). It started at T0 - 10, so a ticket made at T0 is past the start line. */
 function rig(extra: Partial<EmbedConfig> = {}) {
-  const clock = { s: T0 };
+  const clock = { s: T0 - 10 };
   const e = createEmbed({ key: KEY, url: URL_, ...extra }, { now: () => clock.s * 1000 });
+  clock.s = T0;
   return { e, clock };
 }
 const why = (r: ReturnType<ReturnType<typeof rig>["e"]["check"]>): string => (r.ok ? "ok" : r.reason);
@@ -101,14 +102,18 @@ test("an expired ticket, an iat too far ahead, a ticket from before the start", 
   clock.s = T0 + 60;
   assert.equal(why(e.check(sign(base()))), "expired");
   clock.s = T0;
-  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 61, exp: T0 + 100 }))), "future");
-  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 60, exp: T0 + 100, jti: "CCCCCCCCCCCCCCCCCCCCCC" }))), "ok", "60 s of clock skew is allowed");
-  assert.equal(why(e.check(sign({ ...base(), iat: T0 - 1, exp: T0 + 30, jti: "DDDDDDDDDDDDDDDDDDDDDD" }))), "before-start");
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 6, exp: T0 + 40 }))), "future");
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 5, exp: T0 + 40, jti: "CCCCCCCCCCCCCCCCCCCCCC" }))), "ok", "5 s of clock skew is allowed");
+  // The start line is start + 5 (the start was at T0 - 10): iat T0 - 5 is on it, T0 - 4 is past it.
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 - 5, exp: T0 + 30, jti: "DDDDDDDDDDDDDDDDDDDDDD" }))), "before-start");
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 - 4, exp: T0 + 30, jti: "EEEEEEEEEEEEEEEEEEEEEE" }))), "ok");
 });
 
 test("a ticket works once; the id is forgotten after its exp, and a refused ticket does not spend its id", () => {
   const { e, clock } = rig();
   assert.equal(why(e.check(sign({ ...base(), v: 2 }))), "bad-version");
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 - 5, exp: T0 + 30 }))), "before-start");
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 6, exp: T0 + 30 }))), "future");
   assert.equal(why(e.check(VECTOR)), "ok");
   assert.equal(why(e.check(VECTOR)), "reused");
   clock.s = T0 + 60;
@@ -127,7 +132,9 @@ test("at the cap, a new ticket is refused and an old id is not forgotten", () =>
 });
 
 test("the group rule: set = the ticket must hold it; unset = any group", () => {
-  assert.equal(why(rig({ group: "ops" }).e.check(VECTOR)), "not-in-group");
+  const ops = rig({ group: "ops" }).e;
+  assert.equal(why(ops.check(VECTOR)), "not-in-group");
+  assert.equal(why(ops.check(VECTOR)), "not-in-group", "a refusal for the group does not spend the id");
   assert.equal(why(rig({ group: "dev" }).e.check(VECTOR)), "ok");
   const { e } = rig();
   assert.equal(why(e.check(sign({ ...base(), groups: [] }))), "ok");
@@ -144,4 +151,36 @@ test("no refusal carries the ticket or a claim", () => {
   assert.ok(!r.ok);
   assert.ok(!JSON.stringify(r).includes("secret-person"));
   assert.match(r.reason, /^[a-z-]+$/);
+});
+
+test("a restart does not let a used ticket run again, whatever the hub's clock offset", () => {
+  const clock = { s: T0 };
+  const start = (): ReturnType<typeof createEmbed> => createEmbed({ key: KEY, url: URL_ }, { now: () => clock.s * 1000 });
+  for (const offset of [-3, 0, 1, 3, 5]) {
+    for (const gap of [0, 1, 2]) {
+      clock.s = T0 - 10;
+      const first = start();
+      clock.s = T0;
+      const t = sign({ ...base(), iat: T0 + offset, exp: T0 + offset + 60, jti: "RRRRRRRRRRRRRRRRRRRRRR" });
+      assert.equal(why(first.check(t)), "ok", `offset ${offset}`);
+      // The process dies right after the use and a new one starts `gap` seconds later.
+      clock.s = T0 + gap;
+      const second = start();
+      for (let s = T0 + gap; s <= T0 + gap + 10; s++) {
+        clock.s = s;
+        assert.notEqual(why(second.check(t)), "ok", `offset ${offset} gap ${gap} at ${s}`);
+      }
+    }
+  }
+});
+
+test("right after a start every ticket is refused; one made 6 seconds after the start passes", () => {
+  const clock = { s: T0 };
+  const e = createEmbed({ key: KEY, url: URL_ }, { now: () => clock.s * 1000 });
+  for (let s = T0; s <= T0 + 5; s++) {
+    clock.s = s;
+    assert.equal(why(e.check(sign({ ...base(), iat: s, exp: s + 30, jti: `S${s}`.padEnd(22, "A") }))), "before-start", String(s));
+  }
+  clock.s = T0 + 6;
+  assert.equal(why(e.check(sign({ ...base(), iat: T0 + 6, exp: T0 + 36, jti: "FFFFFFFFFFFFFFFFFFFFFF" }))), "ok");
 });

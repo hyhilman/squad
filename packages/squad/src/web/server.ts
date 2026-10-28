@@ -687,7 +687,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const cfg = loadWebConfig(opts.env, opts.home);
   const log = opts.log ?? makeLog();
   const oidc = createOidc(cfg, opts.fetch === undefined ? {} : { fetch: opts.fetch });
-  const embed = cfg.embedKey === undefined ? undefined : createEmbed({ key: cfg.embedKey, url: cfg.url, ...(cfg.group === undefined ? {} : { group: cfg.group }) });
+  const embed = cfg.embedKey === undefined ? undefined : createEmbed({ key: cfg.embedKey, url: cfg.url, ...(cfg.group === undefined ? {} : { group: cfg.group }) }, opts.now === undefined ? {} : { now: () => opts.now!().getTime() });
   const docker = envOptional(SQUAD_DOCKER_ENV, opts.env)!;
   const user = containerUser(docker);
   const real = dockerLoginRunner(opts.env, docker);

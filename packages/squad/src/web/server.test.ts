@@ -1965,22 +1965,30 @@ test("squad web serves none of squad serve's pass or conversation routes, even s
   await r.close();
 });
 
-// The embed ticket route. The server reads the real clock for tickets, as the session does.
+// The embed ticket route. The server reads opts.now for tickets, so a test moves the clock.
 const EMBED_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 const EMBED_SECRET = `embed_key = "${EMBED_KEY}"\n`;
-function ticketFor(over: Record<string, unknown> = {}, key: Buffer = Buffer.from(EMBED_KEY, "hex")): string {
-  const iat = Math.floor(Date.now() / 1000);
-  const p = { v: 1, aud: PUBLIC, email: "ada@example.test", name: "Ada", groups: ["squad"], iat, exp: iat + 30, jti: randomBytes(16).toString("base64url"), ...over };
-  const b = Buffer.from(JSON.stringify(p)).toString("base64url");
-  return `${b}.${createHmac("sha256", key).update(b).digest("base64url")}`;
-}
 const SAME = { "sec-fetch-site": "same-site" };
-const embedGet = (r: Rig, ticket: string, to?: string, headers: Record<string, string> = SAME): Promise<Response> =>
-  fetch(`${r.base}/auth/embed?ticket=${ticket}${to === undefined ? "" : `&to=${encodeURIComponent(to)}`}`, { redirect: "manual", headers });
+interface EmbedRig extends Rig { clock: { ms: number }; ticket: (over?: Record<string, unknown>, key?: Buffer) => string; get: (ticket: string, to?: string, headers?: Record<string, string>) => Promise<Response> }
+/** A server whose clock starts at NOW and then moves 10 s on, past the 6 s after a start when every ticket is refused. */
+async function embedRig(env: Record<string, string> = {}): Promise<EmbedRig> {
+  const clock = { ms: NOW.getTime() };
+  const r = await rig({ now: () => new Date(clock.ms) }, env, EMBED_SECRET);
+  clock.ms += 10_000;
+  const ticket = (over: Record<string, unknown> = {}, key: Buffer = Buffer.from(EMBED_KEY, "hex")): string => {
+    const iat = Math.floor(clock.ms / 1000);
+    const p = { v: 1, aud: PUBLIC, email: "ada@example.test", name: "Ada", groups: ["squad"], iat, exp: iat + 30, jti: randomBytes(16).toString("base64url"), ...over };
+    const b = Buffer.from(JSON.stringify(p)).toString("base64url");
+    return `${b}.${createHmac("sha256", key).update(b).digest("base64url")}`;
+  };
+  const get = (t: string, to?: string, headers: Record<string, string> = SAME): Promise<Response> =>
+    fetch(`${r.base}/auth/embed?ticket=${t}${to === undefined ? "" : `&to=${encodeURIComponent(to)}`}`, { redirect: "manual", headers });
+  return Object.assign(r, { clock, ticket, get });
+}
 
 test("/auth/embed is a plain 404 when there is no embed key", async () => {
   const r = await rig();
-  const res = await embedGet(r, ticketFor());
+  const res = await fetch(`${r.base}/auth/embed?ticket=x`, { redirect: "manual", headers: SAME });
   assert.equal(res.status, 404);
   assert.equal(await res.text(), "not found\n");
   const unknown = await fetch(`${r.base}/auth/nothing`);
@@ -1991,8 +1999,8 @@ test("/auth/embed is a plain 404 when there is no embed key", async () => {
 });
 
 test("a good ticket from the same site makes a session; later /api calls see it; the target goes through safeReturnPath", async () => {
-  const r = await rig({}, {}, EMBED_SECRET);
-  const res = await embedGet(r, ticketFor(), "/accounts/pi/dev?x=1");
+  const r = await embedRig();
+  const res = await r.get(r.ticket(), "/accounts/pi/dev?x=1");
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/accounts/pi/dev?x=1");
   assert.equal(res.headers.get("cache-control"), "no-store");
@@ -2005,7 +2013,7 @@ test("a good ticket from the same site makes a session; later /api calls see it;
   assert.equal(me.body.email, "ada@example.test");
   assert.equal(me.body.name, "Ada");
   for (const [to, want] of [["//evil.com", "/"], ["https://evil.com", "/"], ["/auth/login", "/"], [undefined, "/"]] as const) {
-    const back = await embedGet(r, ticketFor(), to);
+    const back = await r.get(r.ticket(), to);
     assert.equal(back.headers.get("location"), want);
     assert.equal(back.headers.getSetCookie().length, 1);
   }
@@ -2014,10 +2022,10 @@ test("a good ticket from the same site makes a session; later /api calls see it;
 });
 
 test("same-origin is also allowed; cross-site, none and a missing header are refused with no cookie, and the frame still lands on the page", async () => {
-  const r = await rig({}, {}, EMBED_SECRET);
-  assert.equal((await embedGet(r, ticketFor(), "/", { "sec-fetch-site": "same-origin" })).headers.getSetCookie().length, 1);
+  const r = await embedRig();
+  assert.equal((await r.get(r.ticket(), "/", { "sec-fetch-site": "same-origin" })).headers.getSetCookie().length, 1);
   for (const h of [{ "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "none" }, { "sec-fetch-site": "" }, {}] as Record<string, string>[]) {
-    const res = await embedGet(r, ticketFor(), "/accounts", h);
+    const res = await r.get(r.ticket(), "/accounts", h);
     assert.equal(res.status, 302, JSON.stringify(h));
     assert.equal(res.headers.get("location"), "/accounts");
     assert.equal(res.headers.getSetCookie().length, 0);
@@ -2029,16 +2037,17 @@ test("same-origin is also allowed; cross-site, none and a missing header are ref
 });
 
 test("a refused ticket logs only its reason and sets no cookie; a used ticket cannot run twice", async () => {
-  const r = await rig({}, {}, EMBED_SECRET);
-  const t = ticketFor();
-  assert.equal((await embedGet(r, t)).headers.getSetCookie().length, 1);
-  const again = await embedGet(r, t, "/x");
+  const r = await embedRig();
+  const t = r.ticket();
+  assert.equal((await r.get(t)).headers.getSetCookie().length, 1);
+  const again = await r.get(t, "/x");
   assert.equal(again.status, 302);
   assert.equal(again.headers.get("location"), "/x");
   assert.equal(again.headers.getSetCookie().length, 0);
   assert.ok(r.logs.some((l) => /event=embed_refused/.test(l) && /reason=reused/.test(l)));
-  for (const bad of [ticketFor({}, Buffer.alloc(32, 1)), ticketFor({ aud: "https://other.example.test" }), ticketFor({ iat: Math.floor(Date.now() / 1000) - 5 }), "garbage", "", "a".repeat(8193)]) {
-    const res = await embedGet(r, bad);
+  const startS = Math.floor(NOW.getTime() / 1000);
+  for (const bad of [r.ticket({}, Buffer.alloc(32, 1)), r.ticket({ aud: "https://other.example.test" }), r.ticket({ iat: startS + 5 }), "garbage", "", "a".repeat(8193)]) {
+    const res = await r.get(bad);
     assert.equal(res.status, 302);
     assert.equal(res.headers.getSetCookie().length, 0);
   }
@@ -2048,18 +2057,33 @@ test("a refused ticket logs only its reason and sets no cookie; a used ticket ca
   await r.close();
 });
 
+test("a ticket made in the first seconds after the start is refused", async () => {
+  const clock = { ms: NOW.getTime() };
+  const r = await rig({ now: () => new Date(clock.ms) }, {}, EMBED_SECRET);
+  const mk = (): string => {
+    const iat = Math.floor(clock.ms / 1000);
+    const b = Buffer.from(JSON.stringify({ v: 1, aud: PUBLIC, email: "ada@example.test", name: "Ada", groups: [], iat, exp: iat + 30, jti: randomBytes(16).toString("base64url") })).toString("base64url");
+    return `${b}.${createHmac("sha256", Buffer.from(EMBED_KEY, "hex")).update(b).digest("base64url")}`;
+  };
+  const go = (): Promise<Response> => fetch(`${r.base}/auth/embed?ticket=${mk()}`, { redirect: "manual", headers: SAME });
+  assert.equal((await go()).headers.getSetCookie().length, 0);
+  clock.ms += 6000;
+  assert.equal((await go()).headers.getSetCookie().length, 1);
+  await r.close();
+});
+
 test("a ticket is refused when the person is not in SQUAD_OIDC_GROUP", async () => {
-  const r = await rig({}, { SQUAD_OIDC_GROUP: "squad" }, EMBED_SECRET);
-  assert.equal((await embedGet(r, ticketFor({ groups: ["other"] }))).headers.getSetCookie().length, 0);
+  const r = await embedRig({ SQUAD_OIDC_GROUP: "squad" });
+  assert.equal((await r.get(r.ticket({ groups: ["other"] }))).headers.getSetCookie().length, 0);
   assert.ok(r.logs.some((l) => /reason=not-in-group/.test(l)));
-  assert.equal((await embedGet(r, ticketFor({ groups: ["squad"] }))).headers.getSetCookie().length, 1);
+  assert.equal((await r.get(r.ticket({ groups: ["squad"] }))).headers.getSetCookie().length, 1);
   await r.close();
 });
 
 test("/auth/embed answers GET only, with the same no-store and no-referrer headers", async () => {
-  const r = await rig({}, {}, EMBED_SECRET);
+  const r = await embedRig();
   for (const method of ["POST", "PUT", "DELETE"]) {
-    const res = await fetch(`${r.base}/auth/embed?ticket=${ticketFor()}`, { method, headers: SAME, redirect: "manual" });
+    const res = await fetch(`${r.base}/auth/embed?ticket=${r.ticket()}`, { method, headers: SAME, redirect: "manual" });
     assert.equal(res.status, 405, method);
     assert.equal(res.headers.get("allow"), "GET");
     assert.equal(res.headers.get("cache-control"), "no-store");
@@ -2070,11 +2094,11 @@ test("/auth/embed answers GET only, with the same no-store and no-referrer heade
 });
 
 test("a ticket never shows up in the log, whether it worked or not", async () => {
-  const r = await rig({}, {}, EMBED_SECRET);
-  const good = ticketFor();
-  const bad = ticketFor({ v: 2 });
-  await embedGet(r, good, "/a");
-  await embedGet(r, bad, "/a");
+  const r = await embedRig();
+  const good = r.ticket();
+  const bad = r.ticket({ v: 2 });
+  await r.get(good, "/a");
+  await r.get(bad, "/a");
   const all = r.logs.join("\n");
   assert.ok(/event=access/.test(all) && /route=auth\/embed/.test(all) && /status=302/.test(all));
   for (const t of [good, bad]) {

@@ -131,6 +131,8 @@ function loadSecrets(path: string): Secrets {
   }
   const kv = text === undefined ? {} : parseSecretToml(text);
   for (const k of Object.keys(kv)) if (!SECRET_KEYS.includes(k)) throw new Error(`squad.secret.toml: unknown key ${k}`);
+  // Before the file is written: a refused start must not change it. The value is never in the message.
+  if (kv.embed_key !== undefined && kv.embed_key !== "" && !/^[0-9a-fA-F]{64}$/.test(kv.embed_key)) throw new Error("squad.secret.toml: embed_key must be exactly 64 hex characters (32 bytes)");
   let key = kv.session_key;
   if (key === undefined) {
     key = randomBytes(32).toString("base64url");
@@ -140,8 +142,6 @@ function loadSecrets(path: string): Secrets {
   }
   const sessionKey = /^[A-Za-z0-9_-]+$/.test(key) ? Buffer.from(key, "base64url") : Buffer.alloc(0);
   if (sessionKey.length < 32) throw new Error("squad.secret.toml: session_key must be 32 random bytes in base64url");
-  // The value is never in the message: it is a key.
-  if (kv.embed_key !== undefined && kv.embed_key !== "" && !/^[0-9a-fA-F]{64}$/.test(kv.embed_key)) throw new Error("squad.secret.toml: embed_key must be exactly 64 hex characters (32 bytes)");
   return {
     ...(kv.embed_key === undefined || kv.embed_key === "" ? {} : { embedKey: Buffer.from(kv.embed_key, "hex") }),
     ...(kv.oidc_client_secret === undefined || kv.oidc_client_secret === "" ? {} : { clientSecret: kv.oidc_client_secret }),

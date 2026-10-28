@@ -92,7 +92,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 const isStr = (v: unknown): v is string => typeof v === "string" && v !== "";
 
 /** Compares in constant time: both sides are hashed first, so the lengths match. */
-function sameSecret(a: string, b: string): boolean {
+export function sameSecret(a: string, b: string): boolean {
   return timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 }
 
