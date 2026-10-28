@@ -315,6 +315,15 @@ test("safeReturnPath keeps a same-origin path and sends everything else to /", (
   assert.equal(safeReturnPath("/authors"), "/authors");
 });
 
+test("safeReturnPath resolves dot segments like a browser, so none reaches /auth or leaves the site", () => {
+  const bad = ["/./auth/embed?ticket=x", "/a/../auth/embed?ticket=x", "/%2e/auth/embed", "/a/%2e%2e/auth/embed", "/.%2e/auth/embed", "/x/./../auth", "/%2E%2E/auth/embed", "/a/b/../../auth/login", "/a/..//evil.com", "/a/%2e%2e//evil.com"];
+  for (const raw of bad) assert.equal(safeReturnPath(raw), "/", JSON.stringify(raw));
+  assert.equal(safeReturnPath("/accounts/pi/dev?x=1&y=2#top"), "/accounts/pi/dev?x=1&y=2#top");
+  assert.equal(safeReturnPath("/a/./b"), "/a/b");
+  assert.equal(safeReturnPath("/a/b/../c?q=1#h"), "/a/c?q=1#h");
+  assert.equal(safeReturnPath("/a/%2e/b"), "/a/b");
+});
+
 test("the return path rides in the sealed login cookie and comes back from finishLogin", async () => {
   reset(p);
   const oidc = createOidc(cfgOf(p));
