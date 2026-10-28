@@ -426,6 +426,8 @@ export const AUTH_PATHS = {
   logout: "/auth/logout",
   /** Ends squad's session and answers LogoutEverywhere: where to send the browser next. */
   logoutEverywhere: "/auth/logout/everywhere",
+  /** The hub's backend vouches for a person with a signed ticket (`?ticket=`); only when squad has an embed key. */
+  embed: "/auth/embed",
 } as const;
 
 /** The app's signed-out page. Sign out and Sign out everywhere both end here. */

@@ -110,3 +110,43 @@ test("SQUAD_OIDC_ADMIN_GROUP is read as is; an empty value is unset", () => {
   assert.equal(loadWebConfig({ ...ENV, SQUAD_OIDC_ADMIN_GROUP: "squad-admins" }, home()).adminGroup, "squad-admins");
   assert.equal(loadWebConfig({ ...ENV, SQUAD_OIDC_ADMIN_GROUP: "" }, home()).adminGroup, undefined);
 });
+
+test("embed_key: 64 hex characters load as 32 bytes; unset or empty = off", () => {
+  const key = "00112233445566778899aabbccddeeff00112233445566778899AABBCCDDEEFF";
+  const h = home();
+  assert.equal(loadWebConfig(ENV, h).embedKey, undefined);
+  writeFileSync(secretPath(h), `embed_key = "${key}"\n`, { mode: 0o600 });
+  assert.deepEqual(loadWebConfig(ENV, h).embedKey, Buffer.from(key, "hex"));
+  const off = home();
+  writeFileSync(secretPath(off), 'embed_key = ""\n', { mode: 0o600 });
+  assert.equal(loadWebConfig(ENV, off).embedKey, undefined);
+});
+
+test("a bad embed_key refuses the start, and the message never holds the value", () => {
+  for (const bad of ["abc", "zz".repeat(32), "00".repeat(31), "00".repeat(33), "0x" + "00".repeat(31)]) {
+    const h = home();
+    writeFileSync(secretPath(h), `embed_key = "${bad}"\n`, { mode: 0o600 });
+    assert.throws(() => loadWebConfig(ENV, h), (e: Error) => /embed_key/.test(e.message) && !e.message.includes(bad), bad);
+  }
+});
+
+test("the secret file takes exactly three keys: a fourth is refused as unknown", () => {
+  const h = home();
+  const key = "ab".repeat(32);
+  writeFileSync(secretPath(h), `oidc_client_secret = "s3cret"\nsession_key = "${"A".repeat(43)}"\nembed_key = "${key}"\n`, { mode: 0o600 });
+  const c = loadWebConfig(ENV, h);
+  assert.equal(c.clientSecret, "s3cret");
+  assert.equal(c.sessionKey.length, 32);
+  assert.deepEqual(c.embedKey, Buffer.from(key, "hex"));
+  const more = home();
+  writeFileSync(secretPath(more), `oidc_client_secret = "s3cret"\nsession_key = "${"A".repeat(43)}"\nembed_key = "${key}"\nfourth_key = "x"\n`, { mode: 0o600 });
+  assert.throws(() => loadWebConfig(ENV, more), /unknown key fourth_key/);
+});
+
+test("a bad embed_key leaves the secret file as it was: no session_key is added", () => {
+  const h = home();
+  const text = 'embed_key = "nothex"\n';
+  writeFileSync(secretPath(h), text, { mode: 0o600 });
+  assert.throws(() => loadWebConfig(ENV, h), /embed_key/);
+  assert.equal(readFileSync(secretPath(h), "utf8"), text);
+});

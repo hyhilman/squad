@@ -31,6 +31,7 @@ import type { Store } from "../store/db.ts";
 import { USAGE_BYS, getPassRow, listPassesPage, usageBy, usageSeries, type UsageBy } from "../usage/report.ts";
 import { ConnectPairs, clientKeyOf, squadVersion } from "./connect.ts";
 import { DeviceLogins, LoginRefused, dockerLoginRunner, type LoginRunner, type LoginTimers } from "./device-login.ts";
+import { createEmbed, type Embed } from "./embed.ts";
 import { createOidc, OidcError, safeReturnPath, type FailReason, type Session } from "./oidc.ts";
 import { accountView } from "./account-view.ts";
 import { passDetail, passViews } from "./passes.ts";
@@ -686,6 +687,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const cfg = loadWebConfig(opts.env, opts.home);
   const log = opts.log ?? makeLog();
   const oidc = createOidc(cfg, opts.fetch === undefined ? {} : { fetch: opts.fetch });
+  const embed = cfg.embedKey === undefined ? undefined : createEmbed({ key: cfg.embedKey, url: cfg.url, ...(cfg.group === undefined ? {} : { group: cfg.group }) }, opts.now === undefined ? {} : { now: () => opts.now!().getTime() });
   const docker = envOptional(SQUAD_DOCKER_ENV, opts.env)!;
   const user = containerUser(docker);
   const real = dockerLoginRunner(opts.env, docker);
@@ -802,6 +804,23 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     }
   }
 
+  /**
+   * The hub vouches for a person with a ticket in the query. Every answer is a redirect to the page the
+   * frame asked for: a refusal just sets no cookie, so the frame shows the signed-out card.
+   */
+  function embedSignIn(embed: Embed, req: IncomingMessage, res: ServerResponse, url: URL): void {
+    if (req.method !== "GET") return sendText(res, 405, "method not allowed\n", { allow: "GET", "cache-control": "no-store", "referrer-policy": "no-referrer" });
+    const headers: Record<string, string | string[]> = { location: safeReturnPath(url.searchParams.get("to")), "cache-control": "no-store", "referrer-policy": "no-referrer" };
+    // A page on another site could make a visitor's browser sign in with the attacker's own ticket
+    // (login CSRF), so only the hub's own site may send the person here.
+    const site = req.headers["sec-fetch-site"];
+    const done = site === "same-origin" || site === "same-site" ? embed.check(url.searchParams.get("ticket")) : ({ ok: false, reason: "fetch-site" } as const);
+    if (done.ok) headers["set-cookie"] = oidc.startSession(done.who).setCookie;
+    else log.warn("embed_refused", { reason: done.reason });
+    res.writeHead(302, headers);
+    res.end();
+  }
+
   async function auth(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL, setRoute: (r: string) => void): Promise<void> {
     setRoute(pathname.slice(1));
     const method = req.method;
@@ -827,6 +846,8 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
       }
       const body: LogoutEverywhere = end === undefined ? { to: `${SIGNED_OUT_PATH}?${SIGNED_OUT_SQUAD_ONLY}`, provider: false } : { to: end, provider: true };
       return sendJson(res, "auth/logout/everywhere", 200, body);
+    } else if (pathname === AUTH_PATHS.embed && embed !== undefined) {
+      return embedSignIn(embed, req, res, url);
     } else {
       return sendText(res, 404, "not found\n");
     }
