@@ -2072,6 +2072,21 @@ test("a ticket made in the first seconds after the start is refused", async () =
   await r.close();
 });
 
+test("a ticket's groups are cut to the admin group, so the cookie stays small", async () => {
+  // 80 groups is about the most a ticket can hold (8 KB); kept whole they would still pass 4 KB in the cookie.
+  const many = Array.from({ length: 80 }, (_, i) => `team-${String(i).padStart(3, "0")}-${"x".repeat(50)}`);
+  const r = await embedRig({ SQUAD_OIDC_GROUP: "squad", ...ADMIN });
+  const admin = await r.get(r.ticket({ groups: [...many, "squad", "squad-admins"] }));
+  const set = admin.headers.getSetCookie();
+  assert.equal(set.length, 1);
+  assert.ok(set[0]!.length < 4096, `cookie line is ${set[0]!.length} bytes`);
+  assert.equal((await api<Me>(r, set[0]!.split(";")[0]!, "GET", "/api/me")).body.admin, true);
+  const member = await r.get(r.ticket({ groups: [...many, "squad"] }));
+  assert.equal((await api<Me>(r, member.headers.getSetCookie()[0]!.split(";")[0]!, "GET", "/api/me")).body.admin, false);
+  assert.equal((await r.get(r.ticket({ groups: [...many, "squad-admins"] }))).headers.getSetCookie().length, 0, "the sign-in group is still needed");
+  await r.close();
+});
+
 test("a ticket is refused when the person is not in SQUAD_OIDC_GROUP", async () => {
   const r = await embedRig({ SQUAD_OIDC_GROUP: "squad" });
   assert.equal((await r.get(r.ticket({ groups: ["other"] }))).headers.getSetCookie().length, 0);

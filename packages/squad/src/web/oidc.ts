@@ -1,5 +1,5 @@
 // OIDC sign-in: code flow with PKCE, no library. This file never keeps the access, refresh or ID
-// token. It checks the ID token once, then the session holds only the email, name, groups and expiry.
+// token. It checks the ID token once, then the session holds only the email, name, the admin group (if any) and expiry.
 // An error from here carries a fixed reason word, never a token, a code or a claim.
 import { createHash, createPublicKey, timingSafeEqual, verify, randomBytes, type KeyObject } from "node:crypto";
 import { deriveKey, seal, unseal } from "./seal.ts";
@@ -10,6 +10,8 @@ export interface OidcConfig {
   readonly issuer: string;
   readonly clientId: string;
   readonly group?: string;
+  /** The one group the session keeps, when the person has it. */
+  readonly adminGroup?: string;
   readonly clientSecret?: string;
   readonly sessionKey: Buffer;
   readonly secure: boolean;
@@ -72,6 +74,7 @@ export const SESSION_COOKIE = "squad_session";
 export const LOGIN_COOKIE = "squad_oidc";
 const LOGIN_TTL_S = 600;
 const SESSION_TTL_S = 12 * 3600;
+const MAX_NAME = 200;
 const DOC_TTL_MS = 3600_000;
 const SKEW_S = 60;
 const HTTP_TIMEOUT_MS = 10_000;
@@ -205,9 +208,16 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
     return c;
   }
 
-  /** An empty name falls back to the email. */
+  /**
+   * An empty name falls back to the email. The session keeps only the admin group, never the whole
+   * list: a browser drops a cookie over 4 KB, so a person with many groups would land signed out.
+   */
   function startSession(who: { readonly email: string; readonly name: string; readonly groups: readonly string[] }): { session: Session; setCookie: string } {
-    const session: Session = { email: who.email, name: who.name === "" ? who.email : who.name, groups: who.groups, exp: Math.floor(now() / 1000) + SESSION_TTL_S };
+    const groups = cfg.adminGroup !== undefined && who.groups.includes(cfg.adminGroup) ? [cfg.adminGroup] : [];
+    // The name is only shown, so it is cut by code point rather than refused; a long one would push
+    // the cookie past the browser's limit too.
+    const name = Array.from(who.name === "" ? who.email : who.name).slice(0, MAX_NAME).join("");
+    const session: Session = { email: who.email, name, groups, exp: Math.floor(now() / 1000) + SESSION_TTL_S };
     return { session, setCookie: cookie(SESSION_COOKIE, seal(sessionKey, session), "/", SESSION_TTL_S) };
   }
 
