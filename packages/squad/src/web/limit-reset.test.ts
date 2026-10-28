@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { findForbidden } from "@squad/contract";
-import { addAccount, getAccount, getHealth } from "../accounts/store.ts";
+import { emptyHealth } from "../accounts/health.ts";
+import { addAccount, getAccount, getHealth, putHealth } from "../accounts/store.ts";
 import { ensureHome, layoutOf } from "../home.ts";
 import { makeLog } from "../log.ts";
 import { openStore } from "../store/db.ts";
@@ -105,7 +106,25 @@ test("a token account: the real CLI under a terminal, a scratch config at /claud
   assert.ok(!p.argv.join(" ").includes("oat01"));
   await new Promise((ok) => setTimeout(ok, 50));
   assert.equal(existsSync(cfg!.split(",")[1]!.replace("source=", "")), false, "the scratch config is removed");
-  assert.equal(getHealth(r.store.db, "claude/t").lastFailCode, null, "a limit reset changes no health");
+  assert.equal(getHealth(r.store.db, "claude/t").lastFailCode, null, "a limit reset writes no failure");
+});
+
+test("a done reset ends the account's cool-down and keeps the rest of its health; any other answer keeps the cool-down", async () => {
+  const cooling = { ...emptyHealth("claude/t"), coolUntil: "2026-10-24T18:00:00.000Z", coolKind: "quota", lastFailKind: "rate-limit", lastFailCode: "429", left5h: 100, leftWeek: 0 };
+  const done = rig();
+  putHealth(done.store.db, cooling);
+  done.setScript(answers("Session limit reset · next reset available Nov 1 · your weekly limit still applies"));
+  assert.equal(((await done.resets.run(done.token, "weekly")) as { outcome: string }).outcome, "done");
+  const h = getHealth(done.store.db, "claude/t");
+  assert.equal(h.coolUntil, null);
+  assert.equal(h.coolKind, null);
+  assert.equal(h.lastFailCode, "429");
+  assert.equal(h.leftWeek, 0);
+  const no = rig();
+  putHealth(no.store.db, cooling);
+  no.setScript(answers("A session-limit reset isn't available right now."));
+  assert.equal(((await no.resets.run(no.token, "weekly")) as { outcome: string }).outcome, "not-available");
+  assert.equal(getHealth(no.store.db, "claude/t").coolUntil, cooling.coolUntil);
 });
 
 test("a login account mounts its own folder under its lock; exit 75 is busy", async () => {

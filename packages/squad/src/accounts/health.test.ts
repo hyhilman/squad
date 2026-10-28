@@ -44,6 +44,33 @@ test("rate-limit cools for 5 minutes", () => {
   assert.equal(r.accountState, undefined);
 });
 
+test("rate-limit with an empty window cools until that window resets", () => {
+  const week = "2026-10-24T18:00:00.000Z";
+  const r = applyOutcome(base(), { failure: fail("rate-limit", "429"), room: { left5h: 100, leftWeek: 0, resets5h: "2026-10-24T16:50:00.000Z", resetsWeek: week } }, NOW);
+  assert.equal(r.health.coolUntil, week);
+  assert.equal(r.health.coolKind, "quota");
+  assert.equal(r.health.lastFailKind, "rate-limit");
+});
+
+test("rate-limit with both windows empty cools until the later reset", () => {
+  const r = applyOutcome(base(), { failure: fail("rate-limit", "429"), room: { left5h: 0, leftWeek: 0, resets5h: "2026-10-24T13:00:00.000Z", resetsWeek: "2026-10-24T18:00:00.000Z" } }, NOW);
+  assert.equal(r.health.coolUntil, "2026-10-24T18:00:00.000Z");
+});
+
+test("rate-limit ignores a stored empty window when the pass brought no room", () => {
+  const r = applyOutcome(base({ left5h: 0, leftWeek: 40, resets5h: "2026-10-24T14:00:00.000Z", resetsWeek: "2026-10-30T00:00:00.000Z" }), { failure: fail("rate-limit", "429") }, NOW);
+  assert.equal(r.health.coolUntil, iso(NOW.getTime() + 300_000));
+  assert.equal(r.health.coolKind, "rate-limit");
+});
+
+test("rate-limit with room left, or an empty window whose reset passed, cools for 5 minutes", () => {
+  const roomy = applyOutcome(base(), { failure: fail("rate-limit", "429"), room: { left5h: 30, leftWeek: 50, resets5h: "2026-10-24T14:00:00.000Z", resetsWeek: "2026-10-30T00:00:00.000Z" } }, NOW);
+  assert.equal(roomy.health.coolUntil, iso(NOW.getTime() + 300_000));
+  assert.equal(roomy.health.coolKind, "rate-limit");
+  const passed = applyOutcome(base(), { failure: fail("rate-limit", "429"), room: { left5h: 0, resets5h: "2026-10-24T11:00:00.000Z" } }, NOW);
+  assert.equal(passed.health.coolUntil, iso(NOW.getTime() + 300_000));
+});
+
 test("quota cools until the reset of the empty window", () => {
   const reset = "2026-10-24T15:00:00.000Z";
   const r = applyOutcome(base(), { failure: fail("quota", "402"), room: { left5h: 0, leftWeek: 50, resets5h: reset, resetsWeek: "2026-10-30T00:00:00.000Z" } }, NOW);

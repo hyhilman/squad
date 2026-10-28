@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LIMIT_RESET_WHICH, type LimitResetResult, type LimitResetWhich } from "@squad/contract";
-import type { AccountRow } from "../accounts/store.ts";
+import { endCooling, type AccountRow } from "../accounts/store.ts";
 import { maskedTrace, strip } from "../claude-token.ts";
 import { dockerRunArgv } from "../docker.ts";
 import type { HomeLayout } from "../home.ts";
@@ -151,6 +151,9 @@ export class LimitResets {
     try {
       const res = await this.drive(proc, container, which, id);
       log.info("limit_reset_ended", { account: a.id, outcome: res === "busy" ? "busy" : res.outcome });
+      // The account may rest until the window it used up resets; a spent reset ends that rest now.
+      // If another window is still empty, the next pass's 429 starts a new rest.
+      if (res !== "busy" && res.outcome === "done") endCooling(this.d.store.db, a.id);
       return res;
     } finally {
       this.running.delete(a.id);
