@@ -720,15 +720,15 @@ test("codex: with only a message, stdin is the message alone", async () => {
   assert.deepEqual(r.fake.stdins(), ["MSG"]);
 });
 
-test("claude: --append-system-prompt, --effort, the skill mounted read-only under .claude/skills with --add-dir, and the prompt starts /<name>", async () => {
+test("claude: --append-system-prompt, --effort, the skill mounted read-only as the squad plugin, and the prompt starts /<name>", async () => {
   const r = claudeRig();
   const dir = skillDir();
   await runPass(claudeReq(r, { system: "SYS", skill: { name: "fix", dir }, effort: "xhigh", prompt: "MSG" }), r.deps);
   const argv = r.fake.callsOf("run")[0]!;
   assert.deepEqual(flagValues(argv, "--append-system-prompt"), ["SYS"]);
   assert.deepEqual(flagValues(argv, "--effort"), ["xhigh"]);
-  assert.deepEqual(flagValues(argv, "--add-dir"), ["/squad/skills"]);
-  assert.deepEqual(roMount(argv, "/squad/skills/.claude/skills/fix"), { source: dir, ro: true });
+  assert.deepEqual(flagValues(argv, "--plugin-dir"), ["/squad/skills/squad"]);
+  assert.deepEqual(roMount(argv, "/squad/skills/squad/skills/fix"), { source: dir, ro: true });
   assert.deepEqual(r.fake.stdins(), ["/fix MSG"]);
 });
 
