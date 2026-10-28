@@ -2012,7 +2012,7 @@ test("a good ticket from the same site makes a session; later /api calls see it;
   assert.equal(me.status, 200);
   assert.equal(me.body.email, "ada@example.test");
   assert.equal(me.body.name, "Ada");
-  for (const [to, want] of [["//evil.com", "/"], ["https://evil.com", "/"], ["/auth/login", "/"], [undefined, "/"]] as const) {
+  for (const [to, want] of [["//evil.com", "/"], ["https://evil.com", "/"], ["/auth/login", "/"], ["/./auth/embed?ticket=y", "/"], [undefined, "/"]] as const) {
     const back = await r.get(r.ticket(), to);
     assert.equal(back.headers.get("location"), want);
     assert.equal(back.headers.getSetCookie().length, 1);
