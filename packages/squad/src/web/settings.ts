@@ -8,7 +8,7 @@ import { SQUAD_NO_WEB_LOGIN_ENV, envNum, envOn, envOptional, type EnvSpec } from
 
 export const SQUAD_WEB_URL_ENV: EnvSpec = {
   key: "SQUAD_WEB_URL",
-  why: "the public base URL of the web app, such as https://squad.example.com; required to start. Sign-in sends the browser back to it",
+  why: "the public base URL of the web app, such as https://squad.example.com, or a comma list of them when one squad answers on more than one host; required to start. Each request uses the entry whose host matches its Host header, and the first entry when none does. Sign-in sends the browser back to that entry",
 };
 export const SQUAD_WEB_PORT_ENV: EnvSpec = { key: "SQUAD_WEB_PORT", default: "20140", why: "the port `squad web` listens on; 0 = any free port" };
 export const SQUAD_WEB_BIND_ENV: EnvSpec = { key: "SQUAD_WEB_BIND", default: "127.0.0.1", why: "the address `squad web` listens on; keep the loopback and put a TLS proxy in front" };
@@ -72,9 +72,11 @@ export function allowedProviders(env: Readonly<Record<string, string | undefined
 }
 
 export interface WebConfig {
-  /** The public base URL, without a trailing slash. */
+  /** The first public base URL, without a trailing slash: the default for a request on no listed host. */
   readonly url: string;
   readonly origin: string;
+  /** Every public origin, the first one first. */
+  readonly origins: readonly string[];
   readonly port: number;
   readonly bind: string;
   readonly issuer: string;
@@ -90,7 +92,7 @@ export interface WebConfig {
   readonly sessionKey: Buffer;
   /** The key shared with the hub for embed tickets (`/auth/embed`); unset = that route is off. */
   readonly embedKey?: Buffer;
-  /** Cookies get `Secure` when the public URL is https. */
+  /** Cookies get `Secure` when the public URLs are https. */
   readonly secure: boolean;
 }
 
@@ -149,6 +151,20 @@ function loadSecrets(path: string): Secrets {
   };
 }
 
+/** The public URLs, in order. One scheme for all of them: the cookie's `Secure` flag is one choice. */
+function webUrlsOf(raw: string | undefined): readonly URL[] {
+  const list = (raw ?? "").split(",").map((s) => s.trim()).filter((s) => s !== "");
+  if (list.length === 0) throw new Error(`${SQUAD_WEB_URL_ENV.key} is required`);
+  const urls = list.map((one) => {
+    const u = parseUrl(SQUAD_WEB_URL_ENV, one);
+    if (u.pathname !== "/") throw new Error("SQUAD_WEB_URL must be an origin with no path");
+    return u;
+  });
+  if (new Set(urls.map((u) => u.host)).size !== urls.length) throw new Error("SQUAD_WEB_URL: each host may be listed once");
+  if (new Set(urls.map((u) => u.protocol)).size !== 1) throw new Error("SQUAD_WEB_URL: every entry must have the same scheme");
+  return urls;
+}
+
 const isLoopback = (host: string): boolean => host === "127.0.0.1" || host === "localhost" || host === "[::1]";
 
 function parseUrl(spec: EnvSpec, raw: string | undefined): URL {
@@ -167,8 +183,8 @@ function parseUrl(spec: EnvSpec, raw: string | undefined): URL {
 /** Everything `squad web` needs. Throws, with a message free of secrets, when it cannot start. */
 export function loadWebConfig(env: Readonly<Record<string, string | undefined>>, home: HomeLayout): WebConfig {
   if (envOn(SQUAD_NO_WEB_LOGIN_ENV, env)) throw new Error("SQUAD_NO_WEB_LOGIN=1: the web app does not start");
-  const web = parseUrl(SQUAD_WEB_URL_ENV, envOptional(SQUAD_WEB_URL_ENV, env));
-  if (web.pathname !== "/") throw new Error("SQUAD_WEB_URL must be an origin with no path");
+  const webs = webUrlsOf(envOptional(SQUAD_WEB_URL_ENV, env));
+  const web = webs[0]!;
   const issuerRaw = envOptional(SQUAD_OIDC_ISSUER_ENV, env);
   parseUrl(SQUAD_OIDC_ISSUER_ENV, issuerRaw);
   const clientId = envOptional(SQUAD_OIDC_CLIENT_ID_ENV, env);
@@ -181,6 +197,7 @@ export function loadWebConfig(env: Readonly<Record<string, string | undefined>>,
   return {
     url: web.origin,
     origin: web.origin,
+    origins: webs.map((u) => u.origin),
     port,
     bind: envOptional(SQUAD_WEB_BIND_ENV, env)!,
     issuer: issuerRaw!,

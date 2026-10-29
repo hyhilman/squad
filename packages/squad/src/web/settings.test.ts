@@ -150,3 +150,17 @@ test("a bad embed_key leaves the secret file as it was: no session_key is added"
   assert.throws(() => loadWebConfig(ENV, h), /embed_key/);
   assert.equal(readFileSync(secretPath(h), "utf8"), text);
 });
+
+test("SQUAD_WEB_URL may list more than one origin: the first is the default, each host once, one scheme", () => {
+  const h = home();
+  const c = loadWebConfig({ ...ENV, SQUAD_WEB_URL: " https://squad.example.test/ , https://squad.example.org ," }, h);
+  assert.deepEqual(c.origins, ["https://squad.example.test", "https://squad.example.org"]);
+  assert.equal(c.origin, "https://squad.example.test");
+  assert.equal(c.url, "https://squad.example.test");
+  assert.equal(c.secure, true);
+  assert.deepEqual(loadWebConfig(ENV, h).origins, ["https://squad.example.test"]);
+  assert.throws(() => loadWebConfig({ ...ENV, SQUAD_WEB_URL: "https://a.example.test,https://A.example.test/" }, h), /each host may be listed once/);
+  assert.throws(() => loadWebConfig({ ...ENV, SQUAD_WEB_URL: "https://a.example.test,http://127.0.0.1:3000" }, h), /same scheme/);
+  assert.throws(() => loadWebConfig({ ...ENV, SQUAD_WEB_URL: "https://a.example.test,https://b.example.test/app" }, h), /no path/);
+  assert.throws(() => loadWebConfig({ ...ENV, SQUAD_WEB_URL: " , " }, h), /SQUAD_WEB_URL is required/);
+});

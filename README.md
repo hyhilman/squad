@@ -256,6 +256,14 @@ It needs `SQUAD_WEB_URL`, `SQUAD_OIDC_ISSUER` and `SQUAD_OIDC_CLIENT_ID`. A clie
 any, goes in `squad.secret.toml` (mode 600) in the squad home. That file takes three keys:
 `oidc_client_secret`, `session_key` (made on the first start) and `embed_key` (below).
 
+One squad can answer on more than one host: set `SQUAD_WEB_URL` to a comma list, such as
+`https://squad.example.com,https://squad.example.org`. Each request uses the entry whose host is its
+`Host` header, and the first entry when none is. So the proxy in front must pass the browser's `Host`
+through. Register `<entry>/auth/callback` at the identity provider for every entry. A session cookie
+belongs to one host, so a person signs in on each host once. Use this to put squad on the same site
+as an app that frames it: a browser never sends squad's `SameSite=Lax` cookie to a frame on another
+site.
+
 ### Show squad inside another app (embed ticket)
 
 An app on the same site can show squad in an iframe (`SQUAD_WEB_FRAME_ANCESTORS`) and sign the
@@ -267,8 +275,8 @@ The app's backend signs a ticket for the person it has already signed in, and th
 `/auth/embed?ticket=<ticket>&to=<path>`. squad then sets its own normal session cookie and redirects
 to `to`. A ticket is `B.S`: `B` is the base64url (RFC 4648 section 5, no padding) of a JSON object, and
 `S` is the base64url of HMAC-SHA256 over the text `B`. The object has exactly these fields: `v` (1),
-`aud` (the origin of `SQUAD_WEB_URL`: scheme, host and port if any, lower case, no trailing
-slash), `email`, `name`, `groups` (strings), `iat` and `exp` (epoch seconds, `exp - iat` from 1 to
+`aud` (the origin of the `SQUAD_WEB_URL` entry the frame opens: scheme, host and port if any, lower
+case, no trailing slash), `email`, `name`, `groups` (strings), `iat` and `exp` (epoch seconds, `exp - iat` from 1 to
 60) and `jti` (16 random bytes in base64url, used once).
 
 squad refuses a ticket that is expired, already used, or made at most 5 seconds after the server
