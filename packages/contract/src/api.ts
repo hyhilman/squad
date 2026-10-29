@@ -711,6 +711,7 @@ export const LINE_TYPES = ["started", "output", "result"] as const;
 export const NDJSON = "application/x-ndjson";
 
 export const SERVE_ROUTES = {
+  serveVersion: { method: "GET", path: "/api/version" },
   serveAccounts: { method: "GET", path: "/api/accounts" },
   startPass: { method: "POST", path: "/api/passes" },
   passStatus: { method: "GET", path: "/api/passes/:passId" },
@@ -724,7 +725,14 @@ export type ServeRouteName = keyof typeof SERVE_ROUTES;
 export const STREAM_ROUTES = ["startPass", "sendTurn"] as const satisfies readonly ServeRouteName[];
 export type StreamRouteName = (typeof STREAM_ROUTES)[number];
 
+/** GET /api/version on `squad serve`. */
+export interface ServeVersion {
+  /** The running squad's package version, e.g. `0.1.0-rc.13`. */
+  readonly version: string;
+}
+
 export interface ServeApi {
+  serveVersion: { params: void; query: void; body: void; res: ServeVersion };
   serveAccounts: { params: void; query: void; body: void; res: readonly ServeAccountView[] };
   startPass: { params: void; query: void; body: ServePassBody; res: PassLine };
   /** Only a pass made with the same token; any other id is a 404. */

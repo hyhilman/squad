@@ -13,7 +13,7 @@ import { createConnection, createServer as createNetServer, type Server as NetSe
 import { join } from "node:path";
 import {
   HIDDEN, NDJSON, SERVE_ROUTES, findForbidden, maskSecrets, matchPath,
-  type Conversation as ApiConversation, type PassResult as ApiPassResult, type PassStatus, type ServeAccountView, type ServeRouteName, type TurnResult as ApiTurnResult,
+  type Conversation as ApiConversation, type PassResult as ApiPassResult, type PassStatus, type ServeAccountView, type ServeRouteName, type ServeVersion, type TurnResult as ApiTurnResult,
 } from "@squad/contract";
 import { getAccount, type AccountRow } from "../accounts/store.ts";
 import { close, open, send, type TurnResult } from "../conversations.ts";
@@ -26,6 +26,7 @@ import { NO_TOKENS, isBusy, type ServePassRow, type Store } from "../store/db.ts
 import type { Failure } from "../types.ts";
 import type { ImageInfo } from "../turn.ts";
 import { accountView } from "../web/account-view.ts";
+import { squadVersion } from "../web/connect.ts";
 import { openBody, passBody, turnBody } from "./body.ts";
 import { LOST, containerStates, openServeRows, watchContainer, type OpenServeRow, type Watched } from "./recover.ts";
 import { Refusal, scopeSetup, type ScopedSetup } from "./scope.ts";
@@ -174,6 +175,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
   const log = o.log ?? makeLog();
   const now = o.now ?? (() => new Date());
   const db = o.store.db;
+  // Read once at start: an upgrade on disk while serve runs must not change what it reports.
+  const version = squadVersion();
   const docker = envOptional(SQUAD_DOCKER_ENV, o.env)!;
   const user = o.user !== undefined ? o.user : containerUser(docker);
   const live = new Map<string, Live>();
@@ -302,6 +305,8 @@ export async function startServe(o: ServeOpts): Promise<ServeHandle> {
 
   async function route(name: ServeRouteName, params: Record<string, string>, token: ProjectToken, req: IncomingMessage, res: ServerResponse): Promise<void> {
     switch (name) {
+      case "serveVersion":
+        return sendJson(res, name, 200, { version } satisfies ServeVersion);
       case "serveAccounts": {
         const list: ServeAccountView[] = token.accounts
           .map((id) => getAccount(db, id))

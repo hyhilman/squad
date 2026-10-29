@@ -87,7 +87,7 @@ test("serve routes: under /api/, unique per method, no shadowing, and none of th
     const sample = r.path.replace(/:([a-zA-Z]+)/g, (_, k: string) => `x${k}`);
     for (const [other, o] of entries) if (other !== name && o.method === r.method) assert.equal(matchPath(o.path, sample), undefined, `${other} matches ${sample}`);
   }
-  assert.deepEqual(Object.keys(SERVE_ROUTES).sort(), ["closeConversation", "openConversation", "passStatus", "sendTurn", "serveAccounts", "startPass"]);
+  assert.deepEqual(Object.keys(SERVE_ROUTES).sort(), ["closeConversation", "openConversation", "passStatus", "sendTurn", "serveAccounts", "serveVersion", "startPass"]);
   assert.deepEqual([...STREAM_ROUTES], ["startPass", "sendTurn"]);
   assert.deepEqual([...LINE_TYPES], ["started", "output", "result"]);
   assert.deepEqual(matchPath(SERVE_ROUTES.sendTurn.path, "/api/conversations/abc/turns"), { id: "abc" });

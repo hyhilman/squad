@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -119,6 +119,14 @@ test("GET /api/accounts lists only the token's accounts, with no owner or accoun
   const text = JSON.stringify(list);
   assert.ok(!text.includes("owner@example.com"));
   assert.ok(!("ownerEmail" in list[0]!) && !("loginEmail" in list[0]!) && !("consentBy" in list[0]!));
+});
+
+test("GET /api/version gives the running squad's package version, and only with a token", async (t) => {
+  const r = await rig(t);
+  const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
+  assert.deepEqual(await call(r.f, BASE, "serveVersion", {}, { headers: r.headers }), { version: pkg.version });
+  assert.equal((await raw(r.sock, "GET", "/api/version", {})).status, 401);
+  assert.equal((await raw(r.sock, "POST", "/api/version", r.headers)).status, 405);
 });
 
 /** A pi key account with its folder, as the rig makes them. */

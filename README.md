@@ -224,6 +224,7 @@ another uid is refused.
 
 | Route | What it does |
 |---|---|
+| `GET /api/version` | `{version}`: the running squad's package version |
 | `GET /api/accounts` | the token's accounts (no emails) |
 | `POST /api/passes` | one pass; the answer is ndjson: `started`, `output`..., `result` |
 | `GET /api/passes/:passId` | `{running: true, ...}` or `{running: false, result}`; only the token's own passes |
