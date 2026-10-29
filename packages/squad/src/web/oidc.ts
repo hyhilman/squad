@@ -5,7 +5,7 @@ import { createHash, createPublicKey, timingSafeEqual, verify, randomBytes, type
 import { deriveKey, seal, unseal } from "./seal.ts";
 
 export interface OidcConfig {
-  /** The public base URL of the web app, no trailing slash. */
+  /** The public base URL of the web app, no trailing slash: the default for a sign-in that names none. */
   readonly url: string;
   readonly issuer: string;
   readonly clientId: string;
@@ -138,7 +138,7 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
   const now = deps.now ?? Date.now;
   const loginKey = deriveKey(cfg.sessionKey, "login");
   const sessionKey = deriveKey(cfg.sessionKey, "session");
-  const redirectUri = `${cfg.url}/auth/callback`;
+  const redirectUri = (origin: string): string => `${origin}/auth/callback`;
 
   const cookie = (name: string, value: string, path: string, maxAge: number): string =>
     `${name}=${value}; HttpOnly; SameSite=Lax; Path=${path}; Max-Age=${maxAge}${cfg.secure ? "; Secure" : ""}`;
@@ -247,8 +247,11 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
   }
 
   return {
-    /** Where to send the browser, and the login cookie to set with it. */
-    async startLogin(to?: string): Promise<{ location: string; setCookie: string }> {
+    /**
+     * Where to send the browser, and the login cookie to set with it. `origin` is the public origin the
+     * browser is on: the provider sends it back there, where the session cookie must land.
+     */
+    async startLogin(to?: string, origin: string = cfg.url): Promise<{ location: string; setCookie: string }> {
       const d = await discovery();
       const state = b64u(32);
       const nonce = b64u(32);
@@ -256,17 +259,17 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
       const u = new URL(d.authorization_endpoint);
       u.searchParams.set("response_type", "code");
       u.searchParams.set("client_id", cfg.clientId);
-      u.searchParams.set("redirect_uri", redirectUri);
+      u.searchParams.set("redirect_uri", redirectUri(origin));
       u.searchParams.set("scope", "openid email profile groups");
       u.searchParams.set("state", state);
       u.searchParams.set("nonce", nonce);
       u.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
       u.searchParams.set("code_challenge_method", "S256");
-      const sealed = seal(loginKey, { state, nonce, verifier, to: safeReturnPath(to), exp: now() + LOGIN_TTL_S * 1000 });
+      const sealed = seal(loginKey, { state, nonce, verifier, origin, to: safeReturnPath(to), exp: now() + LOGIN_TTL_S * 1000 });
       return { location: u.toString(), setCookie: cookie(LOGIN_COOKIE, sealed, "/auth", LOGIN_TTL_S) };
     },
 
-    async finishLogin(query: URLSearchParams, cookieHeader: string | undefined): Promise<FinishResult> {
+    async finishLogin(query: URLSearchParams, cookieHeader: string | undefined, origin: string = cfg.url): Promise<FinishResult> {
       const fail = (reason: FailReason): FinishResult => ({ ok: false, reason, setCookies: [clearLogin()] });
       const raw = cookies(cookieHeader).get(LOGIN_COOKIE);
       const login = raw === undefined ? undefined : unseal(loginKey, raw);
@@ -275,9 +278,13 @@ export function createOidc(cfg: OidcConfig, deps: OidcDeps = {}) {
       const state = query.get("state");
       const code = query.get("code");
       if (state === null || !sameSecret(state, login.state)) return fail("state-mismatch");
+      // The token endpoint wants the exact redirect_uri the sign-in started with. A login cookie from
+      // before origins were sealed started on the default one.
+      const started = isStr(login.origin) ? login.origin : cfg.url;
+      if (started !== origin) return fail("state-mismatch");
       if (code === null || code === "") return fail("provider-error");
 
-      const form = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, code_verifier: login.verifier });
+      const form = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri(started), code_verifier: login.verifier });
       const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
       if (cfg.clientSecret === undefined) form.set("client_id", cfg.clientId);
       else headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(cfg.clientSecret)}`).toString("base64")}`;

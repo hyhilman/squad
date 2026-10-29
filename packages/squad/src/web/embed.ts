@@ -7,7 +7,7 @@ import { sameSecret } from "./oidc.ts";
 export interface EmbedConfig {
   /** The 32-byte key the hub and squad share. */
   readonly key: Buffer;
-  /** squad's public base URL; the ticket's `aud` must equal it. */
+  /** squad's public base URL; the ticket's `aud` must equal it, unless `check` names another. */
   readonly url: string;
   /** A group the ticket's `groups` must hold, as for a normal sign-in. */
   readonly group?: string;
@@ -55,8 +55,11 @@ export function createEmbed(cfg: EmbedConfig, deps: EmbedDeps = {}) {
   const used = new Map<string, number>();
 
   return {
-    /** Checks the ticket and spends its id. The first failing check names the reason. */
-    check(ticket: unknown): EmbedResult {
+    /**
+     * Checks the ticket and spends its id. The first failing check names the reason. `origin` is the
+     * public origin the request came to, so a ticket made for one host never signs in on another.
+     */
+    check(ticket: unknown, origin: string = cfg.url): EmbedResult {
       const no = (reason: EmbedReason): EmbedResult => ({ ok: false, reason });
       if (typeof ticket === "string" && ticket.length > MAX_TICKET) return no("too-long"); // before any decoding
       if (typeof ticket !== "string") return no("bad-shape");
@@ -77,7 +80,7 @@ export function createEmbed(cfg: EmbedConfig, deps: EmbedDeps = {}) {
       if (!Array.isArray(groups) || !groups.every((g) => typeof g === "string") || !isInt(iat) || !isInt(exp)) return no("bad-payload");
       if (typeof jti !== "string" || !JTI.test(jti)) return no("bad-payload");
       if (v !== 1) return no("bad-version");
-      if (aud !== cfg.url) return no("bad-aud");
+      if (aud !== origin) return no("bad-aud");
       if (exp - iat < 1 || exp - iat > MAX_LIFETIME_S) return no("bad-lifetime");
       const nowS = Math.floor(now() / 1000);
       if (iat > nowS + EMBED_SKEW_S) return no("future");

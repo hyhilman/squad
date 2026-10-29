@@ -713,13 +713,29 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
   const handlers = makeHandlers(opts, logins, setups, connects, resets, cfg.adminGroup);
   const staticRoot = opts.staticDir ?? bundledPath("webapp");
 
-  const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === cfg.origin;
+  // The public origin a request came to: the listed one whose host is its Host header, else the first.
+  // Only listed origins can come out, so a forged Host picks at most another of squad's own hosts.
+  const byHost = new Map(cfg.origins.map((o) => [new URL(o).host, o]));
+  const unknownHosts = new Set<string>();
+  const originOf = (req: IncomingMessage): string => {
+    const host = (req.headers.host ?? "").toLowerCase();
+    const hit = byHost.get(host);
+    if (hit !== undefined) return hit;
+    // A proxy that rewrites Host sends every host to the first origin, so sign-in on the others never
+    // lands. Say so once per host; a loopback probe is the usual one.
+    if (cfg.origins.length > 1 && unknownHosts.size < 16 && !unknownHosts.has(host)) {
+      unknownHosts.add(host);
+      log.warn("web_host_unlisted", { host: host.slice(0, 100), origin: cfg.origin });
+    }
+    return cfg.origin;
+  };
+  const csrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && req.headers.origin === originOf(req);
   // /api writes may also come from a listed origin. /auth/logout keeps the strict check.
   const apiOrigin = (req: IncomingMessage): string | undefined => {
     const o = req.headers.origin;
     return o !== undefined && cfg.apiOrigins.includes(o) ? o : undefined;
   };
-  const apiCsrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && (req.headers.origin === cfg.origin || apiOrigin(req) !== undefined);
+  const apiCsrfOk = (req: IncomingMessage): boolean => req.headers["x-squad-csrf"] === "1" && (req.headers.origin === originOf(req) || apiOrigin(req) !== undefined);
   const CORS_METHODS = [...new Set(Object.values(ROUTES).map((r) => r.method))].join(", ");
 
   function sendJson(res: ServerResponse, route: string, status: number, body: unknown): void {
@@ -814,7 +830,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     // A page on another site could make a visitor's browser sign in with the attacker's own ticket
     // (login CSRF), so only the hub's own site may send the person here.
     const site = req.headers["sec-fetch-site"];
-    const done = site === "same-origin" || site === "same-site" ? embed.check(url.searchParams.get("ticket")) : ({ ok: false, reason: "fetch-site" } as const);
+    const done = site === "same-origin" || site === "same-site" ? embed.check(url.searchParams.get("ticket"), originOf(req)) : ({ ok: false, reason: "fetch-site" } as const);
     if (done.ok) headers["set-cookie"] = oidc.startSession(done.who).setCookie;
     else log.warn("embed_refused", { reason: done.reason });
     res.writeHead(302, headers);
@@ -853,7 +869,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
     }
     if (pathname === "/auth/login") {
       try {
-        const s = await oidc.startLogin(safeReturnPath(url.searchParams.get("to")));
+        const s = await oidc.startLogin(safeReturnPath(url.searchParams.get("to")), originOf(req));
         res.writeHead(302, { location: s.location, "set-cookie": s.setCookie });
         return void res.end();
       } catch (e) {
@@ -862,7 +878,7 @@ export async function startWeb(opts: WebOpts): Promise<WebHandle> {
         return sendText(res, 502, "sign-in unavailable\n");
       }
     }
-    const done = await oidc.finishLogin(url.searchParams, req.headers.cookie);
+    const done = await oidc.finishLogin(url.searchParams, req.headers.cookie, originOf(req));
     if (done.ok) {
       res.writeHead(302, { location: done.to, "set-cookie": [...done.setCookies] });
       return void res.end();

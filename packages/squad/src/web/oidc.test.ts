@@ -384,3 +384,25 @@ test("startSession cuts a long name to 200 code points, so the cookie still fits
   assert.ok(setCookie.length < 4096, `cookie line is ${setCookie.length} bytes`);
   assert.equal(oidc.startSession({ email: "ada@example.test", name: "Ada", groups: [] }).session.name, "Ada");
 });
+
+test("a sign-in started on another origin sends that redirect_uri at both steps, and finishes only there", async () => {
+  reset(p);
+  const oidc = createOidc(cfgOf(p));
+  const other = "http://localhost:3000";
+  const go = async (finishOn: string | undefined) => {
+    p.tokenRequests.length = 0;
+    const start = await oidc.startLogin("/x", other);
+    assert.equal(new URL(start.location).searchParams.get("redirect_uri"), `${other}/auth/callback`);
+    const back = new URL((await fetch(start.location, { redirect: "manual" })).headers.get("location")!);
+    return oidc.finishLogin(back.searchParams, cookieOf(start.setCookie), finishOn);
+  };
+  const ok = await go(other);
+  assert.ok(ok.ok);
+  assert.equal(ok.to, "/x");
+  assert.equal(p.tokenRequests[0]!.form.get("redirect_uri"), `${other}/auth/callback`);
+  for (const on of [undefined, "http://127.0.0.1:3000"]) {
+    const no = await go(on);
+    assert.equal(no.ok ? "ok" : no.reason, "state-mismatch", String(on));
+    assert.equal(p.tokenRequests.length, 0, "refused before the token endpoint");
+  }
+});

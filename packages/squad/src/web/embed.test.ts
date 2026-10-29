@@ -184,3 +184,9 @@ test("right after a start every ticket is refused; one made 6 seconds after the 
   clock.s = T0 + 6;
   assert.equal(why(e.check(sign({ ...base(), iat: T0 + 6, exp: T0 + 36, jti: "FFFFFFFFFFFFFFFFFFFFFF" }))), "ok");
 });
+
+test("check may name the origin the request came to: aud must equal it, not the default", () => {
+  const other = "https://other.example.test";
+  assert.equal(why(rig().e.check(sign({ ...base(), aud: other }), other)), "ok");
+  assert.equal(why(rig().e.check(sign(base()), other)), "bad-aud");
+});

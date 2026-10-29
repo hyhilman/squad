@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { recordPriceHistory, refreshPrices } from "../prices.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2121,5 +2122,88 @@ test("a ticket never shows up in the log, whether it worked or not", async () =>
   }
   assert.ok(!all.includes("ada@example.test"), "no claim");
   assert.ok(!/ticket=/.test(all), "no query");
+  await r.close();
+});
+
+// One squad on two hosts. The browser's Host header picks the origin; fetch cannot set Host, so these
+// requests go through node:http.
+const OTHER = "http://localhost:3000";
+const TWO = { SQUAD_WEB_URL: `${PUBLIC},${OTHER}` };
+interface HostReply { status: number; location: string | undefined; setCookie: string[] }
+function onHost(r: Rig, host: string, method: string, path: string, headers: Record<string, string> = {}): Promise<HostReply> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(`${r.base}${path}`, { method, headers: { ...headers, host } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location, setCookie: res.headers["set-cookie"] ?? [] }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+/** Starts a sign-in on `host`, and returns the provider's answer: the callback path and the login cookie. */
+async function loginOn(r: Rig, host: string): Promise<{ redirectUri: string; callback: string; loginCookie: string }> {
+  const login = await onHost(r, host, "GET", "/auth/login");
+  assert.equal(login.status, 302);
+  const redirectUri = new URL(login.location!).searchParams.get("redirect_uri")!;
+  const auth = await fetch(login.location!, { redirect: "manual" });
+  const back = new URL(auth.headers.get("location")!);
+  return { redirectUri, callback: `${back.pathname}${back.search}`, loginCookie: login.setCookie[0]!.split(";")[0]! };
+}
+
+test("two hosts: a sign-in on the second host comes back to it and sends its redirect_uri to the token endpoint", async () => {
+  const r = await rig({}, TWO);
+  const l = await loginOn(r, "localhost:3000");
+  assert.equal(l.redirectUri, `${OTHER}/auth/callback`);
+  const cb = await onHost(r, "localhost:3000", "GET", l.callback, { cookie: l.loginCookie });
+  assert.equal(cb.status, 302, "the fake provider checks redirect_uri at its token endpoint too");
+  assert.equal(p.tokenRequests.at(-1)!.form.get("redirect_uri"), `${OTHER}/auth/callback`);
+  assert.ok(cb.setCookie.some((c) => c.startsWith("squad_session=")));
+  await r.close();
+});
+
+test("two hosts: a callback on another host than the sign-in started on is refused", async () => {
+  const r = await rig({}, TWO);
+  const l = await loginOn(r, "localhost:3000");
+  const cb = await onHost(r, "127.0.0.1:3000", "GET", l.callback, { cookie: l.loginCookie });
+  assert.equal(cb.status, 400);
+  assert.ok(!cb.setCookie.some((c) => c.startsWith("squad_session=")));
+  assert.ok(r.logs.some((l) => /event=signin_refused/.test(l) && /reason=state-mismatch/.test(l)));
+  await r.close();
+});
+
+test("two hosts: a write must carry the Origin of the host it came to", async () => {
+  const r = await rig({}, TWO);
+  const c = await signIn(r, "ada@example.test");
+  const out = (host: string, origin: string): Promise<HostReply> => onHost(r, host, "POST", "/auth/logout", { cookie: c, origin, "x-squad-csrf": "1" });
+  assert.equal((await out("localhost:3000", OTHER)).status, 204);
+  assert.equal((await out("localhost:3000", PUBLIC)).status, 403, "the first origin on the second host");
+  assert.equal((await out("127.0.0.1:3000", OTHER)).status, 403, "the second origin on the first host");
+  assert.equal((await out("127.0.0.1:3000", PUBLIC)).status, 204);
+  await r.close();
+});
+
+test("two hosts: a host on no entry acts as the first one, and is logged once", async () => {
+  const r = await rig({}, TWO);
+  for (let i = 0; i < 2; i++) assert.equal((await loginOn(r, "squad.invalid")).redirectUri, `${PUBLIC}/auth/callback`);
+  assert.equal(r.logs.filter((l) => /event=web_host_unlisted/.test(l) && /host=squad\.invalid/.test(l)).length, 1);
+  await r.close();
+});
+
+test("one host: a request on any host acts as today, and logs nothing about it", async () => {
+  const r = await rig();
+  assert.equal((await loginOn(r, "squad.invalid")).redirectUri, `${PUBLIC}/auth/callback`);
+  assert.ok(!r.logs.some((l) => /event=web_host_unlisted/.test(l)));
+  await r.close();
+});
+
+test("two hosts: an embed ticket signs in only on the host its aud names", async () => {
+  const r = await embedRig(TWO);
+  const on = (host: string, aud: string): Promise<HostReply> => onHost(r, host, "GET", `/auth/embed?ticket=${r.ticket({ aud })}`, SAME);
+  const session = (x: HostReply): boolean => x.setCookie.some((c) => c.startsWith("squad_session="));
+  assert.ok(session(await on("localhost:3000", OTHER)));
+  assert.ok(!session(await on("localhost:3000", PUBLIC)));
+  assert.ok(!session(await on("127.0.0.1:3000", OTHER)));
+  assert.ok(session(await on("127.0.0.1:3000", PUBLIC)));
+  assert.equal(r.logs.filter((l) => /event=embed_refused/.test(l) && /reason=bad-aud/.test(l)).length, 2);
   await r.close();
 });
