@@ -157,7 +157,7 @@ test("start runs claude setup-token under a terminal, mounts only a throwaway /c
   assert.ok(argv.includes("-it"), "a terminal");
   assert.ok(argv.includes("squad.purpose=login"));
   assert.ok(argv.includes("COLUMNS=400") && argv.includes("LINES=50"));
-  assert.deepEqual(argv.slice(argv.indexOf("squad-claude:2.1.310") + 1), ["setup-token"]);
+  assert.deepEqual(argv.slice(argv.indexOf("squad-claude:2.1.310-r2") + 1), ["setup-token"]);
   const mounts = argv.filter((_, i) => argv[i - 1] === "--mount");
   assert.equal(mounts.length, 2, "the cwd and /claude, nothing else");
   assert.ok(!argv.join(" ").replaceAll(s.proc.staging, "").includes(r.home.root), "no path of the home except the staging folder");

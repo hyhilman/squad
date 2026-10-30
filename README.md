@@ -62,7 +62,9 @@ Failure kinds: `quota`, `rate-limit`, `auth`, `provider`, `idle`, `timeout`, `no
 npm install
 npm test
 
-# Build the runner image you need.
+# Build the runner image you need. Each one has node, git, gh, ripgrep, Python 3.12 and uv.
+# The tag (`squad-pi:1.1.0-r2`) changes when the CLI or the toolchain changes. After an update that
+# says "image ... not found", build it again.
 node packages/squad/src/cli/squad.ts image build pi
 
 # Make an account from a pi auth file you created with pi's /login, then try one pass.
