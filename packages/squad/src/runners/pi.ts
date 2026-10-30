@@ -1,5 +1,5 @@
-// The pure CLI args of a pi pass. The prompt is the last argument, after `--`, so a prompt that
-// starts with a dash is not read as a flag.
+// The pure CLI args of a pi pass. The prompt goes on stdin: Linux caps one argument at 128 KiB, and
+// pi in print mode reads piped stdin as the message.
 
 import type { Mount } from "../docker.ts";
 import { checkModel, checkSkillName } from "./model.ts";
@@ -31,6 +31,5 @@ export function cliArgs(req: PiRequest): CliPlan {
   }
   if (req.sessionId !== null) args.push("--session-dir", "/squad/sessions", "--session-id", req.sessionId);
   if (req.guidance !== null) args.push("--append-system-prompt", req.guidance);
-  args.push("--", req.prompt);
-  return { args, stdin: null, mounts };
+  return { args, stdin: req.prompt, mounts };
 }

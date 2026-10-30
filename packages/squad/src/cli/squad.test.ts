@@ -236,8 +236,7 @@ test("probe: ok prints one line with the tokens and exits 0", async () => {
   const r = probeRig("ok");
   assert.equal(await r.run("probe", "pi/x", "--model", "opencode-go/m"), 0);
   assert.equal(r.out.join(""), "pi/x ok opencode-go/hy4-preview in=1493 out=71 5h=- week=-\n");
-  const argv = r.fake.callsOf("run")[0]!;
-  assert.ok(argv.includes("Reply with the single word: ok"));
+  assert.deepEqual(r.fake.stdins(), ["Reply with the single word: ok"]);
 });
 
 test("probe: on a rootless daemon the pass runs with no --user; on a rootful one with the host user", async () => {
