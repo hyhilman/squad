@@ -1,23 +1,8 @@
-// The account user (which provider account this is) next to its squad owner.
-import { Box, Link, Text } from "@chakra-ui/react";
+// The link that fills an unknown account user.
+import { Link } from "@chakra-ui/react";
 import type { AccountView } from "@squad/contract";
 import { accountUser } from "../lib/accountUser.ts";
 import { useAccountActions } from "./actions.tsx";
-
-/** Two lines, like the Account column: the account user on top, the owner small and grey below. An unknown user says why on hover. */
-export function AccountUserText({ a }: { a: AccountView }) {
-  const u = accountUser(a);
-  return (
-    <Box minW="0" title={u.hint === undefined ? u.text : `${u.text}: ${u.hint}`}>
-      <Text fontSize="sm" truncate fontWeight={u.user === undefined ? undefined : "500"} color={u.user === undefined ? "fg.subtle" : "fg"} fontStyle={u.user === undefined ? "italic" : undefined}>
-        {u.user ?? "unknown account user"}
-      </Text>
-      <Text fontSize="xs" color="fg.muted" truncate>
-        {u.owner === "-" ? "no owner" : `owner ${u.owner}`}
-      </Text>
-    </Box>
-  );
-}
 
 /**
  * For an unknown account user: a link that opens the account's Log in again flow, which fills it. Only

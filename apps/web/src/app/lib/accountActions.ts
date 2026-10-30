@@ -32,6 +32,12 @@ export function splitActions(keys: readonly ActionKey[], a: Pick<AccountView, "h
   return { primary: keys.filter(urgent), menu: keys.filter((k) => !urgent(k)) };
 }
 
+/** A row of the accounts table shows Test, the floors (or caps) and Disable as icon buttons; the rest go in the ⋯ menu. */
+export function rowActions(keys: readonly ActionKey[]): { inline: ActionKey[]; menu: ActionKey[] } {
+  const inline = (k: ActionKey): boolean => k === "test" || k === "floors" || k === "enable";
+  return { inline: keys.filter(inline), menu: keys.filter((k) => !inline(k)) };
+}
+
 /** Remove asks the person to type the id; only the exact id counts. */
 export const confirmMatches = (typed: string, id: string): boolean => typed.trim() === id;
 

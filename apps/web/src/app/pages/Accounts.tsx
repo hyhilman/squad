@@ -9,7 +9,6 @@ import { lastPassByAccount } from "../lib/passFilter.ts";
 import { useAccounts, useMe, usePasses } from "../queries.ts";
 import { AccountMenu } from "../ui/actions.tsx";
 import { AddAccount } from "../ui/AddAccount.tsx";
-import { AccountUserText } from "../ui/AccountUser.tsx";
 import { Chip, EmptyBlock, ErrorBlock, HealthBadge, PageHeader, Panel, ProviderLogo, AccountRoom, logoOfRunner } from "../ui/parts.tsx";
 
 type HealthFilter = "" | "attention" | Health;
@@ -121,7 +120,6 @@ export function Accounts() {
                   <Stack gap="3" mt="3" pl="11">
                     <AccountRoom a={a} window="5h" label="5 hours" />
                     <AccountRoom a={a} window="week" label="7 days" />
-                    <AccountUserText a={a} />
                     <Text fontSize="xs" color="fg.subtle">
                       last pass {last[a.account] === undefined ? "-" : agoText(last[a.account], now())}
                     </Text>
@@ -135,14 +133,13 @@ export function Accounts() {
                 <Table.Header>
                   <Table.Row bg="bg.subtle">
                     <Table.ColumnHeader ps="5">Account</Table.ColumnHeader>
-                    <Table.ColumnHeader hideBelow="xl">Account user / Owner</Table.ColumnHeader>
                     <Table.ColumnHeader>Health</Table.ColumnHeader>
                     <Table.ColumnHeader w="190px">5 hours</Table.ColumnHeader>
                     <Table.ColumnHeader w="190px">7 days</Table.ColumnHeader>
                     <Table.ColumnHeader hideBelow="lg" textAlign="end">
                       Last pass
                     </Table.ColumnHeader>
-                    <Table.ColumnHeader w="12" pe="4" />
+                    <Table.ColumnHeader w="36" pe="4" />
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -150,9 +147,6 @@ export function Accounts() {
                     <Table.Row key={a.account} cursor="pointer" onClick={() => void navigate(`/accounts/${a.account}`)}>
                       <Table.Cell ps="5" py="3.5">
                         <NameCell a={a} />
-                      </Table.Cell>
-                      <Table.Cell hideBelow="xl" maxW="72">
-                        <AccountUserText a={a} />
                       </Table.Cell>
                       <Table.Cell>
                         <HealthBadge health={a.health} />

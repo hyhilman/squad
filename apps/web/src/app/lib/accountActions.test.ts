@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AccountView } from "@squad/contract";
-import { accountActions, confirmMatches, pickTestModel, splitActions } from "./accountActions.ts";
+import { accountActions, confirmMatches, pickTestModel, rowActions, splitActions } from "./accountActions.ts";
 
 const base: AccountView = {
   account: "codex/a", runner: "codex", name: "a", kind: "login", ownerEmail: "o@x.test", pools: [], health: "ok",
@@ -57,4 +57,12 @@ test("the test model: the server default if served or none is listed, else the f
   assert.equal(pickTestModel({ models: [], defaultModel: "zz" }), "");
   assert.equal(pickTestModel({ models: ["m1"] }), "m1");
   assert.equal(pickTestModel({ models: [] }), "");
+});
+
+test("a table row: Test, floors and Disable inline, in that order; the rest in the menu", () => {
+  assert.deepEqual(rowActions(["login", "test", "reset", "floors", "unshare", "enable", "remove"]), {
+    inline: ["test", "floors", "enable"],
+    menu: ["login", "reset", "unshare", "remove"],
+  });
+  assert.deepEqual(rowActions(["test", "floors", "remove"]), { inline: ["test", "floors"], menu: ["remove"] });
 });
