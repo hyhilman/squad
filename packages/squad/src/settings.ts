@@ -42,6 +42,11 @@ export const SQUAD_NO_AUTO_PROBE_ENV: EnvSpec = {
   default: "0",
   why: "1 = squad never starts a probe pass by itself",
 };
+export const SQUAD_NO_RESET_PROBE_ENV: EnvSpec = {
+  key: "SQUAD_NO_RESET_PROBE",
+  default: "0",
+  why: "1 = no probe pass after a window at or under its floor resets, so a claude account keeps its old room numbers until its next pass",
+};
 export const SQUAD_NO_WEB_LOGIN_ENV: EnvSpec = {
   key: "SQUAD_NO_WEB_LOGIN",
   default: "0",
@@ -145,15 +150,15 @@ export const SQUAD_TICK_S_ENV: EnvSpec = {
 };
 export const SQUAD_PROBE_MODEL_CODEX_ENV: EnvSpec = {
   key: "SQUAD_PROBE_MODEL_CODEX",
-  why: "the model an auto probe uses on a codex account; unset = no auto probe on codex, because there is no safe default",
+  why: "the model an auto probe uses on a codex account; unset = no auto probe on codex, because there is no safe default; the reset probe uses it only when no served model has a price",
 };
 export const SQUAD_PROBE_MODEL_CLAUDE_ENV: EnvSpec = {
   key: "SQUAD_PROBE_MODEL_CLAUDE",
-  why: "the model an auto probe uses on a claude account; unset = no auto probe on claude, because there is no safe default",
+  why: "the model an auto probe uses on a claude account; unset = no auto probe on claude, because there is no safe default; the reset probe uses it only when no served model has a price",
 };
 export const SQUAD_PROBE_MODEL_PI_ENV: EnvSpec = {
   key: "SQUAD_PROBE_MODEL_PI",
-  why: "the model an auto probe uses on a pi account; unset = no auto probe on pi, because there is no safe default",
+  why: "the model an auto probe uses on a pi account; unset = no auto probe on pi, because there is no safe default; the reset probe uses it only when no served model has a price",
 };
 
 export const SETTINGS: readonly EnvSpec[] = [
@@ -163,6 +168,7 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_DOCKER_ENV,
   SQUAD_NO_USAGE_READ_ENV,
   SQUAD_NO_AUTO_PROBE_ENV,
+  SQUAD_NO_RESET_PROBE_ENV,
   SQUAD_NO_WEB_LOGIN_ENV,
   SQUAD_NO_SERVE_ENV,
   SQUAD_SERVE_DRAIN_S_ENV,
