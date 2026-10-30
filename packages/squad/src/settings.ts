@@ -138,6 +138,11 @@ export const SQUAD_NO_KEY_CAPS_ENV: EnvSpec = {
   default: "0",
   why: "1 = the pool ignores the owners' dollar caps on key accounts, so squad may spend past a cap; off (caps in force) is the safe side",
 };
+export const SQUAD_NO_RESET_FIRST_ENV: EnvSpec = {
+  key: "SQUAD_NO_RESET_FIRST",
+  default: "0",
+  why: "1 = the pool sorts by room left only, not first by the soonest weekly reset",
+};
 export const SQUAD_TICK_S_ENV: EnvSpec = {
   key: "SQUAD_TICK_S",
   default: "60",
@@ -182,6 +187,7 @@ export const SETTINGS: readonly EnvSpec[] = [
   SQUAD_PRICES_URL_ENV,
   SQUAD_NO_PRICES_ENV,
   SQUAD_NO_KEY_CAPS_ENV,
+  SQUAD_NO_RESET_FIRST_ENV,
   SQUAD_TICK_S_ENV,
   SQUAD_PROBE_MODEL_CODEX_ENV,
   SQUAD_PROBE_MODEL_CLAUDE_ENV,

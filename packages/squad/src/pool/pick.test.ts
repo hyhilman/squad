@@ -71,6 +71,21 @@ test("most room on the tighter window first; ties go to the least recently used"
   assert.deepEqual(r.order, ["codex/d", "codex/c", "codex/b", "codex/a"]);
 });
 
+test("the soonest weekly reset goes first, before room; a reset not known or past sorts last", () => {
+  const at = (h: number): string => new Date(NOW + h * 3_600_000).toISOString();
+  const r = pick(
+    [
+      base("claude/ashton", { left5h: 63, leftWeek: 81, readAt: fresh, resetsWeek: at(167) }),
+      base("claude/hayes", { left5h: 83, leftWeek: 38, readAt: fresh, resetsWeek: at(61) }),
+      base("claude/evans", { left5h: 50, leftWeek: 36, readAt: fresh, resetsWeek: at(61) }),
+      base("claude/past", { left5h: 90, leftWeek: 90, readAt: fresh, resetsWeek: at(-1) }),
+      base("claude/none", { left5h: 95, leftWeek: 95, readAt: fresh }),
+    ],
+    NOW,
+  );
+  assert.deepEqual(r.order, ["claude/hayes", "claude/evans", "claude/ashton", "claude/none", "claude/past"]);
+});
+
 test("no account left gives an empty order, never a wait", () => {
   assert.deepEqual(pick([base("codex/a", { busy: true })], NOW).order, []);
 });

@@ -9,7 +9,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { PERMANENT_AUTH_CODES } from "../classify.ts";
 import type { AccountKind, Runner } from "../docker.ts";
 import type { Candidate, Health } from "../pool/pick.ts";
-import { envNum, envOn, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_NO_KEY_CAPS_ENV } from "../settings.ts";
+import { envNum, envOn, SQUAD_FLOOR_DEFAULT_ENV, SQUAD_NO_KEY_CAPS_ENV, SQUAD_NO_RESET_FIRST_ENV } from "../settings.ts";
 import { keyUsed } from "../usage/key-used.ts";
 import { emptyHealth, type HealthRow } from "./health.ts";
 
@@ -278,6 +278,7 @@ export function endCooling(db: DatabaseSync, id: string): void {
 export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (id: string) => boolean, env?: Readonly<Record<string, string | undefined>>): Candidate[] {
   const floor = envNum(SQUAD_FLOOR_DEFAULT_ENV, env);
   const caps = !envOn(SQUAD_NO_KEY_CAPS_ENV, env);
+  const resetFirst = !envOn(SQUAD_NO_RESET_FIRST_ENV, env);
   return listAccounts(db, runner).map((a) => {
     const h = getHealth(db, a.id);
     const health = healthOf(a, h, now);
@@ -288,6 +289,7 @@ export function candidates(db: DatabaseSync, runner: string, now: Date, busy: (i
       left5h: orUndef(h.left5h),
       leftWeek: orUndef(h.leftWeek),
       readAt: orUndef(h.readAt),
+      resetsWeek: resetFirst ? orUndef(h.resetsWeek) : undefined,
       floor5h: a.floor5h ?? floor,
       floorWeek: a.floorWeek ?? floor,
       busy: busy(a.id),

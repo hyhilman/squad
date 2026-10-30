@@ -137,6 +137,20 @@ test("SQUAD_NO_KEY_CAPS=1 makes the pool ignore caps; only exactly 1", () => {
   assert.deepEqual(pick(candidates(s.db, "pi", NOW, never, { SQUAD_NO_KEY_CAPS: "true" }), NOW.getTime()).order, []);
 });
 
+test("the pool sees the weekly reset; SQUAD_NO_RESET_FIRST=1 hides it, only exactly 1", () => {
+  const s = mk();
+  addAccount(s.db, { runner: "codex", name: "late", kind: "login" }, NOW);
+  addAccount(s.db, { runner: "codex", name: "soon", kind: "login" }, NOW);
+  for (const id of ["codex/late", "codex/soon"]) setConsent(s.db, id, NOW);
+  const read = NOW.toISOString();
+  putHealth(s.db, { ...emptyHealth("codex/late"), left5h: 90, leftWeek: 90, readAt: read, resetsWeek: new Date(NOW.getTime() + 6 * 86_400_000).toISOString() });
+  putHealth(s.db, { ...emptyHealth("codex/soon"), left5h: 90, leftWeek: 40, readAt: read, resetsWeek: new Date(NOW.getTime() + 86_400_000).toISOString() });
+  const order = (env: Record<string, string>): readonly string[] => pick(candidates(s.db, "codex", NOW, never, env), NOW.getTime()).order;
+  assert.deepEqual(order({}), ["codex/soon", "codex/late"]);
+  assert.deepEqual(order({ SQUAD_NO_RESET_FIRST: "1" }), ["codex/late", "codex/soon"]);
+  assert.deepEqual(order({ SQUAD_NO_RESET_FIRST: "true" }), ["codex/soon", "codex/late"]);
+});
+
 test("setOwnerBalance stores the entered balance with its time; null clears both", () => {
   const s = mk();
   addAccount(s.db, { runner: "pi", name: "k", kind: "key" }, NOW);
