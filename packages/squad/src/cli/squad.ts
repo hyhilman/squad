@@ -80,7 +80,7 @@ const USAGE = `usage: squad <verb>
   shell <account>                          a bash session in a container on one account
   log <passId>                             the last 50 lines of a pass log
   web [--api-only]                         the web app and its API (needs SQUAD_WEB_URL and the SQUAD_OIDC_* settings)
-                                           (not --api-only) it also runs a background loop: usage reads, auto probes, prices
+                                           (not --api-only) it also runs a background loop: usage reads, auto probes, prices, reset probes
   serve [--socket <path> | --port <n>]     provider mode: passes and conversations for machine callers with a
                                            project token, on a 0600 unix socket (default <home>/serve.sock) or
                                            on 127.0.0.1:<n>; run it as the project's user

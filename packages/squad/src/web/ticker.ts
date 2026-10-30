@@ -1,8 +1,10 @@
-// The background loop of `squad web`: once a tick it reads due codex usage, probes suspect accounts
-// and renews the price catalog. Steps run one after the other, and a tick never overlaps the last.
+// The background loop of `squad web`: once a tick it reads due codex usage, probes suspect accounts,
+// renews the price catalog and probes accounts whose window reset since their last read. Steps run one after the other, and a tick never overlaps the last.
 // The clock, the timers and every step's work are injected, so a test needs no timer and no network.
 
-import { dueProbes, PROBE_AFTER_MS } from "../accounts/probe.ts";
+import { dueProbes, dueResetProbes, MODEL_REFUSED_CODES, PROBE_AFTER_MS, probeLadder } from "../accounts/probe.ts";
+import { servedModels } from "../accounts/serves.ts";
+import type { ProbeOutcome } from "../cli/squad.ts";
 import { getHealth, listAccounts, type AccountRow } from "../accounts/store.ts";
 import { dueReads, readIntervalMs, refreshUsage } from "../accounts/usage-read.ts";
 import type { HomeLayout } from "../home.ts";
@@ -83,7 +85,7 @@ export interface StepDeps {
   readonly now: () => Date;
   readonly fetch: typeof globalThis.fetch;
   /** Runs one probe pass. The same code as `squad probe`; it is the caller's to give. */
-  readonly probe: (account: AccountRow, model: string) => Promise<unknown>;
+  readonly probe: (account: AccountRow, model: string) => Promise<ProbeOutcome | void>;
   /** Replaceable for tests. */
   readonly readUsage?: (account: AccountRow) => Promise<unknown>;
   readonly refreshPrices?: (o: RefreshPrices) => Promise<unknown>;
@@ -99,6 +101,8 @@ export function tickSteps(d: StepDeps): TickStep[] {
   // A failed probe leaves the account suspect and may leave `last_used_at` as it was, so `dueProbes`
   // would name it every tick. This map keeps a real pass to one per account per hour.
   const probedAt = new Map<string, number>();
+  // The reset each account was last probed for. A failed reset probe waits for the next reset.
+  const resetProbed = new Map<string, string>();
   // Old passes are priced once after a start, then after each new copy of the catalog.
   let backfilled = false;
   return [
@@ -164,6 +168,41 @@ export function tickSteps(d: StepDeps): TickStep[] {
         }
         const n = syncModelsFiles(d.home, d.store, loadProviders(d.home));
         if (n > 0) d.log.info("models-json-updated", { accounts: n });
+      },
+    },
+    {
+      // After prices, so the first tick already has a catalog to find the cheapest model in.
+      name: "reset-probe",
+      run: async () => {
+        const accounts = listAccounts(d.store.db);
+        const health = new Map(accounts.map((a) => [a.id, getHealth(d.store.db, a.id)]));
+        const due = dueResetProbes(accounts, health, d.now(), d.env).filter((p) => resetProbed.get(p.account.id) !== p.reset);
+        if (due.length === 0) return;
+        const prices = loadPrices(d.home);
+        const catalog = loadProviders(d.home);
+        for (const { account: a, reset } of due) {
+          resetProbed.set(a.id, reset);
+          const spec = PROBE_MODEL[a.runner];
+          const ladder = probeLadder(a.runner, servedModels(d.home, a, catalog), prices, spec === undefined ? undefined : d.env[spec.key]);
+          if (ladder.length === 0) {
+            d.log.info("reset-probe-skipped", { account: a.id, why: "no priced model and no probe model setting" });
+            continue;
+          }
+          // Only a refused model moves on to the next one. Any other failure would fail on a pricier
+          // model too, and two auth fails in a row kill the login.
+          for (const model of ladder) {
+            let res: ProbeOutcome | void;
+            try {
+              res = await d.probe(a, model);
+            } catch (e) {
+              d.log.warn("reset-probe-failed", { account: a.id, model, error: e instanceof Error ? e.name : "unknown" });
+              break;
+            }
+            const code = res?.failure?.code;
+            d.log.info("reset-probe", { account: a.id, model, ok: res !== undefined && res.failure === undefined, ...(res?.failure === undefined ? {} : { kind: res.failure.kind, code: res.failure.code }) });
+            if (code === undefined || !MODEL_REFUSED_CODES.has(code)) break;
+          }
+        }
       },
     },
   ];

@@ -116,8 +116,8 @@ const suspect = (store: ReturnType<typeof rig>["store"], name: string) => {
 };
 const names = (s: TickStep[]) => s.map((x) => x.name);
 
-test("tickSteps are reads, probes, prices, in that order", () => {
-  assert.deepEqual(names(tickSteps(rig().deps)), ["usage-read", "auto-probe", "prices"]);
+test("tickSteps are reads, probes, prices, reset probes, in that order", () => {
+  assert.deepEqual(names(tickSteps(rig().deps)), ["usage-read", "auto-probe", "prices", "reset-probe"]);
 });
 
 test("usage reads: a due account is read; a suspect one is not; SQUAD_NO_USAGE_READ=1 reads nothing", async () => {
@@ -243,4 +243,62 @@ test("startTicker: a bad SQUAD_TICK_S starts nothing and says so", () => {
 test("the settings are in the list", () => {
   const keys = SETTINGS.map((s) => s.key);
   for (const k of [SQUAD_TICK_S_ENV.key, "SQUAD_PROBE_MODEL_CODEX", "SQUAD_PROBE_MODEL_CLAUDE", "SQUAD_PROBE_MODEL_PI", SQUAD_PRICES_URL_ENV.key, SQUAD_NO_PRICES_ENV.key]) assert.ok(keys.includes(k), k);
+});
+
+// ---- reset probe ----
+
+const resetRig = (env: Record<string, string> = {}) => {
+  const r = rig(env);
+  addAccount(r.store.db, { runner: "claude", name: "c", kind: "token" }, NOW);
+  r.store.db.prepare("UPDATE accounts SET consent_at = ? WHERE id = ?").run(NOW.toISOString(), "claude/c");
+  putHealth(r.store.db, { ...emptyHealth("claude/c"), readAt: "2026-10-24T06:00:00.000Z", left5h: 0, resets5h: "2026-10-24T11:00:00.000Z" });
+  const catalog = { anthropic: { models: { big: { cost: { input: 15, output: 75 } }, mid: { cost: { input: 3, output: 15 } }, small: { cost: { input: 1, output: 5 } }, tiny: { cost: { input: 0.5, output: 1 } } } } };
+  writeFileSync(join(r.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog }));
+  return r;
+};
+const outcome = (model: string, failure?: { kind: string; code: string }) => ({ account: "claude/c", model, input: 1, output: 1, ms: 1, ...(failure === undefined ? {} : { failure: { ...failure, reason: "" } }) });
+const resetStep = (deps: Parameters<typeof tickSteps>[0]) => tickSteps(deps).find((s) => s.name === "reset-probe")!;
+
+test("reset probe: the cheapest model first; a clean answer stops; the same reset is not probed twice", async () => {
+  const r = resetRig();
+  const seen: string[] = [];
+  const step = resetStep({ ...r.deps, probe: async (_a, model) => { seen.push(model); return outcome(model); } });
+  await step.run();
+  await step.run();
+  assert.deepEqual(seen, ["tiny"]);
+});
+
+test("reset probe: a refused model moves up the ladder, at most three models", async () => {
+  const r = resetRig();
+  const seen: string[] = [];
+  await resetStep({ ...r.deps, probe: async (_a, model) => { seen.push(model); return outcome(model, { kind: "provider", code: "404" }); } }).run();
+  assert.deepEqual(seen, ["tiny", "small", "mid"]);
+  const r2 = resetRig();
+  const seen2: string[] = [];
+  await resetStep({ ...r2.deps, probe: async (_a, model) => { seen2.push(model); return outcome(model, model === "tiny" ? { kind: "provider", code: "404" } : undefined); } }).run();
+  assert.deepEqual(seen2, ["tiny", "small"]);
+});
+
+test("reset probe: any failure but a refused model stops at once", async () => {
+  for (const failure of [{ kind: "auth", code: "401" }, { kind: "provider", code: "529" }, { kind: "rate-limit", code: "429" }, { kind: "busy", code: "75" }]) {
+    const r = resetRig();
+    const seen: string[] = [];
+    await resetStep({ ...r.deps, probe: async (_a, model) => { seen.push(model); return outcome(model, failure); } }).run();
+    assert.deepEqual(seen, ["tiny"], failure.code);
+  }
+});
+
+test("reset probe: SQUAD_NO_RESET_PROBE=1 probes nothing; no price and no setting skips; the setting is the fallback", async () => {
+  const off = resetRig({ SQUAD_NO_RESET_PROBE: "1" });
+  await resetStep(off.deps).run();
+  assert.deepEqual(off.calls.probe, []);
+  const bare = resetRig();
+  writeFileSync(join(bare.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog: {} }));
+  await resetStep(bare.deps).run();
+  assert.deepEqual(bare.calls.probe, []);
+  assert.ok(bare.lines.some((l) => l.includes("reset-probe-skipped")));
+  const set = resetRig({ SQUAD_PROBE_MODEL_CLAUDE: "claude-x" });
+  writeFileSync(join(set.deps.home.state, "prices.json"), JSON.stringify({ v: 2, fetchedAt: NOW.getTime(), catalog: {} }));
+  await resetStep(set.deps).run();
+  assert.deepEqual(set.calls.probe, [{ id: "claude/c", model: "claude-x" }]);
 });
