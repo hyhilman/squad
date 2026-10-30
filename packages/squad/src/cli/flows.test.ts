@@ -117,7 +117,7 @@ test("login pi: no identity in the files, so --owner is kept as the owner", asyn
   r.fake.setLoginAuth('{"fake":"pi login"}');
   assert.equal(await r.run("login", "pi/p1", "--owner", "carol@example.test"), 0);
   assert.equal(rowOf(r.home, "pi/p1")?.ownerEmail, "carol@example.test");
-  assert.equal(r.fake.callsOf("run")[0]!.at(-1), "squad-pi:1.1.0");
+  assert.equal(r.fake.callsOf("run")[0]!.at(-1), "squad-pi:1.1.0-r2");
 });
 
 test("login: a dead account is re-logged and revived; the old folder is gone", async () => {
@@ -215,7 +215,7 @@ test("login claude: interactive with no args; the email comes from .claude.json 
   assert.equal(await r.run("login", "claude/c1", "--owner", "ALICE@example.test"), 0);
   const argv = r.fake.callsOf("run").at(-1)!;
   assert.equal(argv[2], "-it");
-  assert.equal(argv.at(-1), "squad-claude:2.1.310");
+  assert.equal(argv.at(-1), "squad-claude:2.1.310-r2");
   const dest = join(r.home.accounts, "claude", "c1");
   assert.ok(existsSync(join(dest, ".credentials.json")) && existsSync(join(dest, ".claude.json")));
   const row = rowOf(r.home, "claude/c1")!;
