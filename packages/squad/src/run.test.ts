@@ -98,7 +98,8 @@ test("ok: one pass row with the tokens, health updated, the key copy gone, one a
   assert.ok(acct[0]!.source.includes(`-${res.passId}-`), "gc tells the owner of a copy by the pass id in its name");
   assert.notEqual(acct[0]!.source, join(r.home.accounts, "pi", "k1"));
   assert.ok(!mountsOf(runs[0]!).some((m) => m.source.includes(r.home.accounts)), "no mount of the real folder");
-  assert.equal(runs[0]!.at(-1), "say ok");
+  assert.deepEqual(r.fake.stdins(), ["say ok"]);
+  assert.ok(!runs[0]!.includes("say ok"), "the prompt is in no argument");
 });
 
 test("the raw stdout and the prompt go gzipped to logs/passes/<date>/<passId>.{log,prompt}.gz with mode 0600", async () => {
@@ -418,10 +419,12 @@ test("claude login account: the real folder at /claude and the lock, as pi", asy
   assert.equal(m.filter((x) => x.target === "/squad/lock").length, 1);
 });
 
-test("pi keeps stdin empty: the prompt is the last argument", async () => {
+test("pi gets the prompt on stdin, so a prompt over the 128 KiB argument cap still runs", async () => {
   const r = rig();
-  await runPass(req(r), r.deps);
-  assert.deepEqual(r.fake.stdins(), [""]);
+  const big = "x".repeat(200 * 1024);
+  await runPass(req(r, { prompt: big }), r.deps);
+  assert.deepEqual(r.fake.stdins(), [big]);
+  assert.ok(!r.fake.callsOf("run")[0]!.includes(big));
 });
 
 test("a pass with all-zero usage (the pi auth error) writes no usage export", async () => {
@@ -456,7 +459,6 @@ test("session, first pass: its own folder (0700, empty) is mounted, pi gets the 
   assert.deepEqual(sessionMount(run), [{ source: dir, target: "/squad/sessions" }]);
   const i = run.indexOf("--session-dir");
   assert.deepEqual(run.slice(i, i + 4), ["--session-dir", "/squad/sessions", "--session-id", "s1"]);
-  assert.ok(i < run.indexOf("--"), "the flags come before the prompt");
   assert.equal(statSync(dir).mode & 0o777, 0o700);
   assert.deepEqual(readdirSync(dir), []);
   assert.equal(passes(r)[0]!.session_id, "s1");
@@ -702,7 +704,7 @@ test("pi: system, skill and effort become --append-system-prompt, --skill (a rea
   assert.deepEqual(flagValues(argv, "--skill"), ["/skills/fix"]);
   assert.deepEqual(flagValues(argv, "--thinking"), ["high"]);
   assert.deepEqual(roMount(argv, "/skills/fix"), { source: dir, ro: true });
-  assert.equal(argv.at(-1), "/skill:fix go");
+  assert.deepEqual(r.fake.stdins(), ["/skill:fix go"]);
 });
 
 test("codex: stdin is system, a blank line, the skill text without front matter, a blank line, the message; effort is -c", async () => {

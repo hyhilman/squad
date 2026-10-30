@@ -90,8 +90,7 @@ test("the skill is opened on the first turn only; later turns keep --skill and t
   await send(c, "issue=o/r#1", {}, r.deps);
   await send(c, "Reply with the comment.", {}, r.deps);
   const [x, y] = r.fake.callsOf("run");
-  assert.equal(x!.at(-1), "/skill:todo-exec issue=o/r#1");
-  assert.equal(y!.at(-1), "Reply with the comment.");
+  assert.deepEqual(r.fake.stdins(), ["/skill:todo-exec issue=o/r#1", "Reply with the comment."]);
   for (const argv of [x!, y!]) assert.ok(argv.includes("--skill") && argv.includes("--append-system-prompt"), "the same flags every turn, for the prompt cache");
 });
 
