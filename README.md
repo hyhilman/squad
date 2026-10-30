@@ -31,7 +31,9 @@ squad makes that impossible by design:
 ## What a pass does
 
 1. The pool drops accounts that are dead, disabled, cooling down, busy, or under their floor (the
-   share of each usage window kept for the owner). It sorts the rest by room left.
+   share of each usage window kept for the owner). It sorts the rest by the soonest weekly reset,
+   so room that would run out gets used first, then by room left. `SQUAD_NO_RESET_FIRST=1` sorts
+   by room left only.
 2. squad starts `docker run --init` on a pinned image for the first account. The container takes
    the account lock without waiting. If the lock is held, it exits 75 and squad tries the next one.
 3. squad reads the CLI's structured output: the final text, the token use, the room left in the

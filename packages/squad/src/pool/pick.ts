@@ -17,6 +17,8 @@ export interface Candidate {
   readonly leftWeek?: number;
   /** When that read was taken. A read older than `maxReadAgeMs` counts as no read. */
   readonly readAt?: string;
+  /** ISO time the weekly window resets, from the latest read that had one. Unset = not known. */
+  readonly resetsWeek?: string;
   /** The floors: the share of each window left for the owner. The pass needs more than this. */
   readonly floor5h: number;
   readonly floorWeek: number;
@@ -49,6 +51,12 @@ function room(c: Candidate, fresh: boolean): number {
   return Math.min(c.left5h - c.floor5h, c.leftWeek - c.floorWeek);
 }
 
+/** When the weekly window resets. A time not known, or already past, sorts last: no room runs out. */
+function resetAt(c: Candidate, now: number): number {
+  const t = time(c.resetsWeek);
+  return Number.isFinite(t) && t > now ? t : Infinity;
+}
+
 export interface PickOptions {
   /**
    * A probe of one named account. It may run on a suspect or cooling account: the probe is how such
@@ -60,7 +68,7 @@ export interface PickOptions {
 export function pick(candidates: readonly Candidate[], now: number = Date.now(), maxReadAgeMs: number = MAX_READ_AGE_MS, opts: PickOptions = {}): PickResult {
   const probe = opts.probe === true;
   const skipped: Record<string, Skip> = {};
-  const left: { c: Candidate; room: number }[] = [];
+  const left: { c: Candidate; reset: number; room: number }[] = [];
   for (const c of candidates) {
     if (c.health === "dead" || c.health === "disabled" || c.health === "moved" || c.health === "removed") {
       skipped[c.account] = c.health;
@@ -94,9 +102,12 @@ export function pick(candidates: readonly Candidate[], now: number = Date.now(),
       skipped[c.account] = "busy";
       continue;
     }
-    left.push({ c, room: room(c, fresh) });
+    left.push({ c, reset: resetAt(c, now), room: room(c, fresh) });
   }
   left.sort((a, b) => {
+    // The weekly room an account has above its floor is lost when the window resets, so the
+    // account whose week ends first goes first.
+    if (a.reset !== b.reset) return a.reset < b.reset ? -1 : 1;
     if (a.room !== b.room) return b.room - a.room;
     // Least recently used first; never used is the oldest.
     const ua = time(a.c.lastUsedAt);
