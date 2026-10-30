@@ -1,5 +1,5 @@
 // The acts on one account (lib/accountActions.ts says which a person may take). The accounts table
-// shows them in a "⋯" menu; the account page shows the urgent ones and Test as buttons, the rest in a
+// shows Test, floors and Disable as icon buttons and the rest in a "⋯" menu; the account page shows the urgent ones and Test as buttons, the rest in a
 // "⋯" menu. Both use this one hook.
 import { Box, Button, CloseButton, Dialog, Field, HStack, IconButton, Input, InputGroup, Menu, Portal, SimpleGrid, Stack, Text } from "@chakra-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,7 +10,7 @@ import { api } from "../api.ts";
 import { failureText } from "../lib/errors.ts";
 import { floorBody } from "../lib/floors.ts";
 import { BALANCE_HELP, CAP_HINT, balanceLine, capInput, capsBody, parseBalance, usdText } from "../lib/keyUse.ts";
-import { accountActions, splitActions, type ActionKey } from "../lib/accountActions.ts";
+import { accountActions, rowActions, splitActions, type ActionKey } from "../lib/accountActions.ts";
 import { useMe } from "../queries.ts";
 import { FloorEditor } from "./FloorEditor.tsx";
 import { Hint } from "./parts.tsx";
@@ -336,12 +336,24 @@ function MoreMenu({ a, actions, size = "xs", variant = "ghost" }: { a: AccountVi
   );
 }
 
-/** The "⋯" menu in a table row: every act. */
+/** The acts in a table row: Test, floors and Disable as icon buttons, the rest in a "⋯" menu. */
 export function AccountMenu({ a }: { a: AccountView }) {
   const { actions, dialogs } = useAccountActions(a);
+  const split = rowActions(actions.map((x) => x.key));
+  const inline = actions.filter((x) => split.inline.includes(x.key));
+  const menu = actions.filter((x) => split.menu.includes(x.key));
   return (
     <>
-      <MoreMenu a={a} actions={actions} />
+      <HStack gap="0.5" justify="flex-end">
+        {inline.map(({ key, label, icon: Icon, danger, run }) => (
+          <Hint key={key} text={label}>
+            <IconButton variant="ghost" size="xs" aria-label={`${label}: ${a.account}`} color={danger === true ? "fg.error" : "fg.muted"} onClick={run}>
+              <Icon size={15} />
+            </IconButton>
+          </Hint>
+        ))}
+        <MoreMenu a={a} actions={menu} />
+      </HStack>
       {dialogs}
     </>
   );
