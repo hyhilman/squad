@@ -102,7 +102,7 @@ test("a token account: the real CLI under a terminal, a scratch config at /claud
   assert.ok(p.argv.some((a) => a.endsWith("target=/squad/token,readonly")));
   const cfg = p.argv.find((a) => a.endsWith("target=/claude"));
   assert.ok(cfg !== undefined && !cfg.includes(r.home.root), "a scratch config outside the home");
-  assert.equal(p.argv.at(-1), "squad-claude:2.1.310", "no CLI args: the interactive claude");
+  assert.equal(p.argv.at(-1), "squad-claude:2.1.310-r2", "no CLI args: the interactive claude");
   assert.ok(!p.argv.join(" ").includes("oat01"));
   await new Promise((ok) => setTimeout(ok, 50));
   assert.equal(existsSync(cfg!.split(",")[1]!.replace("source=", "")), false, "the scratch config is removed");

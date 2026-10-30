@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildArgv, IMAGES, NODE_IMAGE } from "./images.ts";
+import { buildArgv, IMAGE_REVISION, IMAGES, NODE_IMAGE, PYTHON_VERSION, UV_IMAGE } from "./images.ts";
 
 const RUNNERS = ["pi", "codex", "claude"] as const;
 const CLI = { pi: "pi", codex: "codex", claude: "claude" } as const;
@@ -11,16 +11,21 @@ test("the table pins the versions and the tags", () => {
   assert.equal(IMAGES.pi.version, "1.1.0");
   assert.equal(IMAGES.codex.version, "0.162.1");
   assert.equal(IMAGES.claude.version, "2.1.310");
-  for (const r of RUNNERS) assert.equal(IMAGES[r].tag, `squad-${r}:${IMAGES[r].version}`);
+  assert.equal(IMAGE_REVISION, 2);
+  for (const r of RUNNERS) assert.equal(IMAGES[r].tag, `squad-${r}:${IMAGES[r].version}-r${IMAGE_REVISION}`);
   assert.match(NODE_IMAGE, /^node:22-bookworm-slim@sha256:[0-9a-f]{64}$/);
+  assert.match(UV_IMAGE, /^ghcr\.io\/astral-sh\/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/);
+  assert.match(PYTHON_VERSION, /^3\.(1[2-9])\.\d+$/, "an exact patch, 3.12 or newer");
 });
 
 test("buildArgv is the pure docker build argv", () => {
   assert.deepEqual(buildArgv("pi"), [
     "build", "-f", "images/pi/Dockerfile",
     "--build-arg", `NODE_IMAGE=${NODE_IMAGE}`,
+    "--build-arg", `UV_IMAGE=${UV_IMAGE}`,
+    "--build-arg", "PYTHON_VERSION=3.12.12",
     "--build-arg", "PI_VERSION=1.1.0",
-    "-t", "squad-pi:1.1.0",
+    "-t", "squad-pi:1.1.0-r2",
     "images",
   ]);
 });
@@ -45,6 +50,15 @@ for (const r of RUNNERS) {
     assert.ok(d.includes("GIT_SSH_COMMAND=/bin/false"));
     assert.ok(d.includes("GH_CONFIG_DIR=/gh"));
   });
+
+  test(`${r}: the Dockerfile installs uv and Python for any uid`, () => {
+    const d = dockerfile(r);
+    assert.match(d, /^FROM \$\{UV_IMAGE\} AS uv$/m);
+    assert.match(d, /^COPY --from=uv \/uv \/uvx \/usr\/local\/bin\/$/m);
+    assert.ok(d.includes('uv python install --no-cache --no-bin "$PYTHON_VERSION"'));
+    assert.ok(d.includes("/usr/local/bin/python3"));
+    assert.ok(d.includes("chmod -R a+rX /opt/uv-python"));
+  });
 }
 
 test("each image sets its account folder", () => {
@@ -66,4 +80,10 @@ test("the claude image ships squad-browser at the path the web sign-in sets as $
   assert.match(dockerfile("claude"), new RegExp(`^COPY --chmod=755 claude/squad-browser ${BROWSER_SCRIPT}$`, "m"));
   const script = readFileSync(new URL("../../../images/claude/squad-browser", import.meta.url), "utf8");
   assert.ok(script.includes(`/claude/${OPENED_FILE}`) && script.includes("umask 077"));
+});
+
+test("the README names the current pi tag and the Python of the images", () => {
+  const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
+  assert.ok(readme.includes(`(\`${IMAGES.pi.tag}\`)`));
+  assert.ok(readme.includes(`Python ${PYTHON_VERSION.split(".").slice(0, 2).join(".")} and uv`));
 });

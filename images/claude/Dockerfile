@@ -1,4 +1,4 @@
-# The claude runner image. It holds the toolchain only: node, git, gh, ripgrep, flock and a pinned claude.
+# The claude runner image. It holds the toolchain only: node, git, gh, ripgrep, flock, python, uv and a pinned claude.
 # No application code and no credentials. A pass mounts the worktree and one account folder.
 #
 # The build context is images/, so every runner can COPY the shared entry.sh.
@@ -7,6 +7,8 @@
 # are yours. No uid is baked in, so HOME is a world-writable dir.
 
 ARG NODE_IMAGE
+ARG UV_IMAGE
+FROM ${UV_IMAGE} AS uv
 FROM ${NODE_IMAGE}
 
 # util-linux is for flock: the account lock is taken inside the container (see entry.sh).
@@ -29,6 +31,20 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get update \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
+
+# Python and uv, so a pass can run a Python project's tests. Debian bookworm's python3 is 3.11, too old
+# for many projects, so uv installs its own build. It lives under /opt and is readable by any uid,
+# because the pass runs as the host uid. This layer sits before the CLI, so a CLI bump keeps it.
+ARG PYTHON_VERSION
+COPY --from=uv /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_PYTHON_PREFERENCE=only-managed
+RUN test -n "$PYTHON_VERSION" \
+  && uv python install --no-cache --no-bin "$PYTHON_VERSION" \
+  && ln -s "$(uv python find "$PYTHON_VERSION")" "/usr/local/bin/python${PYTHON_VERSION%.*}" \
+  && ln -s "python${PYTHON_VERSION%.*}" /usr/local/bin/python3 \
+  && ln -s "python${PYTHON_VERSION%.*}" /usr/local/bin/python \
+  && chmod -R a+rX /opt/uv-python
 
 # A pinned version, never `latest`. The pin lives in packages/squad/src/images.ts.
 ARG CLAUDE_VERSION
