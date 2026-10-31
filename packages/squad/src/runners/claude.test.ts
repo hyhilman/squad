@@ -13,11 +13,12 @@ test("minimal args, prompt on stdin", () => {
   assert.deepEqual(r.mounts, []);
 });
 
-test("effort and skill: the skill is a plugin named squad, since --setting-sources \"\" stops --add-dir skills", () => {
-  const r = cliArgs({ ...req, effort: "high", skill: { name: "fix", dir: "/s/fix" } });
-  assert.deepEqual(r.args, [...base, "--effort", "high", ...tail, "--plugin-dir", "/squad/skills/squad"]);
-  assert.ok(!r.args.includes("--add-dir"));
-  assert.deepEqual(r.mounts, [{ host: "/s/fix", container: "/squad/skills/squad/skills/fix", ro: true }]);
+test("effort and skill: the skill text joins the system prompt and the prompt goes once, as written", () => {
+  const r = cliArgs({ ...req, effort: "high", system: "be brief", skill: "Review the diff." });
+  assert.deepEqual(r.args, [...base, "--effort", "high", "--append-system-prompt", "be brief\n\nReview the diff.", ...tail]);
+  assert.equal(r.stdin, "do it");
+  assert.deepEqual(r.mounts, []);
+  assert.ok(!r.args.includes("--plugin-dir"));
 });
 
 test("a floating model alias is refused", () => {

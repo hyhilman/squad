@@ -722,16 +722,14 @@ test("codex: with only a message, stdin is the message alone", async () => {
   assert.deepEqual(r.fake.stdins(), ["MSG"]);
 });
 
-test("claude: --append-system-prompt, --effort, the skill mounted read-only as the squad plugin, and the prompt starts /<name>", async () => {
+test("claude: the system prompt is system, a blank line, the skill text without front matter; --effort; stdin is the message once", async () => {
   const r = claudeRig();
-  const dir = skillDir();
-  await runPass(claudeReq(r, { system: "SYS", skill: { name: "fix", dir }, effort: "xhigh", prompt: "MSG" }), r.deps);
+  await runPass(claudeReq(r, { system: "SYS", skill: { name: "fix", dir: skillDir() }, effort: "xhigh", prompt: "MSG" }), r.deps);
   const argv = r.fake.callsOf("run")[0]!;
-  assert.deepEqual(flagValues(argv, "--append-system-prompt"), ["SYS"]);
+  assert.deepEqual(flagValues(argv, "--append-system-prompt"), ["SYS\n\nStep one."]);
   assert.deepEqual(flagValues(argv, "--effort"), ["xhigh"]);
-  assert.deepEqual(flagValues(argv, "--plugin-dir"), ["/squad/skills/squad"]);
-  assert.deepEqual(roMount(argv, "/squad/skills/squad/skills/fix"), { source: dir, ro: true });
-  assert.deepEqual(r.fake.stdins(), ["/fix MSG"]);
+  assert.ok(!argv.includes("--plugin-dir"));
+  assert.deepEqual(r.fake.stdins(), ["MSG"]);
 });
 
 test("a bad skill name, a dir without SKILL.md and a bad effort are refused before any account or container", async () => {
