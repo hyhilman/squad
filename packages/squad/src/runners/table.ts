@@ -55,7 +55,8 @@ export const RUNNER_SPECS = {
     exportOf: (raw, _o, meta) => piExport(raw, meta),
   },
   claude: {
-    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.skill === undefined || r.openSkill === false ? r.prompt : `/${r.skill.name} ${r.prompt}`, skill: r.skill ?? null, system: r.system ?? null }),
+    // The skill rides in the system prompt on every turn, so the flags and the prompt cache stay the same.
+    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.prompt, skill: r.skill === undefined ? null : skillBody(r.skill.text), system: r.system ?? null }),
     stream: () => new ClaudeStream(),
     exportOf: (_raw, o, meta) => claudeExport(o, meta),
   },
