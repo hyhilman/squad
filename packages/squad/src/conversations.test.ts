@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,8 @@ import { addAccount, getHealth, setState } from "./accounts/store.ts";
 import { close, firstTurnRefused, open, send, type OpenRequest } from "./conversations.ts";
 import { ensureHome, layoutOf } from "./home.ts";
 import { makeLog } from "./log.ts";
-import type { RunDeps } from "./run.ts";
+import { runPass, type RunDeps } from "./run.ts";
+import { uuidOfUlid } from "./ids.ts";
 import { getSession } from "./sessions.ts";
 import { NO_TOKENS, openStore } from "./store/db.ts";
 
@@ -47,12 +48,9 @@ test("open writes the row and starts nothing; the lock is not taken", () => {
   assert.ok(!existsSync(join(r.home.locks, "pi", "k1.lock")), "no lock file made by open");
 });
 
-test("open refuses codex and claude, an unknown, dead or disabled account, and a runner mismatch", () => {
+test("open refuses an unknown, dead or disabled account, and a runner mismatch", () => {
   const r = rig();
   addAccount(r.store.db, { runner: "codex", name: "c1", kind: "login" }, NOW);
-  addAccount(r.store.db, { runner: "claude", name: "a1", kind: "login" }, NOW);
-  assert.throws(() => open(r.req({ runner: "codex", account: "codex/c1" }), r.deps), /codex.*not yet|not supported yet/);
-  assert.throws(() => open(r.req({ runner: "claude", account: "claude/a1" }), r.deps), /claude.*not yet|not supported yet/);
   assert.throws(() => open(r.req({ account: "pi/nope" }), r.deps), /unknown pi account/);
   assert.throws(() => open(r.req({ account: "codex/c1" }), r.deps), /unknown pi account/);
   setState(r.store.db, "pi/k1", "dead", "401", NOW);
@@ -191,4 +189,136 @@ test("onOutput is passed through", async () => {
   let seen = "";
   await send(c, "hi", { onOutput: (s) => (seen += s) }, r.deps);
   assert.ok(seen.length > 0);
+});
+
+// --- claude and codex ---
+
+/** A login made fresh for the test: an empty folder, never a real login. */
+function withLogin(r: ReturnType<typeof rig>, runner: "claude" | "codex", name: string): string {
+  addAccount(r.store.db, { runner, name, kind: "login" }, NOW);
+  const dir = join(r.home.accounts, runner, name);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+const filesUnder = (dir: string): string[] => readdirSync(dir, { recursive: true, encoding: "utf8" }).filter((p) => p.endsWith(".jsonl"));
+const mountOf = (argv: string[], target: string): string | undefined => argv.find((a, i) => argv[i - 1] === "--mount" && a.endsWith(`,target=${target}`))?.split(",")[1]!.replace("source=", "");
+
+test("claude: open, send, send on one account: --session-id then --resume, only the new text, the transcript in the conversation folder only", async () => {
+  const r = rig();
+  const login = withLogin(r, "claude", "a1");
+  r.fake.setModes("claude-conv");
+  const c = open(r.req({ runner: "claude", account: "claude/a1", model: "claude-opus-5-5", system: "be brief" }), r.deps);
+  const uuid = uuidOfUlid(c.id);
+  const a = await send(c, "first", {}, r.deps);
+  const b = await send(c, "second", {}, r.deps);
+  assert.equal(a.failure, undefined);
+  assert.equal(b.failure, undefined);
+  assert.equal(b.account, "claude/a1");
+  const [x, y] = r.fake.callsOf("run");
+  assert.deepEqual(x!.slice(x!.indexOf("--permission-mode") + 2, x!.indexOf("--strict-mcp-config")), ["--session-id", uuid]);
+  assert.deepEqual(y!.slice(y!.indexOf("--permission-mode") + 2, y!.indexOf("--strict-mcp-config")), ["--resume", uuid]);
+  for (const argv of [x!, y!]) {
+    assert.ok(!argv.includes("--no-session-persistence"));
+    assert.equal(argv[argv.indexOf("--append-system-prompt") + 1], "be brief", "the system prompt is a flag, on every turn");
+    assert.equal(argv[argv.indexOf("-w") + 1], r.cwd, "the same cwd every turn: the transcript folder is named after it");
+  }
+  assert.deepEqual(r.fake.stdins(), ["first", "second"]);
+  const dir = join(r.home.sessions, "claude", "a1", c.id);
+  assert.equal(mountOf(x!, "/claude/projects"), dir);
+  assert.deepEqual(filesUnder(dir), [join(r.cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${uuid}.jsonl`)]);
+  assert.deepEqual(filesUnder(login), [], "no transcript in the login folder");
+  assert.deepEqual(readdirSync(join(login, "projects")), [], "only the empty mount point");
+  assert.deepEqual(rows(r).map((p) => [p.account, p.session_id]), [["claude/a1", c.id], ["claude/a1", c.id]]);
+  // claude reports a resumed session's running cost: 0.0477306, then 0.0977306. Turn two spent 0.05.
+  const costs = (r.store.db.prepare("SELECT cli_cost_usd FROM passes ORDER BY rowid").all() as { cli_cost_usd: number }[]).map((p) => p.cli_cost_usd);
+  assert.equal(costs[0], 0.0477306);
+  assert.ok(Math.abs(costs[1]! - 0.05) < 1e-9, String(costs[1]));
+  close(c, r.deps);
+  assert.ok(!existsSync(dir));
+  assert.equal(r.store.db.prepare("SELECT closed_reason FROM conversations WHERE id = ?").get(c.id)!.closed_reason, "closed");
+});
+
+test("claude: a transcript under another cwd's folder is refused before any container starts", async () => {
+  const r = rig();
+  withLogin(r, "claude", "a1");
+  r.fake.setModes("claude-conv");
+  const c = open(r.req({ runner: "claude", account: "claude/a1", model: "claude-opus-5-5" }), r.deps);
+  await send(c, "first", {}, r.deps);
+  const dir = join(r.home.sessions, "claude", "a1", c.id);
+  renameSync(join(dir, r.cwd.replace(/[^a-zA-Z0-9]/g, "-")), join(dir, "-somewhere-else"));
+  await assert.rejects(send(c, "second", {}, r.deps), /transcript is under -somewhere-else, not under the folder of cwd .*must run in the cwd the conversation started in/);
+  assert.equal(r.fake.callsOf("run").length, 1);
+  assert.equal(rows(r).length, 1, "no pass row for the refused turn");
+});
+
+test("claude and codex: a new conversation on the same account never sees another's history", async () => {
+  const r = rig();
+  withLogin(r, "claude", "a1");
+  withLogin(r, "codex", "c1");
+  r.fake.setModes("claude-conv");
+  const c1 = open(r.req({ runner: "claude", account: "claude/a1", model: "claude-opus-5-5" }), r.deps);
+  await send(c1, "one", {}, r.deps);
+  const c2 = open(r.req({ runner: "claude", account: "claude/a1", model: "claude-opus-5-5" }), r.deps);
+  await send(c2, "two", {}, r.deps);
+  const [x, y] = r.fake.callsOf("run");
+  assert.notEqual(mountOf(x!, "/claude/projects"), mountOf(y!, "/claude/projects"));
+  assert.equal(y![y!.indexOf("--session-id") + 1], uuidOfUlid(c2.id), "a fresh transcript, not a resume");
+  assert.notEqual(uuidOfUlid(c1.id), uuidOfUlid(c2.id));
+  r.fake.setModes("codex-conv");
+  const k1 = open(r.req({ runner: "codex", account: "codex/c1", model: "gpt-6.1-sol" }), r.deps);
+  await send(k1, "one", {}, r.deps);
+  const k2 = open(r.req({ runner: "codex", account: "codex/c1", model: "gpt-6.1-sol" }), r.deps);
+  await send(k2, "two", {}, r.deps);
+  const [, , p, q] = r.fake.callsOf("run");
+  assert.notEqual(mountOf(p!, "/codex/sessions"), mountOf(q!, "/codex/sessions"));
+  assert.ok(!q!.includes("resume"), "the second conversation starts its own thread");
+});
+
+test("codex: open, send, send on one account: the thread id is kept, the next turn resumes it with only the new text, and counts only its own tokens", async () => {
+  const r = rig();
+  const login = withLogin(r, "codex", "c1");
+  r.fake.setModes("codex-conv");
+  const c = open(r.req({ runner: "codex", account: "codex/c1", model: "gpt-6.1-sol", system: "be brief" }), r.deps);
+  const a = await send(c, "first", {}, r.deps);
+  assert.equal(a.failure, undefined);
+  const row = () => r.store.db.prepare("SELECT resume_id, resume_totals FROM conversations WHERE id = ?").get(c.id) as { resume_id: string | null; resume_totals: string | null };
+  assert.equal(row().resume_id, "00000000-0000-7000-8000-000000000003");
+  const b = await send(c, "second", {}, r.deps);
+  assert.equal(b.failure, undefined);
+  const [x, y] = r.fake.callsOf("run");
+  assert.ok(!x!.includes("--ephemeral") && !x!.includes("resume"));
+  assert.ok(!y!.includes("--ephemeral"));
+  assert.deepEqual(y!.slice(-3), ["resume", "00000000-0000-7000-8000-000000000003", "-"]);
+  assert.deepEqual(r.fake.stdins(), ["be brief\n\nfirst", "second"], "a resumed thread has the system text already");
+  // codex said 14081/5 after turn one and 29081/12 after turn two: turn two spent 15000/7.
+  assert.deepEqual([a.usage.input, a.usage.output], [14081, 5]);
+  assert.deepEqual([b.usage.input, b.usage.output], [15000, 7]);
+  // Both pass ids come from the same fake millisecond, so insert order, not id order.
+  assert.deepEqual(r.store.db.prepare("SELECT input, output FROM passes ORDER BY rowid").all().map((p) => [p.input, p.output]), [[14081, 5], [15000, 7]]);
+  assert.equal((JSON.parse(row().resume_totals!) as { usage: { input: number } }).usage.input, 29081, "the next turn subtracts codex's latest total");
+  const dir = join(r.home.sessions, "codex", "c1", c.id);
+  assert.equal(mountOf(x!, "/codex/sessions"), dir);
+  assert.equal(filesUnder(dir).length, 1);
+  assert.deepEqual(filesUnder(login), [], "no rollout in the login folder");
+  close(c, r.deps);
+  assert.ok(!existsSync(dir));
+});
+
+test("codex: a kept thread id with no rollout on disk starts a new thread", async () => {
+  const r = rig();
+  withLogin(r, "codex", "c1");
+  r.fake.setModes("codex-conv");
+  const c = open(r.req({ runner: "codex", account: "codex/c1", model: "gpt-6.1-sol" }), r.deps);
+  await send(c, "first", {}, r.deps);
+  const dir = join(r.home.sessions, "codex", "c1", c.id);
+  for (const f of filesUnder(dir)) renameSync(join(dir, f), join(dir, "gone.txt"));
+  await send(c, "second", {}, r.deps);
+  const [, y] = r.fake.callsOf("run");
+  assert.ok(!y!.includes("resume"));
+});
+
+test("runPass: claude and codex keep a session only inside a conversation", async () => {
+  const r = rig();
+  withLogin(r, "claude", "a1");
+  await assert.rejects(runPass({ runner: "claude", model: "claude-opus-5-5", prompt: "x", account: "claude/a1", cwd: r.cwd, caller: { flow: "f", action: "a" }, session: "s1" }, r.deps), /keeps a session only in a conversation/);
 });

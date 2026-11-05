@@ -164,8 +164,9 @@ returns `{ home, store }` for the `deps`.
 
 ### Conversations and providers
 
-A conversation is many turns on one account (pi only for now; codex and claude refuse). The
-history stays in a folder under the squad home. The caller picks the account.
+A conversation is many turns on one account, for pi, claude and codex. The history stays in a
+folder for each conversation under the squad home, never in the login folder. The caller picks the
+account.
 
 ```ts
 import { open, send, close, listAccountsWithServes } from "squad";
@@ -180,7 +181,9 @@ close(conv, deps);
   them for every turn. It refuses an unknown, dead or disabled account.
 - `send` is one pass on that account, always. If another pass holds the account's lock, it answers
   at once with failure kind `busy`; ask again later. Each turn has a pass row with the conversation
-  id.
+  id. A later turn sends only the new text: claude resumes its transcript (`--resume`), codex its
+  thread (`codex exec resume`). Every turn runs in the `cwd` given to `open`; claude refuses a turn
+  whose transcript sits under another cwd.
 - If the first turn is refused (`quota`, `rate-limit` or `auth`) with zero tokens, the tie is dropped:
   `turn.closed` is `"first-turn-refused"` and the caller can `open` again on another account.
 - `close` deletes the history and is safe to call twice. `squad gc` closes a conversation that

@@ -70,7 +70,7 @@ test("isBusy reads the sqlite code, not the message", () => {
 });
 
 test("the migration count and the table list are pinned", () => {
-  assert.equal(MIGRATIONS.length, 35);
+  assert.equal(MIGRATIONS.length, 37);
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "mig-")), "x.db"));
   migrate(db);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);

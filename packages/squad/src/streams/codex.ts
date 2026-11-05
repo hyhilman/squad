@@ -14,6 +14,7 @@ export class CodexStream {
   #failed: string | undefined;
   #error: string | undefined;
   #failedSeen = false;
+  #threadId: string | undefined;
 
   push(chunk: string): void {
     this.#lines.push(chunk);
@@ -24,7 +25,9 @@ export class CodexStream {
   }
 
   #event(e: Record<string, unknown>): void {
-    if (e.type === "item.completed" && isObj(e.item) && e.item.type === "agent_message" && typeof e.item.text === "string") {
+    if (e.type === "thread.started" && typeof e.thread_id === "string") {
+      this.#threadId = e.thread_id;
+    } else if (e.type === "item.completed" && isObj(e.item) && e.item.type === "agent_message" && typeof e.item.text === "string") {
       this.#texts.push(e.item.text);
     } else if (e.type === "turn.completed") {
       this.#turns++;
@@ -59,6 +62,7 @@ export class CodexStream {
       model: null,
       usage: { ...this.#usage },
       ...(failure === undefined ? {} : { failure }),
+      ...(this.#threadId === undefined ? {} : { threadId: this.#threadId }),
       badLines: this.#lines.badLines,
     };
   }

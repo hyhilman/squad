@@ -24,3 +24,17 @@ export function ulid(now: number = Date.now(), rand: Buffer = randomBytes(10)): 
 }
 
 export const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/**
+ * The same 128 bits as a UUID string, for claude's `--session-id`, which takes only a UUID. A ULID is
+ * 128 bits, so the map is one to one: two conversations never share a transcript name. claude 2.1.310
+ * takes it without the v4 version bits. Lower or upper case in; lower case out.
+ */
+export function uuidOfUlid(id: string): string {
+  const up = id.toUpperCase();
+  if (!ULID_RE.test(up) || up[0]! > "7") throw new Error(`not a ulid: ${JSON.stringify(id)}`);
+  let n = 0n;
+  for (const c of up) n = (n << 5n) | BigInt(B32.indexOf(c));
+  const h = n.toString(16).padStart(32, "0");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}

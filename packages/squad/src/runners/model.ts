@@ -12,3 +12,9 @@ export function checkSkillName(name: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`skill name ${JSON.stringify(name)} is not safe`);
   return name;
 }
+
+/** A transcript or thread id goes into argv: a UUID only, so it can never be read as a flag. */
+export function checkUuid(id: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new Error(`id ${JSON.stringify(id)} is not a lower case UUID`);
+  return id;
+}

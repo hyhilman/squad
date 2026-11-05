@@ -8,7 +8,11 @@
 // None of them touches the modes.
 //
 // Modes: ok, slow (ok after half a second), claude-ok (the opus capture), codex-ok, codex-model-not-found (exit 1), codex-file (a turn with no agent_message; writes the -o file),
-// codex-reused (an inline shape-test stream: a permanent auth failure), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
+// codex-reused (an inline shape-test stream: a permanent auth failure),
+// claude-conv (claude-ok, and one line appended to <the /claude/projects mount>/<cwd slug>/<the --session-id or --resume id>.jsonl, as claude does;
+// with --resume, claude-total: that capture with a larger running cost, as claude reports a resumed session),
+// codex-conv (codex-ok, and one line appended to a rollout under the /codex/sessions mount; with `resume` in argv, codex-total: that
+// capture with a larger running total, as codex reports a resumed thread), auth, free-tier, busy (exit 75), hang (no output until a stop or kill call), crash,
 // nokey (pi stderr, exit 1, no stream), tmpcwd (ok, with a /tmp path as session cwd),
 // login-codex / login-pi (a login run: write the file given to `setLoginAuth` as auth.json into the mounted /codex or /pi folder; the host path comes from the --mount arg),
 // login-files (copy the files given to `setLoginFiles` into the mounted /codex, /pi or /claude folder; exit 0).
@@ -62,6 +66,23 @@ case "$mode" in
     for a in "$@"; do case "$a" in *target=/squad/out*) o="\${a#type=bind,source=}"; o="\${o%%,*}"; printf 'from the file' > "$o/last-message.txt" ;; esac; done
     cat "$d/codex-file.jsonl" ;;
   codex-reused) cat "$d/codex-reused.jsonl"; exit 1 ;;
+  claude-conv)
+    w=""; id=""; o=""; prev=""
+    for a in "$@"; do
+      case "$prev" in -w) w="$a" ;; --session-id|--resume) id="$a" ;; esac
+      case "$a" in *target=/claude/projects) o="\${a#type=bind,source=}"; o="\${o%%,*}" ;; esac
+      prev="$a"
+    done
+    slug="$(printf '%s' "$w" | sed 's/[^a-zA-Z0-9]/-/g')"
+    mkdir -p "$o/$slug" && echo '{}' >> "$o/$slug/$id.jsonl"
+    case " $* " in *" --resume "*) cat "$d/claude-total.jsonl" ;; *) cat "$d/claude-ok.jsonl" ;; esac ;;
+  codex-conv)
+    resume=0
+    for a in "$@"; do
+      [ "$a" = resume ] && resume=1
+      case "$a" in *target=/codex/sessions) o="\${a#type=bind,source=}"; o="\${o%%,*}"; mkdir -p "$o/2026/11/05" && echo '{}' >> "$o/2026/11/05/rollout-2026-11-05T11-01-42-00000000-0000-7000-8000-000000000003.jsonl" ;; esac
+    done
+    if [ "$resume" = 1 ]; then cat "$d/codex-total.jsonl"; else cat "$d/codex-ok.jsonl"; fi ;;
   auth) cat "$d/auth.jsonl" ;;
   free-tier) cat "$d/free-tier.jsonl" ;;
   nokey) echo "No API key found for opencode." >&2; exit 1 ;;
@@ -118,6 +139,12 @@ export function makeFakeDocker(dir: string = mkdtempSync(join(tmpdir(), "fake-do
   // Shape tests: invented streams, not captures.
   const turn = { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 2 } };
   writeFileSync(join(dir, "codex-file.jsonl"), `${JSON.stringify(turn)}\n`);
+  // A shape test: the claude capture with the running cost a resumed second turn would report (the
+  // first turn's 0.0477306 plus this turn's 0.05).
+  writeFileSync(join(dir, "claude-total.jsonl"), readFileSync(join(CAPTURES_ROOT, "claude", "ok-opus-5-5.jsonl"), "utf8").replace('"total_cost_usd":0.0477306', '"total_cost_usd":0.0977306'));
+  // A shape test: the ok capture with the numbers a resumed thread's second turn would report (the
+  // first turn's 14081/5 plus this turn's 15000/7).
+  writeFileSync(join(dir, "codex-total.jsonl"), readFileSync(join(CAPTURES_ROOT, "codex", "ok-gpt-6-1-sol.jsonl"), "utf8").replace('"input_tokens":14081', '"input_tokens":29081').replace('"output_tokens":5', '"output_tokens":12'));
   const reused = JSON.stringify({ type: "error", status: 401, error: { message: "refresh token was reused", code: "refresh_token_reused" } });
   writeFileSync(join(dir, "codex-reused.jsonl"), `${JSON.stringify({ type: "turn.failed", error: { message: reused } })}\n`);
   writeFileSync(join(dir, "auth.jsonl"), readFileSync(join(CAPTURES, "auth-error.jsonl")));

@@ -199,6 +199,12 @@ export const MIGRATIONS: readonly string[] = [
   // a token account) and the 5-minute one on a key, so count them that way and price them again.
   `UPDATE passes SET cache_write_1h = cache_write, catalog_cost_usd = NULL
      WHERE runner = 'claude' AND cache_write > 0 AND account IN (SELECT id FROM accounts WHERE kind IN ('login', 'token'))`,
+  // codex names its own thread: the id from its first turn, which a later turn resumes. NULL until then.
+  `ALTER TABLE conversations ADD COLUMN resume_id TEXT`,
+  // On a resumed history, codex reports the thread's running token total and claude its running cost,
+  // not the turn's. This holds the last totals they reported (JSON: usage, cliCostUsd), so a turn
+  // records the difference. NULL before the first turn that reported any.
+  `ALTER TABLE conversations ADD COLUMN resume_totals TEXT`,
 ];
 
 /** The labels and setup of a pass, written when it starts, so a crashed pass still shows. */

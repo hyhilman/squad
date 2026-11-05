@@ -1,20 +1,21 @@
 // One pass of an agent, start to end: pick an account, run the CLI in a container, read its stream,
 // write the pass row, and feed the outcome back to the account's health.
 //
-// pi, claude and codex run here (see runners/table.ts). Only pi keeps a session. The decision code is in small functions
+// pi, claude and codex run here (see runners/table.ts). pi keeps a session; claude and codex keep one
+// only for a conversation (conversations.ts). The decision code is in small functions
 // (`failureOf`, `resolveCandidates`); the spawn code is `spawnDocker` and nothing else.
 
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { findForbidden } from "@squad/contract";
 import { applyOutcome } from "./accounts/health.ts";
 import { withKeyCopy } from "./accounts/keycopy.ts";
 import { candidates, getAccount, getHealth, putHealth, recordRoom, setState, type AccountRow } from "./accounts/store.ts";
 import { SQUAD_DOCKER_ENV, SQUAD_NO_USAGE_EXPORT_ENV, envOn, envOptional } from "./settings.ts";
-import { checkCallerMounts, dockerKillArgv, dockerRmArgv, dockerRunArgv, dockerStopArgv, stopGraceS, type PassPlan } from "./docker.ts";
+import { checkCallerMounts, SESSION_TARGET, dockerKillArgv, dockerRmArgv, dockerRunArgv, dockerStopArgv, stopGraceS, type PassPlan } from "./docker.ts";
 import { ensureCodexGuard, type HomeLayout } from "./home.ts";
 import { IMAGES } from "./images.ts";
 import { ulid } from "./ids.ts";
@@ -52,6 +53,13 @@ export interface PassRequest extends TurnOptions {
   readonly probe?: boolean;
   /** Internal: false when a conversation's skill is already in its history (see runners/table.ts). */
   readonly openSkill?: boolean;
+  /** Internal, set by `send` for claude and codex: the history to start or resume (see runners/table.ts). */
+  readonly history?: { readonly id: string | null; readonly resume: boolean };
+  /**
+   * Internal, set by `send` on a resumed history: the totals the CLI last reported. codex reports a
+   * resumed thread's running token total and claude its running cost, so the pass records the difference.
+   */
+  readonly base?: CliTotals;
   readonly idleMs?: number;
   readonly deadlineMs?: number;
   /** Env for the container. Set `PATH` here when the tools sit in a caller mount. */
@@ -94,6 +102,15 @@ export interface PassResult {
   readonly usage: Usage;
   readonly failure?: Failure;
   readonly logPath: string | null;
+  /** codex: the thread id the stream named. */
+  readonly threadId?: string;
+  /** A claude or codex conversation turn: the totals as the CLI reported them, before `base` came off. */
+  readonly cliTotals?: CliTotals;
+}
+
+export interface CliTotals {
+  readonly usage?: Usage;
+  readonly cliCostUsd?: number;
 }
 
 export const DEFAULT_IDLE_MS = 15 * 60_000;
@@ -276,7 +293,8 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
   if (!isSupported(req.runner)) throw new Error(`runner ${req.runner} is not supported yet`);
   if (req.session !== undefined) {
     checkSessionId(req.session);
-    if (req.runner !== "pi") throw new Error(`${req.runner} cannot keep a session yet; only pi can`);
+    // claude and codex have no session flag of their own: a conversation tells them what to resume.
+    if (req.runner !== "pi" && (req.conversation !== true || req.history === undefined)) throw new Error(`${req.runner} keeps a session only in a conversation`);
   }
   const docker = deps.docker ?? envOptional(SQUAD_DOCKER_ENV, deps.env) ?? "docker";
   // Every check of the caller's fields runs here, before an account is picked or a container starts.
@@ -335,8 +353,11 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
         }
         mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
         chmodSync(sessionPath, 0o700);
+        // The session folder covers a sub-path of the account mount. docker would make that mount point
+        // root-owned on a rootful daemon; an empty folder of the user is what the CLI expects there.
+        if (req.runner !== "pi" && account.kind !== "token") mkdirSync(join(dir, basename(SESSION_TARGET[req.runner])), { recursive: true, mode: 0o700 });
       }
-      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(req.system === undefined ? {} : { system: req.system }), ...(req.effort === undefined ? {} : { effort: req.effort }), ...(skill === undefined ? {} : { skill }), ...(req.openSkill === false ? { openSkill: false } : {}), ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }) });
+      const cli = RUNNER_SPECS[req.runner].cli({ model: req.model, prompt: req.prompt, cwd: req.cwd, ...(req.system === undefined ? {} : { system: req.system }), ...(req.effort === undefined ? {} : { effort: req.effort }), ...(skill === undefined ? {} : { skill }), ...(req.openSkill === false ? { openSkill: false } : {}), ...(outDir === null ? {} : { outDir }), ...(req.session === undefined ? {} : { sessionId: req.session }), ...(req.history === undefined ? {} : { history: req.history }) });
       // docker makes a missing mount target as an empty root-owned file inside the login folder.
       // An empty user file in its place is what codex would see anyway under the read-only guard.
       if (req.runner === "codex") ensureEmptyFile(join(dir, "config.toml"));
@@ -391,6 +412,9 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
       continue;
     }
 
+    const cliTotals: CliTotals = { usage: sp.stream.usage, ...(sp.stream.cliCostUsd === undefined ? {} : { cliCostUsd: sp.stream.cliCostUsd }) };
+    if (req.base?.usage !== undefined) sp = { ...sp, stream: { ...sp.stream, usage: usageMinus(sp.stream.usage, req.base.usage) } };
+    if (req.base?.cliCostUsd !== undefined && sp.stream.cliCostUsd !== undefined) sp = { ...sp, stream: { ...sp.stream, cliCostUsd: Math.max(0, sp.stream.cliCostUsd - req.base.cliCostUsd) } };
     const ended = nowFn();
     const failure = failureOf(sp.stream, sp.exitCode, sp.stopped, sp.stderrTail);
     const logPath = writePassFiles(deps.home, ended, passId, req.prompt, sp.raw);
@@ -439,12 +463,22 @@ export async function runPass(req: PassRequest, deps: RunDeps): Promise<PassResu
       usage: sp.stream.usage,
       ...(failure === undefined ? {} : { failure }),
       logPath,
+      ...(sp.stream.threadId === undefined ? {} : { threadId: sp.stream.threadId }),
+      ...(req.history === undefined ? {} : { cliTotals }),
     };
   }
   if (req.conversation === true) return noAccount(store, req, deps, nowFn(), { kind: "busy", code: "", message: "the account is busy" });
   return noAccount(store, req, deps, nowFn(), { kind: "no-account", code: "", message: "every account was busy" });
 }
 
+/**
+ * This turn's share of a running total. A field below the base (a total that went down) counts as
+ * none: nothing is known about it, and a negative count would break every sum.
+ */
+export function usageMinus(total: Usage, base: Usage): Usage {
+  const d = (k: keyof Usage): number => Math.max(0, total[k] - base[k]);
+  return { input: d("input"), output: d("output"), cacheRead: d("cacheRead"), cacheWrite: d("cacheWrite"), reasoning: d("reasoning") };
+}
 
 /** Writes health, state and event. A busy database loses the health update, not the pass: the next pass corrects it. */
 function feedHealth(deps: RunDeps, log: Log, id: string, passId: string, at: Date, failure: Failure | undefined, stream: StreamOutcome): void {

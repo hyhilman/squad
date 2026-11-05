@@ -1,20 +1,25 @@
 // Conversations: many turns on one account, each turn one pass. A conversation is tied to the
 // account it was opened on and never moves, because its history folder may hold that account's
-// provider state. pi only in this release: codex and claude keep history inside the login folder.
+// provider state. Each conversation has its own history folder, mounted where the runner keeps its
+// history (docker.ts SESSION_TARGET), so no transcript lands in the login folder and a new
+// conversation never sees another's. What is on disk decides a first turn from a resume.
 //
 // `open` writes a row and starts nothing. `send` is `runPass` with the account fixed, so the lock,
 // the health update and the pass row are the ones every pass has. `close` deletes the history.
 
-import { rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getAccount, healthOf, getHealth } from "./accounts/store.ts";
 import { checkCallerMounts } from "./docker.ts";
 import type { HomeLayout } from "./home.ts";
-import { ulid } from "./ids.ts";
-import { runPass, type PassRequest, type RunDeps } from "./run.ts";
+import { ulid, uuidOfUlid } from "./ids.ts";
+import { runPass, type CliTotals, type PassRequest, type RunDeps } from "./run.ts";
 import { deleteSession, getSession, pinSession, sessionDir } from "./sessions.ts";
 import { envOptional, SQUAD_DOCKER_ENV } from "./settings.ts";
+import { isProjectDirOf } from "./runners/claude.ts";
 import { isSupported } from "./runners/table.ts";
+import { NO_TOKENS } from "./store/db.ts";
 import { checkContainerName, checkEffort, checkImage, checkLabels, dockerInspectImage, loadSkill, type ExtraMount, type SkillRef, type TurnOptions } from "./turn.ts";
 import type { Failure, Usage } from "./types.ts";
 
@@ -80,6 +85,7 @@ interface Spec {
 interface Raw {
   id: string; runner: string; account: string; model: string; cwd: string; caller_flow: string; caller_action: string;
   task_kind: string | null; task_id: string | null; spec: string; created_at: string; last_used_at: string; closed_at: string | null; closed_reason: string | null;
+  resume_id: string | null; resume_totals: string | null;
 }
 
 const rawOf = (db: DatabaseSync, id: string): Raw | undefined => db.prepare("SELECT * FROM conversations WHERE id = ?").get(id) as Raw | undefined;
@@ -87,7 +93,6 @@ const handleOf = (r: Raw): Conversation => ({ id: r.id, runner: r.runner, accoun
 
 export function open(req: OpenRequest, deps: RunDeps): Conversation {
   if (!isSupported(req.runner)) throw new Error(`runner ${req.runner} is not supported yet`);
-  if (req.runner !== "pi") throw new Error(`${req.runner} conversations are not supported yet; only pi can`);
   const docker = deps.docker ?? envOptional(SQUAD_DOCKER_ENV, deps.env) ?? "docker";
   // The same checks a pass makes, before any row is written.
   if (req.skill !== undefined) loadSkill(req.skill);
@@ -146,6 +151,7 @@ export async function send(conv: Conversation | string, message: string, opts: S
   // A turn that spent tokens put the opened skill into the history; later turns must not open it again.
   const skillInHistory = db.prepare("SELECT 1 FROM passes WHERE session_id = ? AND (input + output + cache_read + cache_write + reasoning) > 0 LIMIT 1").get(id) !== undefined;
 
+  const turn = historyOf(row, sessionDir(deps.home, row.runner, row.account, id));
   const res = await runPass({
     runner: row.runner as PassRequest["runner"],
     model: row.model,
@@ -170,7 +176,9 @@ export async function send(conv: Conversation | string, message: string, opts: S
     ...(opts.onStart === undefined ? {} : { onStart: opts.onStart }),
     ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
     ...(opts.deadlineMs === undefined ? {} : { deadlineMs: opts.deadlineMs }),
+    ...turn,
   }, deps);
+  if (res.cliTotals !== undefined) keepTotals(db, row, res.threadId, res.cliTotals);
 
   const ran = res.failure?.kind !== "busy" && res.failure?.kind !== "no-account";
   if (ran) db.prepare("UPDATE conversations SET last_used_at = ? WHERE id = ?").run(now().toISOString(), id);
@@ -193,6 +201,65 @@ export async function send(conv: Conversation | string, message: string, opts: S
     ...(res.failure === undefined ? {} : { failure: res.failure }),
     ...(closed === undefined ? {} : { closed }),
   };
+}
+
+type History = Pick<PassRequest, "history" | "base">;
+
+/** What this turn starts or resumes. pi needs nothing here: its --session-id opens or makes the session. */
+function historyOf(row: Raw, dir: string): History {
+  if (row.runner === "claude") {
+    const uuid = uuidOfUlid(row.id);
+    const at = subdirs(dir).filter((d) => existsSync(join(dir, d, `${uuid}.jsonl`)));
+    // claude 2.1.310 finds a transcript under any cwd's folder, so a changed cwd would resume quietly
+    // in a place the history does not describe. Refuse it before any container starts.
+    const wrong = at.find((d) => !isProjectDirOf(d, row.cwd));
+    if (wrong !== undefined) throw new Error(`conversation ${row.id}: its claude transcript is under ${wrong}, not under the folder of cwd ${row.cwd}; a turn must run in the cwd the conversation started in`);
+    if (at.length === 0) return { history: { id: uuid, resume: false } };
+    const cost = totalsOf(row).cliCostUsd;
+    return { history: { id: uuid, resume: true }, ...(cost === undefined ? {} : { base: { cliCostUsd: cost } }) };
+  }
+  if (row.runner === "codex") {
+    // No rollout on disk (a first turn that never got that far) is a new thread.
+    const id = row.resume_id;
+    if (id === null || !hasRollout(dir, id)) return { history: { id: null, resume: false } };
+    return { history: { id, resume: true }, base: { usage: totalsOf(row).usage ?? NO_TOKENS } };
+  }
+  return {};
+}
+
+function subdirs(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+/** codex 0.162.1 writes `sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl`. */
+function hasRollout(dir: string, threadId: string): boolean {
+  try {
+    return readdirSync(dir, { recursive: true, encoding: "utf8" }).some((p) => { const b = basename(p); return b.startsWith("rollout-") && b.endsWith(`-${threadId}.jsonl`); });
+  } catch {
+    return false;
+  }
+}
+
+const totalsOf = (row: Raw): CliTotals => (row.resume_totals === null ? {} : (JSON.parse(row.resume_totals) as CliTotals));
+
+/**
+ * Saves what the next turn subtracts: codex's thread id and token total, claude's cost total. A turn
+ * that reported nothing keeps the old totals; a new codex thread starts from none.
+ */
+function keepTotals(db: DatabaseSync, row: Raw, threadId: string | undefined, t: CliTotals): void {
+  const set = (resumeId: string | null, totals: CliTotals | null): void => {
+    db.prepare("UPDATE conversations SET resume_id = ?, resume_totals = ? WHERE id = ?").run(resumeId, totals === null ? null : JSON.stringify(totals), row.id);
+  };
+  if (row.runner === "codex") {
+    if (threadId === undefined) return;
+    const spent = t.usage !== undefined && Object.values(t.usage).some((n) => n > 0);
+    if (spent) set(threadId, { usage: t.usage });
+    else if (row.resume_id !== threadId) set(threadId, null);
+  } else if (t.cliCostUsd !== undefined) set(null, { cliCostUsd: t.cliCostUsd });
 }
 
 /** Deletes the history folder, drops the pin and marks the row. A second call changes nothing. */
