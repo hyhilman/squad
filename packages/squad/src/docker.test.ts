@@ -200,6 +200,22 @@ test("a session dir is mounted read-write at /squad/sessions: its own id folder,
   assert.ok(!mountsOf(dockerRunArgv(plan())).some((m) => m.includes("/squad/sessions")), "no session, no mount");
 });
 
+test("claude and codex get the session dir over their history path, after the account mount; a claude token account too", () => {
+  const sessionAt = (runner: "claude" | "codex", kind: "login" | "token") => {
+    const a = dockerRunArgv(plan({ runner, account: { name: "alice", kind, dir: `${HOME}/accounts/${runner}/alice` }, lockFile: kind === "login" ? `${HOME}/locks/${runner}-alice.lock` : null, session: { dir: `${HOME}/sessions/${runner}/alice/c1` }, overlays: [] }));
+    const m = mountsOf(a);
+    return { m, at: m.indexOf(`${HOME}/sessions/${runner}/alice/c1:${runner === "claude" ? "/claude/projects" : "/codex/sessions"}`) };
+  };
+  for (const [runner, kind] of [["claude", "login"], ["codex", "login"], ["claude", "token"]] as const) {
+    const { m, at } = sessionAt(runner, kind);
+    assert.ok(at >= 0, `${runner} ${kind}: ${m.join(" ")}`);
+    // docker lets a later mount win on a sub-path: the account mount must come first.
+    const account = m.findIndex((x) => x.startsWith(`${HOME}/accounts/${runner}/alice`));
+    assert.ok(account >= 0 && account < at, `${runner} ${kind}: the account mount comes first`);
+    assert.ok(!m.some((x) => x.endsWith(":/squad/sessions")), "not pi's path");
+  }
+});
+
 test("a session dir that is not <home>/sessions/<runner>/<account>/<id> is refused", () => {
   for (const dir of [`${HOME}/sessions`, `${HOME}/sessions/pi`, `${HOME}/sessions/pi/alice`, `${HOME}/sessions/pi/alice/s1/x`, `${HOME}/accounts/pi/alice`, `${HOME}/sessions/../accounts/pi/alice`, `${HOME}/locks/pi/alice/s1`, "/elsewhere/s1"])
     assert.throws(() => dockerRunArgv(plan({ session: { dir } })), /session/, dir);

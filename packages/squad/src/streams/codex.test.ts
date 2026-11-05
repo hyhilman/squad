@@ -16,6 +16,8 @@ test("codex ok capture", () => {
   assert.deepEqual(o.usage, { input: 14081, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 });
   assert.equal(o.failure, undefined);
   assert.equal(o.badLines, 0);
+  // thread.started names the thread a conversation resumes.
+  assert.equal(o.threadId, "00000000-0000-7000-8000-000000000003");
 });
 
 test("codex model-not-found capture", () => {

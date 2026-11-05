@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stands in front of the real codex on PATH: start the fake model API, then point codex at it.
+node /fake/server.mjs &
+for _ in $(seq 50); do (echo > /dev/tcp/127.0.0.1/18999) 2>/dev/null && break; sleep 0.1; done
+exec /usr/local/bin/codex -c model_provider=fake -c 'model_providers.fake.name="fake"' -c 'model_providers.fake.base_url="http://127.0.0.1:18999/v1"' -c 'model_providers.fake.env_key="FAKE_KEY"' -c 'model_providers.fake.wire_api="responses"' "$@"

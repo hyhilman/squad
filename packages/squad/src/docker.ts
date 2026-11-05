@@ -38,8 +38,9 @@ export interface PassPlan {
    */
   readonly overlays: readonly { readonly host: string; readonly container: string }[];
   /**
-   * A session folder, `<home>/sessions/<runner>/<account>/<id>`, mounted read-write at /squad/sessions.
-   * It is the one home path besides the account and the lock; `mounts` can never reach it.
+   * A session folder, `<home>/sessions/<runner>/<account>/<id>`, mounted read-write where the runner
+   * keeps its history (SESSION_TARGET). It is the one home path besides the account and the lock;
+   * `mounts` can never reach it.
    */
   readonly session: { readonly dir: string } | null;
   readonly account: { readonly name: string; readonly kind: AccountKind; readonly dir: string };
@@ -65,6 +66,12 @@ export interface PassPlan {
 }
 
 const ACCOUNT_PATH: Readonly<Record<Runner, string>> = { pi: "/pi", codex: "/codex", claude: "/claude" };
+/**
+ * Where a session folder goes. pi takes a folder flag. claude and codex have none: they write under
+ * their config folder (claude's `projects/<cwd slug>/<id>.jsonl`, codex's `sessions/YYYY/MM/DD/`), so
+ * the folder covers that sub-path and no transcript lands in the login folder.
+ */
+export const SESSION_TARGET: Readonly<Record<Runner, string>> = { pi: "/squad/sessions", codex: "/codex/sessions", claude: "/claude/projects" };
 
 /** Names squad sets itself. A caller that sets one could point a pass at another account or smuggle a token. */
 const INTERNAL_ENV: ReadonlySet<string> = new Set(["SQUAD_LOCK", "SQUAD_TOKEN_FILE", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "PI_CODING_AGENT_DIR", "CLAUDE_CONFIG_DIR", "IS_SANDBOX"]);
@@ -155,11 +162,6 @@ export function dockerRunArgv(plan: PassPlan): string[] {
     argv.push("--mount", mountArg(m.host, target, m.ro));
   }
 
-  if (plan.session !== null) {
-    checkSession(plan.session.dir, plan.home);
-    argv.push("--mount", mountArg(plan.session.dir, "/squad/sessions", false));
-  }
-
   // Exactly one account mount per pass.
   if (plan.claudeConfig !== undefined && (runner !== "claude" || account.kind !== "token")) throw new Error("a scratch config is for a claude token account only");
   if (account.kind === "token") {
@@ -171,7 +173,11 @@ export function dockerRunArgv(plan: PassPlan): string[] {
   } else {
     argv.push("--mount", mountArg(account.dir, ACCOUNT_PATH[runner], false));
   }
-  // An overlay comes after the account mount: in docker a later mount on a sub-path wins.
+  // The session folder and an overlay come after the account mount: in docker a later mount on a sub-path wins.
+  if (plan.session !== null) {
+    checkSession(plan.session.dir, plan.home);
+    argv.push("--mount", mountArg(plan.session.dir, SESSION_TARGET[runner], false));
+  }
   for (const o of plan.overlays) {
     if (runner !== "codex" || posix.normalize(o.container) !== OVERLAY_TARGET) throw new Error(`overlay target ${o.container} is not allowed; only ${OVERLAY_TARGET} for codex`);
     // The home's own copy of the guard is the one file of the home that may be mounted.

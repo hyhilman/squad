@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stands in front of the real claude on PATH: start the fake model API, then run claude against it.
+node /fake/server.mjs &
+for _ in $(seq 50); do (echo > /dev/tcp/127.0.0.1/18999) 2>/dev/null && break; sleep 0.1; done
+exec /usr/local/bin/claude "$@"

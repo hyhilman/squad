@@ -35,5 +35,7 @@ export interface StreamOutcome {
   readonly cliCostUsd?: number;
   readonly failure?: Failure;
   readonly room?: Room;
+  /** codex: the thread id from `thread.started`, which a later turn resumes. */
+  readonly threadId?: string;
   readonly badLines: number;
 }

@@ -20,8 +20,14 @@ export interface StreamParser {
 export interface CliRequest {
   readonly model: string;
   readonly prompt: string;
-  /** Only pi keeps a session in this step. */
+  /** pi's session id; pi makes the session if it is new. */
   readonly sessionId?: string;
+  /**
+   * A claude or codex conversation turn. `id` is claude's transcript UUID or codex's thread id (null
+   * before codex names it); `resume` is true when there is history to load. A resumed turn sends only
+   * the new text: what went before is in the history.
+   */
+  readonly history?: { readonly id: string | null; readonly resume: boolean };
   /** codex only: the host folder mounted at /squad/out for its last-message file. */
   readonly outDir?: string;
   readonly cwd?: string;
@@ -43,8 +49,8 @@ export interface RunnerSpec {
   readonly exportOf: (raw: string, outcome: StreamOutcome, meta: ExportMeta) => string;
 }
 
-const need = (v: string | undefined, what: string): string => {
-  if (v === undefined) throw new Error(`codex needs ${what}`);
+const need = (v: string | undefined, runner: string, what: string): string => {
+  if (v === undefined) throw new Error(`${runner} needs ${what}`);
   return v;
 };
 
@@ -56,13 +62,21 @@ export const RUNNER_SPECS = {
   },
   claude: {
     // The skill rides in the system prompt on every turn, so the flags and the prompt cache stay the same.
-    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.prompt, skill: r.skill === undefined ? null : skillBody(r.skill.text), system: r.system ?? null }),
+    cli: (r) => claudeArgs({ model: r.model, effort: r.effort ?? null, prompt: r.prompt, skill: r.skill === undefined ? null : skillBody(r.skill.text), system: r.system ?? null, ...(r.history === undefined ? {} : { history: { id: need(r.history.id ?? undefined, "claude", "a transcript id"), resume: r.history.resume } }) }),
     stream: () => new ClaudeStream(),
     exportOf: (_raw, o, meta) => claudeExport(o, meta),
   },
   codex: {
-    // codex has no system or skill flag: both go into the prompt, in this order.
-    cli: (r) => codexArgs({ model: r.model, effort: r.effort ?? null, prompt: [r.system, r.skill === undefined || r.openSkill === false ? undefined : skillBody(r.skill.text), r.prompt].filter((x) => x !== undefined && x !== "").join("\n\n"), skill: null, cwd: need(r.cwd, "cwd"), outDir: need(r.outDir, "outDir") }),
+    // codex has no system or skill flag: both go into the prompt, in this order. A resumed thread has them already.
+    cli: (r) => codexArgs({
+      model: r.model,
+      effort: r.effort ?? null,
+      prompt: r.history?.resume === true ? r.prompt : [r.system, r.skill === undefined || r.openSkill === false ? undefined : skillBody(r.skill.text), r.prompt].filter((x) => x !== undefined && x !== "").join("\n\n"),
+      skill: null,
+      cwd: need(r.cwd, "codex", "cwd"),
+      outDir: need(r.outDir, "codex", "outDir"),
+      ...(r.history === undefined ? {} : { history: { resume: r.history.resume ? need(r.history.id ?? undefined, "codex", "a thread id to resume") : null } }),
+    }),
     stream: () => new CodexStream(),
     exportOf: (_raw, o, meta) => codexExport(o, meta),
   },
